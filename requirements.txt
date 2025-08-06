@@ -1,0 +1,26 @@
+# Core ML and Data Science
+numpy
+pandas
+scikit-learn
+matplotlib
+seaborn
+
+# AI/ML Libraries
+torch
+transformers
+sentence-transformers
+faiss-cpu
+openai
+anthropic
+
+# Web and API
+gradio
+fastapi
+uvicorn
+aiohttp
+requests
+beautifulsoup4
+lxml
+
+# Utilities
+python-dotenv

@@ -1,0 +1,7 @@
+🔍 Scraping ALL Standard events from 2025-08-01 to 2025-08-06
+📄 Scraping page 1...
+✅ No more events found on page 1. Stopping.
+🎯 Total decks scraped: 0
+💾 Saved comprehensive data to: data/raw/mtgtop8_comprehensive_20250806_111838.json
+\n✅ Comprehensive scraping complete!
+📁 Data saved to: data/raw/mtgtop8_comprehensive_20250806_111838.json

@@ -1,0 +1,99 @@
+INFO:data.mtgtop8_scraper:Found 31 Standard events
+INFO:data.mtgtop8_scraper:Scraping 31 events in parallel...
+INFO:data.mtgtop8_scraper:Found 36 potential deck links in event 72082
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72076
+INFO:data.mtgtop8_scraper:Found 12 potential deck links in event 72106
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72010
+INFO:data.mtgtop8_scraper:Scraped 12 decks from event 72106
+INFO:data.mtgtop8_scraper:✅ Completed event: Sephiroth, Fabled SOLDIER *2 Competition (12 decks)
+INFO:data.mtgtop8_scraper:Found 12 potential deck links in event 72106
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72076
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72010
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO League (20 decks)
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO League (20 decks)
+INFO:data.mtgtop8_scraper:Found 8 potential deck links in event 72097
+INFO:data.mtgtop8_scraper:Found 8 potential deck links in event 72097
+INFO:data.mtgtop8_scraper:Scraped 12 decks from event 72106
+INFO:data.mtgtop8_scraper:✅ Completed event: TC (Osaka, Japan) (12 decks)
+INFO:data.mtgtop8_scraper:Found 34 potential deck links in event 72019
+INFO:data.mtgtop8_scraper:Scraped 8 decks from event 72097
+INFO:data.mtgtop8_scraper:Scraped 8 decks from event 72097
+INFO:data.mtgtop8_scraper:✅ Completed event: Narita (Japan) (8 decks)
+INFO:data.mtgtop8_scraper:✅ Completed event: Rumble (8 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 71976
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72073
+INFO:data.mtgtop8_scraper:Scraped 36 decks from event 72082
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO Challenge 64 (36 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72073
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 71976
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72073
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO League (20 decks)
+INFO:data.mtgtop8_scraper:✅ Completed event: RCQ (20 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72048
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72048
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72073
+INFO:data.mtgtop8_scraper:✅ Completed event: Mox and Lotus (Makati, Philippiness) (20 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72041
+INFO:data.mtgtop8_scraper:Scraped 34 decks from event 72019
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO Challenge 32 (34 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72041
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72048
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72048
+INFO:data.mtgtop8_scraper:✅ Completed event: Jaffer's Mini Mosh (20 decks)
+INFO:data.mtgtop8_scraper:✅ Completed event: Jaffer's Arena Amphitheatre (20 decks)
+INFO:data.mtgtop8_scraper:Found 10 potential deck links in event 72040
+INFO:data.mtgtop8_scraper:Found 10 potential deck links in event 72040
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72041
+INFO:data.mtgtop8_scraper:✅ Completed event: Champions Cup Season 4 Round 2 Special Qualifier (20 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72039
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72041
+INFO:data.mtgtop8_scraper:✅ Completed event: Nagoya (Japan) (20 decks)
+INFO:data.mtgtop8_scraper:Scraped 10 decks from event 72040
+INFO:data.mtgtop8_scraper:Scraped 10 decks from event 72040
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72039
+INFO:data.mtgtop8_scraper:✅ Completed event: $2.5K Tournament by Blue Moon Games (10 decks)
+INFO:data.mtgtop8_scraper:✅ Completed event: Cumberland County Game-On (Wormleysburg, PA) (10 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72038
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 72038
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72039
+INFO:data.mtgtop8_scraper:✅ Completed event: Champions Cup Season 4 Round 2 Special Qualifier (20 decks)
+INFO:data.mtgtop8_scraper:Found 36 potential deck links in event 71956
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72039
+INFO:data.mtgtop8_scraper:✅ Completed event: Nipponbashi (Japan) (20 decks)
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72038
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 72038
+INFO:data.mtgtop8_scraper:Found 36 potential deck links in event 71955
+INFO:data.mtgtop8_scraper:✅ Completed event: TC (Tokyo, Japan) (20 decks)
+INFO:data.mtgtop8_scraper:✅ Completed event: Champions Cup Season 4 Round 2 Special Qualifier (20 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 71946
+INFO:data.mtgtop8_scraper:Found 18 potential deck links in event 72003
+INFO:data.mtgtop8_scraper:Scraped 18 decks from event 72003
+INFO:data.mtgtop8_scraper:✅ Completed event: Champions Cup Season 4 Round 2 Store Qualifier (18 decks)
+INFO:data.mtgtop8_scraper:Found 18 potential deck links in event 72003
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 71946
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO League (20 decks)
+INFO:data.mtgtop8_scraper:Found 36 potential deck links in event 71954
+INFO:data.mtgtop8_scraper:Scraped 36 decks from event 71956
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO Challenge 32 (36 decks)
+INFO:data.mtgtop8_scraper:Found 36 potential deck links in event 71934
+INFO:data.mtgtop8_scraper:Scraped 36 decks from event 71955
+INFO:data.mtgtop8_scraper:Scraped 18 decks from event 72003
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO Challenge 32 (36 decks)
+INFO:data.mtgtop8_scraper:Found 20 potential deck links in event 71933
+INFO:data.mtgtop8_scraper:✅ Completed event: Sannomiya (Japan) (18 decks)
+INFO:data.mtgtop8_scraper:Found 15 potential deck links in event 71701
+INFO:data.mtgtop8_scraper:Scraped 15 decks from event 71701
+INFO:data.mtgtop8_scraper:✅ Completed event: The Decks to Beat - July '25 (15 decks)
+INFO:data.mtgtop8_scraper:Found 5 potential deck links in event 72107
+INFO:data.mtgtop8_scraper:Scraped 20 decks from event 71933
+INFO:data.mtgtop8_scraper:Scraped 36 decks from event 71954
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO League (20 decks)
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO Challenge 32 (36 decks)
+INFO:data.mtgtop8_scraper:Scraped 5 decks from event 72107
+INFO:data.mtgtop8_scraper:✅ Completed event: The Rogue Corner - August '25 (5 decks)
+INFO:data.mtgtop8_scraper:Scraped 36 decks from event 71934
+INFO:data.mtgtop8_scraper:✅ Completed event: MTGO Challenge 32 (36 decks)
+INFO:data.mtgtop8_scraper:Saved 630 decks from 31 events to data/raw/mtgtop8_standard_20250806_115245.json
+🔍 Scraping comprehensive Standard meta data...
+📊 Scraping 100+ Standard events (this will take several minutes)...
+✅ Scraping complete! Data saved to: data/raw/mtgtop8_standard_20250806_115245.json
