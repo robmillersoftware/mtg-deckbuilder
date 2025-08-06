@@ -35,13 +35,43 @@ def setup_model_and_tokenizer(model_name: str = "microsoft/DialoGPT-medium"):
     """Setup the model and tokenizer"""
     print(f"🤖 Loading model: {model_name}")
     
+    # Force CUDA usage if available
+    device_map = None
+    torch_dtype = torch.float32
+    device = "cpu"
+    
+    if torch.cuda.is_available():
+        print("🚀 Configuring for GPU training...")
+        device = "cuda"
+        device_map = "auto"
+        torch_dtype = torch.float16  # Use FP16 for RTX 5090's efficiency
+        
+        # Set CUDA device explicitly and show memory info
+        torch.cuda.set_device(0)
+        current_device = torch.cuda.current_device()
+        device_name = torch.cuda.get_device_name(current_device)
+        memory_gb = torch.cuda.get_device_properties(current_device).total_memory / 1024**3
+        print(f"🚀 Using device {current_device}: {device_name}")
+        print(f"🚀 Available GPU memory: {memory_gb:.1f} GB")
+        print(f"🚀 PyTorch CUDA version: {torch.version.cuda}")
+        
+        # Force PyTorch to use CUDA
+        torch.backends.cudnn.enabled = True
+        torch.backends.cudnn.benchmark = True
+    
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         trust_remote_code=True,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto" if torch.cuda.is_available() else None
+        torch_dtype=torch_dtype,
+        device_map=device_map,
+        low_cpu_mem_usage=True,
     )
+    
+    # Explicitly move to GPU if CUDA is available
+    if device == "cuda":
+        model = model.to(device)
+        print(f"🚀 Model moved to GPU: {model.device}")
     
     # Add padding token if it doesn't exist
     if tokenizer.pad_token is None:
@@ -49,6 +79,21 @@ def setup_model_and_tokenizer(model_name: str = "microsoft/DialoGPT-medium"):
         tokenizer.pad_token_id = tokenizer.eos_token_id
     
     print(f"✅ Model loaded. Parameters: {model.num_parameters():,}")
+    
+    # Verify GPU usage
+    if torch.cuda.is_available():
+        if hasattr(model, 'device'):
+            print(f"🚀 Model device: {model.device}")
+        else:
+            # Check if model parameters are on GPU
+            first_param_device = next(model.parameters()).device
+            print(f"🚀 Model parameters device: {first_param_device}")
+        
+        # Show GPU memory usage
+        allocated_memory = torch.cuda.memory_allocated(0) / 1024**3
+        cached_memory = torch.cuda.memory_reserved(0) / 1024**3
+        print(f"🚀 GPU memory: {allocated_memory:.2f} GB allocated, {cached_memory:.2f} GB cached")
+    
     return model, tokenizer
 
 def setup_lora_config():
@@ -85,9 +130,19 @@ def main():
     # MODEL_NAME = "gpt2"  # Classic choice
     # MODEL_NAME = "EleutherAI/gpt-neo-125M"  # Larger but still manageable
     
+    # Check GPU availability
+    if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name(0)
+        device_count = torch.cuda.device_count()
+        print(f"🚀 GPU detected: {device_name}")
+        print(f"🚀 GPU count: {device_count}")
+        print(f"🚀 CUDA version: {torch.version.cuda}")
+        print(f"🚀 GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+    else:
+        print("⚠️  No GPU detected - using CPU (will be slower)")
+    
     print("🏗️  Setting up MTG Deck Generation Fine-tuning")
     print(f"Model: {MODEL_NAME}")
-    print(f"Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
     
     # Load data
     dataset = load_training_data(TRAINING_DATA_FILE)
@@ -116,18 +171,32 @@ def main():
     print(f"📊 Training examples: {len(train_dataset)}")
     print(f"📊 Evaluation examples: {len(eval_dataset)}")
     
-    # Setup training arguments
+    # Setup training arguments optimized for RTX 5090
+    gpu_available = torch.cuda.is_available()
+    
+    # Optimize batch size for RTX 5090 (32GB VRAM)
+    if gpu_available:
+        batch_size = 8  # Larger batch size for better GPU utilization
+        gradient_accumulation = 2  # Reduce since we have bigger batches
+        fp16_enabled = True
+        dataloader_workers = 4
+    else:
+        batch_size = 2
+        gradient_accumulation = 8
+        fp16_enabled = False
+        dataloader_workers = 0
+    
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         overwrite_output_dir=True,
         num_train_epochs=3,
-        per_device_train_batch_size=4,
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=4,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation,
         warmup_steps=100,
-        logging_steps=10,
-        eval_steps=50,
-        save_steps=100,
+        logging_steps=5,  # More frequent logging
+        eval_steps=25,    # More frequent evaluation
+        save_steps=50,    # More frequent saving
         evaluation_strategy="steps",
         save_strategy="steps",
         load_best_model_at_end=True,
@@ -136,9 +205,17 @@ def main():
         report_to=None,  # Disable wandb logging
         learning_rate=5e-5,
         weight_decay=0.01,
-        fp16=torch.cuda.is_available(),
-        dataloader_pin_memory=False,
+        fp16=fp16_enabled,
+        bf16=False,  # RTX 5090 supports bf16 but fp16 is more stable
+        dataloader_pin_memory=gpu_available,
+        dataloader_num_workers=dataloader_workers,
         remove_unused_columns=False,
+        ddp_find_unused_parameters=False,
+        group_by_length=True,  # Optimize for variable-length sequences
+        optim="adamw_torch",  # Use PyTorch's AdamW
+        # Force GPU usage in training arguments
+        no_cuda=False if gpu_available else True,
+        use_cuda=gpu_available,
     )
     
     # Data collator
@@ -158,9 +235,22 @@ def main():
         tokenizer=tokenizer,
     )
     
+    # Final GPU check before training
+    if torch.cuda.is_available():
+        print(f"🚀 Final device check:")
+        print(f"   - Model device: {next(model.parameters()).device}")
+        print(f"   - CUDA current device: {torch.cuda.current_device()}")
+        print(f"   - GPU memory before training: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+    
     # Train the model
     print("🚀 Starting training...")
-    trainer.train()
+    try:
+        trainer.train()
+    except Exception as e:
+        print(f"❌ Training failed: {e}")
+        if torch.cuda.is_available():
+            print(f"GPU memory when failed: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+        raise
     
     # Save the final model
     print("💾 Saving model...")
