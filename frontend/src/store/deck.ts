@@ -1,0 +1,127 @@
+import { create } from 'zustand';
+import { Deck, DeckEntry, ChangeLogEntry } from '@/types';
+
+interface DeckState {
+  currentDeck: Partial<Deck> | null;
+  changeLog: ChangeLogEntry[];
+  isDirty: boolean;
+
+  setCurrentDeck: (deck: Partial<Deck> | null) => void;
+  updateMainDeck: (mainDeck: DeckEntry[]) => void;
+  updateSideboard: (sideboard: DeckEntry[]) => void;
+  addCard: (card: DeckEntry, target: 'main' | 'sideboard') => void;
+  removeCard: (cardName: string, target: 'main' | 'sideboard') => void;
+  updateCardQuantity: (cardName: string, quantity: number, target: 'main' | 'sideboard') => void;
+  addChangeLog: (entry: ChangeLogEntry) => void;
+  clearChangeLog: () => void;
+  setDirty: (dirty: boolean) => void;
+  reset: () => void;
+}
+
+export const useDeckStore = create<DeckState>((set, get) => ({
+  currentDeck: null,
+  changeLog: [],
+  isDirty: false,
+
+  setCurrentDeck: (deck) => set({ currentDeck: deck, isDirty: false }),
+
+  updateMainDeck: (mainDeck) =>
+    set((state) => ({
+      currentDeck: state.currentDeck ? { ...state.currentDeck, main_deck: mainDeck } : null,
+      isDirty: true,
+    })),
+
+  updateSideboard: (sideboard) =>
+    set((state) => ({
+      currentDeck: state.currentDeck ? { ...state.currentDeck, sideboard } : null,
+      isDirty: true,
+    })),
+
+  addCard: (card, target) =>
+    set((state) => {
+      if (!state.currentDeck) return state;
+
+      const list = target === 'main'
+        ? [...(state.currentDeck.main_deck || [])]
+        : [...(state.currentDeck.sideboard || [])];
+
+      const existingIndex = list.findIndex((e) => e.card_name === card.card_name);
+
+      if (existingIndex >= 0) {
+        list[existingIndex] = {
+          ...list[existingIndex],
+          quantity: list[existingIndex].quantity + card.quantity,
+        };
+      } else {
+        list.push(card);
+      }
+
+      return {
+        currentDeck: {
+          ...state.currentDeck,
+          [target === 'main' ? 'main_deck' : 'sideboard']: list,
+        },
+        isDirty: true,
+      };
+    }),
+
+  removeCard: (cardName, target) =>
+    set((state) => {
+      if (!state.currentDeck) return state;
+
+      const list = target === 'main'
+        ? (state.currentDeck.main_deck || []).filter((e) => e.card_name !== cardName)
+        : (state.currentDeck.sideboard || []).filter((e) => e.card_name !== cardName);
+
+      return {
+        currentDeck: {
+          ...state.currentDeck,
+          [target === 'main' ? 'main_deck' : 'sideboard']: list,
+        },
+        isDirty: true,
+      };
+    }),
+
+  updateCardQuantity: (cardName, quantity, target) =>
+    set((state) => {
+      if (!state.currentDeck) return state;
+
+      const list = target === 'main'
+        ? [...(state.currentDeck.main_deck || [])]
+        : [...(state.currentDeck.sideboard || [])];
+
+      const index = list.findIndex((e) => e.card_name === cardName);
+
+      if (index >= 0) {
+        if (quantity <= 0) {
+          list.splice(index, 1);
+        } else {
+          list[index] = { ...list[index], quantity };
+        }
+      }
+
+      return {
+        currentDeck: {
+          ...state.currentDeck,
+          [target === 'main' ? 'main_deck' : 'sideboard']: list,
+        },
+        isDirty: true,
+      };
+    }),
+
+  addChangeLog: (entry) =>
+    set((state) => ({
+      changeLog: [...state.changeLog, entry],
+    })),
+
+  clearChangeLog: () => set({ changeLog: [] }),
+
+  setDirty: (isDirty) => set({ isDirty }),
+
+  reset: () =>
+    set({
+      currentDeck: null,
+      changeLog: [],
+      isDirty: false,
+    }),
+}));

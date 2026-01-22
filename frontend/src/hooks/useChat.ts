@@ -1,0 +1,140 @@
+import { useState, useCallback } from 'react';
+import { useConversationStore } from '@/store/conversation';
+import { useDeckStore } from '@/store/deck';
+import { conversationsApi } from '@/services/api';
+import { Message, ChatResponse } from '@/types';
+import toast from 'react-hot-toast';
+
+export function useChat() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  const {
+    currentConversation,
+    setCurrentConversation,
+    addMessage,
+  } = useConversationStore();
+
+  const { setCurrentDeck } = useDeckStore();
+
+  const sendMessage = useCallback(async (content: string) => {
+    if (!content.trim() || isLoading) return;
+
+    setIsLoading(true);
+
+    // Add user message optimistically
+    const userMessage: Message = {
+      role: 'user',
+      content,
+      timestamp: new Date().toISOString(),
+    };
+    addMessage(userMessage);
+
+    try {
+      const response = await conversationsApi.sendMessage(
+        content,
+        currentConversation?.id
+      );
+
+      const data: ChatResponse = response.data;
+
+      // Update conversation ID if new - get current state from store to avoid stale closure
+      if (data.conversation_id) {
+        const currentState = useConversationStore.getState();
+        const existingMessages = currentState.currentConversation?.messages || [];
+
+        // Only update if the ID changed or we don't have a conversation yet
+        if (!currentState.currentConversation || currentState.currentConversation.id !== data.conversation_id) {
+          setCurrentConversation({
+            id: data.conversation_id,
+            messages: existingMessages,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      // Add assistant message
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: data.response,
+        timestamp: new Date().toISOString(),
+      };
+      addMessage(assistantMessage);
+
+      // Update deck if included in response
+      if (data.deck) {
+        setCurrentDeck(data.deck);
+      }
+
+      // Update suggestions
+      if (data.suggestions) {
+        setSuggestions(data.suggestions);
+      }
+
+    } catch (error) {
+      console.error('Chat error:', error);
+      toast.error('Failed to send message. Please try again.');
+
+      // Add error message
+      addMessage({
+        role: 'assistant',
+        content: 'Sorry, I encountered an error processing your request. Please try again.',
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentConversation, addMessage, setCurrentConversation, setCurrentDeck, isLoading]);
+
+  const explainCard = useCallback(async (cardName: string) => {
+    if (isLoading) return;
+
+    setIsLoading(true);
+
+    try {
+      const response = await conversationsApi.explainCard(
+        cardName,
+        currentConversation?.id
+      );
+
+      const data = response.data;
+
+      // Format explanation as message
+      const explanation = `**${data.card_name}**\n\n**Role:** ${data.role}\n\n${data.explanation}\n\n**Synergies:** ${data.synergies?.join(', ') || 'N/A'}\n\n**Alternatives:** ${data.alternatives?.join(', ') || 'N/A'}`;
+
+      addMessage({
+        role: 'user',
+        content: `Explain ${cardName}`,
+        timestamp: new Date().toISOString(),
+      });
+
+      addMessage({
+        role: 'assistant',
+        content: explanation,
+        timestamp: new Date().toISOString(),
+      });
+
+    } catch (error) {
+      console.error('Explain card error:', error);
+      toast.error('Failed to explain card');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentConversation, addMessage, isLoading]);
+
+  const startNewConversation = useCallback(() => {
+    setCurrentConversation(null);
+    setSuggestions([]);
+  }, [setCurrentConversation]);
+
+  return {
+    messages: currentConversation?.messages || [],
+    conversationId: currentConversation?.id,
+    isLoading,
+    suggestions,
+    sendMessage,
+    explainCard,
+    startNewConversation,
+  };
+}

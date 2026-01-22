@@ -1,0 +1,17 @@
+[project]
+name = "spellbook"
+version = "0.1.0"
+description = "AI-powered Magic: The Gathering deck builder"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

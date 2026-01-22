@@ -1,0 +1,2760 @@
+# # MTG Deck Builder - Product Specification
+# Project Spec v1.0
+#
+# This file can be modified and re-imported to update the project.
+#
+# Instructions for AI assistants:
+# - To ADD a new item: Add it to the appropriate list with id: null
+# - To MODIFY an item: Change its fields while keeping the same id
+# - To REMOVE an item: Delete it from the list entirely
+# - Keep IDs unchanged for items you want to update
+#
+# After modifying, use the /sync/diff endpoint to preview changes,
+# then /sync/apply to apply them.
+
+version: '1.0'
+project_id: 37e1856b-73a5-443a-bc32-046017195a73
+exported_at: '2026-01-21T16:33:19.367907+00:00'
+description: "# MTG Deck Builder - Product Specification\n\n## Product Overview\n\n\
+  ### Name\nSpellbook (working title)\n\n### Vision\nAn AI-powered Magic: The Gathering\
+  \ deck builder that only recommends real, format-legal cards. The system uses tournament\
+  \ data to understand the current meta and builds competitive 75-card decks with\
+  \ full sideboard guides.\n\n### Target Users\n- Competitive MTG players who want\
+  \ deck ideas\n- Players returning to the game who need to understand the current\
+  \ meta\n- Brewers who want AI assistance exploring archetypes\n- Players preparing\
+  \ for tournaments who need sideboard help\n\n### Core Value Proposition\nUnlike\
+  \ generic LLMs that hallucinate card names and ignore format legality, Spellbook\
+  \ is grounded in real card data and real tournament results. Every card it suggests\
+  \ exists, is legal in your format, and has a reason for being there.\n\n---\n\n\
+  ## Technical Architecture\n\n### System Components\n\n```\n┌─────────────────────────────────────────────────────┐\n\
+  │                 Chat Interface                       │\n│  React frontend with\
+  \ conversation UI                │\n│  Deck display (text-based, organized by type)\
+  \       │\n│  Card hover/click for details                       │\n└─────────────────────────────────────────────────────┘\n\
+  \                         │\n                    REST API\n                    \
+  \     │\n┌─────────────────────────────────────────────────────┐\n│            \
+  \     Backend (FastAPI)                    │\n│  - Chat endpoint               \
+  \                     │\n│  - Deck generation orchestration                    │\n\
+  │  - Card search/validation                           │\n│  - Meta analysis    \
+  \                                │\n└─────────────────────────────────────────────────────┘\n\
+  \           │                        │\n┌──────────────────────┐  ┌──────────────────────────┐\n\
+  │    Card Database     │  │     Meta Database        │\n│    (PostgreSQL)      │\
+  \  │     (PostgreSQL)         │\n│                      │  │                   \
+  \       │\n│  - Scryfall data     │  │  - Tournament decks      │\n│  - Standard-legal\
+  \    │  │  - Archetype tags        │\n│  - Oracle text       │  │  - Card co-occurrence\
+  \    │\n│  - Card embeddings   │  │  - Meta percentages      │\n└──────────────────────┘\
+  \  └──────────────────────────┘\n```\n\n### Technology Stack\n- **Frontend**: React\
+  \ (chat interface, deck display)\n- **Backend**: FastAPI (Python)\n- **Database**:\
+  \ PostgreSQL\n- **LLM**: Claude API (via Anthropic)\n- **Vector Search**: pgvector\
+  \ for card embeddings\n- **Data Sources**: Scryfall API, mtgtop8.com scraping\n\n\
+  ---\n\n## Data Pipeline\n\n### Card Database (Scryfall Sync)\n\n**Source**: Scryfall\
+  \ API (https://scryfall.com/docs/api)\n\n**Sync frequency**: Daily\n\n**Data captured\
+  \ per card**:\n- `scryfall_id`: Unique identifier\n- `name`: Card name\n- `mana_cost`:\
+  \ Mana cost string (e.g., \"{1}{R}{R}\")\n- `cmc`: Converted mana cost (numeric)\n\
+  - `type_line`: Full type line (e.g., \"Creature - Human Wizard\")\n- `oracle_text`:\
+  \ Rules text\n- `power`: Power (if creature)\n- `toughness`: Toughness (if creature)\n\
+  - `colors`: Color identity array\n- `color_identity`: Commander color identity\n\
+  - `keywords`: Keyword abilities array\n- `legalities`: Object with format legality\n\
+  - `set_code`: Set code\n- `rarity`: common/uncommon/rare/mythic\n- `image_uri`:\
+  \ Card image URL\n- `embedding`: Vector embedding of oracle text + type (for semantic\
+  \ search)\n\n**Filtering**: Only store cards where `legalities.standard = \"legal\"\
+  `\n\n**Update logic**:\n- Check Scryfall bulk data endpoint for updates\n- Diff\
+  \ against existing data\n- Update changed cards, add new cards\n- Mark rotated cards\
+  \ as no longer Standard-legal\n\n### Meta Database (mtgtop8 Scraping)\n\n**Source**:\
+  \ mtgtop8.com Standard events\n\n**Scrape frequency**: Weekly\n\n**Data captured**:\n\
+  \n**Events table**:\n- `event_id`: Unique identifier\n- `event_name`: Tournament\
+  \ name\n- `event_date`: Date of event\n- `format`: \"Standard\"\n- `num_players`:\
+  \ Player count (if available)\n\n**Decklists table**:\n- `decklist_id`: Unique identifier\n\
+  - `event_id`: Foreign key to event\n- `player_name`: Player name\n- `finish_position`:\
+  \ 1st, 2nd, Top 4, Top 8, etc.\n- `archetype`: Archetype classification (see below)\n\
+  - `main_deck`: JSON array of {card_name, quantity}\n- `sideboard`: JSON array of\
+  \ {card_name, quantity}\n\n**Archetype classification**:\n- Parse deck contents\
+  \ to classify archetype\n- Use card presence heuristics (e.g., 4x Monastery Swiftspear\
+  \ = likely Red Aggro)\n- Store as tags: [\"aggro\", \"red\", \"mono-colored\"]\n\
+  \n**Derived data (computed after scrape)**:\n\n**Meta share table**:\n- `archetype`:\
+  \ Archetype name\n- `meta_percentage`: % of recent tournament decks\n- `avg_finish`:\
+  \ Average finish position\n- `sample_size`: Number of decks in sample\n- `date_computed`:\
+  \ When this was calculated\n\n**Card co-occurrence matrix**:\n- For each pair of\
+  \ cards that appear together in decks\n- Store co-occurrence count\n- Use for synergy\
+  \ recommendations\n\n---\n\n## Anti-Hallucination System\n\n### The Problem\nLLMs\
+  \ hallucinate MTG cards. They will confidently suggest:\n- Cards that don't exist\
+  \ (\"Flame Burst\" instead of \"Lightning Strike\")\n- Cards not legal in the format\
+  \ (Modern cards in Standard)\n- Banned cards\n- Cards with incorrect rules text\n\
+  \n### The Solution: Constrained Card Selection\n\nThe LLM never outputs raw card\
+  \ names in final recommendations. Instead:\n\n**Step 1: LLM describes what it needs**\n\
+  ```json\n{\n  \"role\": \"removal\",\n  \"description\": \"instant-speed damage\
+  \ spell that can hit creatures or players\",\n  \"constraints\": {\n    \"cmc_max\"\
+  : 3,\n    \"colors\": [\"R\"],\n    \"type\": \"instant\"\n  }\n}\n```\n\n**Step\
+  \ 2: System queries card database**\n```sql\nSELECT * FROM cards\nWHERE 'R' = ANY(colors)\n\
+  \  AND cmc <= 3\n  AND type_line ILIKE '%instant%'\n  AND legalities->>'standard'\
+  \ = 'legal'\nORDER BY embedding <-> query_embedding\nLIMIT 10;\n```\n\n**Step 3:\
+  \ Return candidates to LLM**\n```json\n{\n  \"candidates\": [\n    {\"id\": \"abc123\"\
+  , \"name\": \"Lightning Strike\", \"oracle_text\": \"...\"},\n    {\"id\": \"def456\"\
+  , \"name\": \"Play with Fire\", \"oracle_text\": \"...\"},\n    {\"id\": \"ghi789\"\
+  , \"name\": \"Volcanic Spite\", \"oracle_text\": \"...\"}\n  ]\n}\n```\n\n**Step\
+  \ 4: LLM selects by ID**\n```json\n{\n  \"selection\": \"abc123\",\n  \"quantity\"\
+  : 4,\n  \"reasoning\": \"Lightning Strike is the most efficient option at 2 mana\
+  \ for 3 damage\"\n}\n```\n\n**Step 5: Final validation**\n- Verify card ID exists\
+  \ in database\n- Verify card is Standard-legal\n- Verify not on banned list\n- Accumulate\
+  \ into deck, checking 4-of limit\n\n### Validation Rules\n\n**Main deck**:\n- Exactly\
+  \ 60 cards\n- Maximum 4 copies of any non-basic-land card\n- All cards must be Standard-legal\n\
+  - No banned cards\n\n**Sideboard**:\n- Exactly 15 cards\n- Combined with main deck,\
+  \ still max 4 copies of any card\n- All cards must be Standard-legal\n- No banned\
+  \ cards\n\n**If validation fails**:\n- Return error to LLM with specific issue\n\
+  - LLM must retry with corrected selection\n- Max 3 retries before failing gracefully\n\
+  \n---\n\n## Core Features\n\n### Feature 1: Deck Generation\n\n**User input**: Natural\
+  \ language description of desired deck\n- \"Build me an aggressive red deck\"\n\
+  - \"I want a control deck that uses counterspells and card draw\"\n- \"Make a midrange\
+  \ deck around [specific card]\"\n\n**Process**:\n1. LLM analyzes request, determines\
+  \ archetype direction\n2. LLM queries meta database for similar successful decks\n\
+  3. LLM builds deck skeleton (creature count, removal count, land count)\n4. For\
+  \ each slot, LLM describes need → system finds candidates → LLM selects\n5. Repeat\
+  \ for sideboard, with matchup context\n6. Validate complete 75\n7. Generate explanations\
+  \ for key card choices\n\n**Output**:\n```\n## Mono-Red Aggro\n\n### Strategy\n\
+  This deck aims to kill the opponent as quickly as possible using\nefficient creatures\
+  \ and burn spells. Ideal game plan is creatures\non turns 1-2, then burn to finish.\n\
+  \n### Main Deck (60)\n\n**Creatures (20)**\n4 Monastery Swiftspear\n4 Phoenix Chick\n\
+  4 Feldon, Ronom Excavator\n4 Squee, Dubious Monarch\n4 Thundering Raiju\n\n**Instants\
+  \ (12)**\n4 Lightning Strike\n4 Play with Fire\n4 Searing Blood\n\n**Sorceries (4)**\n\
+  4 Light Up the Stage\n\n**Enchantments (4)**\n4 Kumano Faces Kakkazan\n\n**Lands\
+  \ (20)**\n18 Mountain\n2 Sokenzan, Crucible of Defiance\n\n### Sideboard (15)\n\
+  3 Rending Flame - Bring in against white/blue decks with angels\n2 Abrade - Bring\
+  \ in against artifact-heavy decks\n3 Roiling Vortex - Bring in against lifegain\
+  \ strategies\n4 Leyline of Combustion - Bring in against removal-heavy control\n\
+  3 Experimental Synthesizer - Bring in for grindy matchups\n\n### Key Matchups\n\
+  - vs Azorius Control: Aggressive mulligan for 1-drops...\n- vs Domain Ramp: Race\
+  \ them, don't let them stabilize...\n- vs Mirror: Board out X, bring in Y...\n```\n\
+  \n### Feature 2: Card Explanation\n\n**User input**: Question about a specific card\
+  \ in context\n- \"Why Lightning Strike over Play with Fire?\"\n- \"What does Monastery\
+  \ Swiftspear do in this deck?\"\n- \"Is 20 lands enough?\"\n\n**Process**:\n1. Retrieve\
+  \ card details from database\n2. Retrieve deck context\n3. LLM explains role, synergies,\
+  \ and alternatives\n\n**Output**:\n```\n## Why Lightning Strike over Play with Fire?\n\
+  \nBoth deal 2 damage for 2 mana, but Lightning Strike deals 3 damage.\nThe extra\
+  \ point matters for:\n- Killing 3-toughness creatures (common in current meta)\n\
+  - Faster clock on opponent's life total\n- Play with Fire's scry 1 is nice but not\
+  \ worth the damage difference\n\nIf you're on a budget, Play with Fire is an acceptable\
+  \ substitute.\n```\n\n### Feature 3: Matchup Analysis\n\n**User input**: Question\
+  \ about matchups or meta positioning\n- \"How does this deck do against control?\"\
+  \n- \"What's the current Standard meta?\"\n- \"What beats Domain Ramp?\"\n\n**Process**:\n\
+  1. Query meta database for current meta share\n2. Analyze deck composition against\
+  \ known archetypes\n3. LLM provides matchup assessment with sideboard guide\n\n\
+  **Output**:\n```\n## Current Standard Meta (as of [date])\n\n| Archetype | Meta\
+  \ % | Your Matchup |\n|-----------|--------|--------------|\n| Domain Ramp | 18%\
+  \ | Slightly favored |\n| Azorius Control | 15% | Even |\n| Mono-Red Aggro | 12%\
+  \ | Mirror |\n| Esper Midrange | 11% | Unfavored |\n| Mono-White Aggro | 9% | Favored\
+  \ |\n\n## Detailed: vs Esper Midrange\n\nThis is your hardest matchup. They have:\n\
+  - Efficient removal (Cut Down, Go for the Throat)\n- Lifegain (Sheoldred)\n- Card\
+  \ advantage (Raffine)\n\n**Sideboard plan**:\nOut: 4 Searing Blood, 2 Phoenix Chick\n\
+  In: 4 Leyline of Combustion, 2 Experimental Synthesizer\n\n**Key cards to play around**:\
+  \ ...\n```\n\n### Feature 4: Deck Iteration\n\n**User input**: Request to modify\
+  \ existing deck\n- \"Make this deck faster\"\n- \"Add more interaction to the sideboard\"\
+  \n- \"I want to splash blue for [card]\"\n- \"Replace [card] with something similar\"\
+  \n\n**Process**:\n1. Parse existing decklist\n2. Understand modification request\n\
+  3. Identify cards to remove\n4. Find replacements using constrained selection\n\
+  5. Revalidate 75\n6. Explain changes\n\n**Output**:\n```\n## Changes Made\n\n**Out**:\n\
+  - 2 Thundering Raiju (too slow for faster build)\n- 2 Sokenzan (enters tapped)\n\
+  \n**In**:\n- 4 Reinforced Ronin (immediate damage, can re-cast)\n\n**Reasoning**:\n\
+  Cutting the top of your curve makes the deck more consistent\nat closing games by\
+  \ turn 4-5. Thundering Raiju is powerful\nbut often too slow against the current\
+  \ meta.\n\n**Updated mana curve**:\n1-drop: 12 → 16\n2-drop: 12 → 12\n3-drop: 4\
+  \ → 4\n4-drop: 4 → 0\n```\n\n### Feature 5: Deck Import\n\n**User input**: Paste\
+  \ existing decklist\n- Arena export format\n- MTGO format\n- Simple \"4 Card Name\"\
+  \ format\n\n**Process**:\n1. Parse decklist (handle multiple formats)\n2. Validate\
+  \ each card against database\n3. Flag any issues (illegal cards, wrong quantities)\n\
+  4. Store deck for analysis/iteration\n\n**Supported formats**:\n```\n// Arena format\n\
+  4 Lightning Strike (DMU) 137\n4 Play with Fire (MID) 154\n\n// Simple format\n4\
+  \ Lightning Strike\n4 Play with Fire\n\n// MTGO format\n4 Lightning Strike\n4 Play\
+  \ with Fire\nSB: 3 Rending Flame\n```\n\n**Output on invalid cards**:\n```\n## Import\
+  \ Issues\n\nThe following cards could not be validated:\n- \"Lighting Strike\" -\
+  \ Did you mean \"Lightning Strike\"?\n- \"Counterspell\" - Not legal in Standard.\
+  \ Similar options: Negate, Make Disappear\n\n[Fix and re-import] or [Auto-correct]\n\
+  ```\n\n---\n\n## User Interface\n\n### Chat Interface\n\n**Layout**:\n```\n┌─────────────────────────────────────────────────────────────┐\n\
+  │  Spellbook - Standard Deck Builder                    [?]   │\n├─────────────────────────────────────────────────────────────┤\n\
+  │                                                             │\n│  ┌─────────────────────────────────────────────────────┐\
+  \   │\n│  │ User: Build me a mono-red aggro deck               │   │\n│  └─────────────────────────────────────────────────────┘\
+  \   │\n│                                                             │\n│  ┌─────────────────────────────────────────────────────┐\
+  \   │\n│  │ Spellbook: I'll build you a mono-red aggro deck    │   │\n│  │ optimized\
+  \ for the current Standard meta.           │   │\n│  │                         \
+  \                            │   │\n│  │ ## Mono-Red Aggro                     \
+  \             │   │\n│  │                                                     │\
+  \   │\n│  │ ### Main Deck (60)                                 │   │\n│  │ **Creatures\
+  \ (20)**                                 │   │\n│  │ 4 Monastery Swiftspear    \
+  \                        │   │\n│  │ 4 Phoenix Chick                           \
+  \         │   │\n│  │ ...                                                │   │\n\
+  │  │                                                     │   │\n│  │ [Copy to Arena]\
+  \ [Export MTGO]                      │   │\n│  └─────────────────────────────────────────────────────┘\
+  \   │\n│                                                             │\n│  ┌─────────────────────────────────────────────────────┐\
+  \   │\n│  │ User: Why Monastery Swiftspear?                    │   │\n│  └─────────────────────────────────────────────────────┘\
+  \   │\n│                                                             │\n│  ┌─────────────────────────────────────────────────────┐\
+  \   │\n│  │ Spellbook: Monastery Swiftspear is the best        │   │\n│  │ 1-drop\
+  \ in red aggro because...                     │   │\n│  └─────────────────────────────────────────────────────┘\
+  \   │\n│                                                             │\n├─────────────────────────────────────────────────────────────┤\n\
+  │  [Type your message...]                          [Send]     │\n└─────────────────────────────────────────────────────────────┘\n\
+  ```\n\n**Card references**:\n- Card names in responses are clickable/hoverable\n\
+  - Show card image + oracle text on hover\n- Pull image from Scryfall\n\n**Deck export**:\n\
+  - \"Copy to Arena\" button copies Arena-format text\n- \"Export MTGO\" downloads\
+  \ .txt file\n- \"Share\" generates shareable link (v2)\n\n### Conversation Features\n\
+  \n**Conversation memory**:\n- Remember current deck being discussed\n- Remember\
+  \ previous questions in session\n- Allow follow-up questions without re-stating\
+  \ deck\n\n**Suggested prompts**:\n- After deck generation: \"Explain the sideboard\"\
+  \ / \"Show matchups\" / \"Make it faster\"\n- After card question: \"What are alternatives?\"\
+  \ / \"Show similar cards\"\n\n---\n\n## Data Sync Jobs\n\n### Scryfall Daily Sync\n\
+  \n**Schedule**: 2:00 AM UTC daily\n\n**Process**:\n1. Fetch Scryfall bulk data (default\
+  \ cards)\n2. Filter to Standard-legal cards\n3. Compare against existing database\n\
+  4. Update changed cards\n5. Add new cards with embeddings\n6. Mark rotated-out cards\n\
+  7. Log sync results\n\n**Error handling**:\n- Retry 3x with exponential backoff\n\
+  - Alert on failure\n- Never delete cards during sync (only mark as rotated)\n\n\
+  ### mtgtop8 Weekly Scrape\n\n**Schedule**: Sunday 6:00 AM UTC\n\n**Process**:\n\
+  1. Fetch recent Standard events (last 7 days)\n2. For each event, fetch top 8 decklists\n\
+  3. Parse decklists into structured format\n4. Classify archetypes\n5. Validate all\
+  \ card names against card database\n6. Store events and decklists\n7. Recompute\
+  \ meta percentages\n8. Recompute card co-occurrence matrix\n\n**Scraping ethics**:\n\
+  - Respect robots.txt\n- Rate limit requests (1 per second)\n- Cache responses\n\
+  - Identify as bot in user-agent\n\n**Error handling**:\n- Skip malformed decklists\
+  \ (log warning)\n- Continue on individual deck failures\n- Alert if >50% of decks\
+  \ fail\n\n---\n\n## API Endpoints\n\n### Chat Endpoint\n\n**POST /api/chat**\n\n\
+  Request:\n```json\n{\n  \"message\": \"Build me a mono-red aggro deck\",\n  \"conversation_id\"\
+  : \"uuid-optional\",\n  \"current_deck\": null\n}\n```\n\nResponse:\n```json\n{\n\
+  \  \"response\": \"I'll build you a mono-red aggro deck...\",\n  \"deck\": {\n \
+  \   \"name\": \"Mono-Red Aggro\",\n    \"format\": \"standard\",\n    \"main_deck\"\
+  : [\n      {\"card_id\": \"abc123\", \"name\": \"Monastery Swiftspear\", \"quantity\"\
+  : 4}\n    ],\n    \"sideboard\": [\n      {\"card_id\": \"xyz789\", \"name\": \"\
+  Rending Flame\", \"quantity\": 3}\n    ]\n  },\n  \"conversation_id\": \"uuid\"\n\
+  }\n```\n\n### Card Search Endpoint\n\n**GET /api/cards/search**\n\nQuery params:\n\
+  - `q`: Text search (name, oracle text)\n- `colors`: Color filter (W, U, B, R, G)\n\
+  - `cmc_max`: Max converted mana cost\n- `type`: Type filter (creature, instant,\
+  \ etc.)\n- `limit`: Max results (default 20)\n\nResponse:\n```json\n{\n  \"cards\"\
+  : [\n    {\n      \"id\": \"abc123\",\n      \"name\": \"Lightning Strike\",\n \
+  \     \"mana_cost\": \"{1}{R}\",\n      \"type_line\": \"Instant\",\n      \"oracle_text\"\
+  : \"Lightning Strike deals 3 damage to any target.\",\n      \"image_uri\": \"https://...\"\
+  \n    }\n  ]\n}\n```\n\n### Card Detail Endpoint\n\n**GET /api/cards/{card_id}**\n\
+  \nResponse:\n```json\n{\n  \"id\": \"abc123\",\n  \"name\": \"Lightning Strike\"\
+  ,\n  \"mana_cost\": \"{1}{R}\",\n  \"cmc\": 2,\n  \"type_line\": \"Instant\",\n\
+  \  \"oracle_text\": \"Lightning Strike deals 3 damage to any target.\",\n  \"colors\"\
+  : [\"R\"],\n  \"legalities\": {\"standard\": \"legal\", \"modern\": \"legal\"},\n\
+  \  \"image_uri\": \"https://...\",\n  \"tournament_play\": {\n    \"decks_containing\"\
+  : 342,\n    \"avg_copies\": 3.8,\n    \"common_archetypes\": [\"Mono-Red Aggro\"\
+  , \"Gruul Midrange\"]\n  }\n}\n```\n\n### Meta Endpoint\n\n**GET /api/meta**\n\n\
+  Response:\n```json\n{\n  \"format\": \"standard\",\n  \"last_updated\": \"2024-01-15\"\
+  ,\n  \"archetypes\": [\n    {\n      \"name\": \"Domain Ramp\",\n      \"meta_percentage\"\
+  : 18.5,\n      \"sample_size\": 47,\n      \"avg_finish\": 4.2,\n      \"key_cards\"\
+  : [\"Atraxa, Grand Unifier\", \"Leyline Binding\"]\n    }\n  ]\n}\n```\n\n### Deck\
+  \ Import Endpoint\n\n**POST /api/decks/import**\n\nRequest:\n```json\n{\n  \"decklist_text\"\
+  : \"4 Lightning Strike\\n4 Play with Fire\\n...\",\n  \"format\": \"arena\"\n}\n\
+  ```\n\nResponse:\n```json\n{\n  \"valid\": true,\n  \"deck\": {\n    \"main_deck\"\
+  : [...],\n    \"sideboard\": [...]\n  },\n  \"warnings\": [],\n  \"errors\": []\n\
+  }\n```\n\n### Deck Export Endpoint\n\n**GET /api/decks/{deck_id}/export?format=arena**\n\
+  \nResponse:\n```\n4 Lightning Strike (DMU) 137\n4 Play with Fire (MID) 154\n...\n\
+  ```\n\n---\n\n## Conversation Flows\n\n### Flow 1: New Deck Generation\n\n```\n\
+  User: Build me a control deck with blue and white\n\nSystem:\n1. Parse intent: control\
+  \ archetype, colors UW\n2. Query meta DB for UW Control reference decks\n3. Build\
+  \ deck skeleton based on control template\n4. For each slot:\n   a. LLM describes\
+  \ need\n   b. Query card DB with constraints\n   c. LLM selects from candidates\n\
+  5. Build sideboard with meta-aware choices\n6. Validate 60+15\n7. Generate response\
+  \ with explanations\n\nResponse: Here's an Azorius Control deck optimized for the\
+  \ current meta...\n[Full 75-card list with explanations]\n```\n\n### Flow 2: Card\
+  \ Explanation\n\n```\nUser: Why is The Wandering Emperor in the deck?\n\nSystem:\n\
+  1. Identify card reference in context of current deck\n2. Retrieve card details\
+  \ from DB\n3. Retrieve deck archetype and strategy\n4. LLM explains role in this\
+  \ specific deck\n\nResponse: The Wandering Emperor serves multiple roles in this\
+  \ control shell:\n- Flash threat that dodges sorcery-speed removal\n- Exile removal\
+  \ for creatures\n- Lifegain against aggro\n- Win condition that's hard to answer\n\
+  ```\n\n### Flow 3: Matchup Analysis\n\n```\nUser: How do I beat mono-red?\n\nSystem:\n\
+  1. Identify \"mono-red\" as archetype (Mono-Red Aggro)\n2. Query meta DB for mono-red\
+  \ deck composition\n3. Analyze current deck's answers to that strategy\n4. Generate\
+  \ sideboard guide\n\nResponse: Mono-Red Aggro is about 12% of the meta. Your matchup\
+  \ is:\n[Detailed analysis]\n[Sideboard plan: In/Out]\n[Key cards to play around]\n\
+  ```\n\n### Flow 4: Deck Iteration\n\n```\nUser: I want to add black for Sheoldred\n\
+  \nSystem:\n1. Understand modification: splash black, add Sheoldred\n2. Identify\
+  \ mana base changes needed\n3. Identify cuts to make room\n4. Validate new 75 (still\
+  \ legal, still 60+15)\n5. Assess impact on matchups\n\nResponse: Adding black for\
+  \ Sheoldred transforms this into Esper Control.\nHere's the updated list:\n[Changes\
+  \ made]\n[New mana base]\n[Matchup impact]\n```\n\n### Flow 5: Deck Import and Analysis\n\
+  \n```\nUser: [Pastes decklist]\n\nSystem:\n1. Parse decklist format\n2. Validate\
+  \ each card against DB\n3. Identify archetype\n4. Analyze strengths/weaknesses\n\
+  5. Compare to meta reference decks\n\nResponse: I've imported your Boros Convoke\
+  \ deck. Here's my analysis:\n[Archetype classification]\n[Comparison to tournament\
+  \ lists]\n[Suggested improvements]\n[Matchup overview]\n```\n\n---\n\n## Error Handling\n\
+  \n### Card Not Found\n\nWhen the LLM references a card that doesn't exist:\n\n```\n\
+  LLM attempts: \"Add 4 Flame Burst\"\n\nSystem:\n1. Query DB for \"Flame Burst\"\
+  \ - no match\n2. Fuzzy search for similar names\n3. Return error to LLM with suggestions\n\
+  \nError response to LLM:\n{\n  \"error\": \"card_not_found\",\n  \"attempted\":\
+  \ \"Flame Burst\",\n  \"suggestions\": [\"Flame Slash\", \"Burst Lightning\", \"\
+  Lightning Strike\"],\n  \"instruction\": \"Select from suggestions or describe what\
+  \ you need\"\n}\n```\n\n### Format Legality Violation\n\nWhen a card isn't Standard-legal:\n\
+  \n```\nLLM attempts: \"Add 4 Counterspell\"\n\nSystem:\n1. Query DB - card exists\
+  \ but legalities.standard != \"legal\"\n2. Return error with Standard-legal alternatives\n\
+  \nError response to LLM:\n{\n  \"error\": \"not_standard_legal\",\n  \"card\": \"\
+  Counterspell\",\n  \"legal_in\": [\"legacy\", \"modern\", \"vintage\", \"commander\"\
+  ],\n  \"standard_alternatives\": [\"Make Disappear\", \"Negate\", \"Essence Scatter\"\
+  ],\n  \"instruction\": \"Select a Standard-legal alternative\"\n}\n```\n\n### Deck\
+  \ Validation Failure\n\nWhen the 75-card deck doesn't validate:\n\n```\nSystem validates\
+  \ completed deck:\n- Main deck: 62 cards (ERROR: must be 60)\n- Sideboard: 15 cards\
+  \ (OK)\n- 5 copies of Lightning Strike (ERROR: max 4)\n\nError response to LLM:\n\
+  {\n  \"error\": \"deck_validation_failed\",\n  \"issues\": [\n    {\"type\": \"\
+  main_deck_size\", \"expected\": 60, \"actual\": 62},\n    {\"type\": \"card_limit_exceeded\"\
+  , \"card\": \"Lightning Strike\", \"count\": 5, \"max\": 4}\n  ],\n  \"instruction\"\
+  : \"Remove 2 cards from main deck and reduce Lightning Strike to 4 copies\"\n}\n\
+  ```\n\n---\n\n## LLM Prompt Engineering\n\n### System Prompt (Core)\n\n```\nYou\
+  \ are Spellbook, an expert Magic: The Gathering deck builder specializing in Standard\
+  \ format.\n\nCRITICAL RULES:\n1. You can ONLY recommend cards that exist in the\
+  \ card database\n2. You can ONLY recommend Standard-legal cards\n3. Main decks must\
+  \ be EXACTLY 60 cards\n4. Sideboards must be EXACTLY 15 cards\n5. Maximum 4 copies\
+  \ of any card (except basic lands)\n\nWhen building a deck:\n1. First, analyze what\
+  \ the user wants (archetype, colors, strategy)\n2. Reference tournament data for\
+  \ successful similar decks\n3. For each card slot, describe what you need, then\
+  \ select from provided options\n4. Always explain WHY each card is included\n5.\
+  \ Build a complete sideboard with matchup-specific cards\n\nYou have access to:\n\
+  - Current Standard card pool (via search)\n- Recent tournament results and meta\
+  \ data\n- Card co-occurrence data (what cards are played together)\n\nNever invent\
+  \ cards. Never recommend cards outside the provided options.\n```\n\n### Card Selection\
+  \ Prompt\n\n```\nYou need to fill the following deck slot:\n- Role: {role description}\n\
+  - Constraints: {color, cmc, type constraints}\n\nAvailable options from the card\
+  \ database:\n{list of candidate cards with oracle text}\n\nSelect the best option\
+  \ and explain why. Respond with:\n{\n  \"selection\": \"card_id\",\n  \"quantity\"\
+  : N,\n  \"reasoning\": \"explanation\"\n}\n```\n\n### Sideboard Construction Prompt\n\
+  \n```\nBuild a 15-card sideboard for this deck:\n{main deck list}\n\nCurrent meta\
+  \ breakdown:\n{archetype percentages and key cards}\n\nFor each sideboard card,\
+  \ specify:\n1. What matchups it's for\n2. What you board out to bring it in\n3.\
+  \ Why this card over alternatives\n\nAvailable sideboard options:\n{list of candidate\
+  \ cards}\n```\n\n---\n\n## Database Schema\n\n### Cards Table\n\n```sql\nCREATE\
+  \ TABLE cards (\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    scryfall_id\
+  \ VARCHAR(36) UNIQUE NOT NULL,\n    name VARCHAR(255) NOT NULL,\n    mana_cost VARCHAR(50),\n\
+  \    cmc DECIMAL(4,1),\n    type_line VARCHAR(255),\n    oracle_text TEXT,\n   \
+  \ power VARCHAR(10),\n    toughness VARCHAR(10),\n    colors VARCHAR(5)[], -- Array\
+  \ of W, U, B, R, G\n    color_identity VARCHAR(5)[],\n    keywords VARCHAR(100)[],\n\
+  \    legalities JSONB,\n    set_code VARCHAR(10),\n    rarity VARCHAR(20),\n   \
+  \ image_uri TEXT,\n    embedding VECTOR(1536), -- For semantic search\n    created_at\
+  \ TIMESTAMP DEFAULT NOW(),\n    updated_at TIMESTAMP DEFAULT NOW(),\n    is_standard_legal\
+  \ BOOLEAN GENERATED ALWAYS AS\n        ((legalities->>'standard') = 'legal') STORED\n\
+  );\n\nCREATE INDEX idx_cards_standard ON cards(is_standard_legal) WHERE is_standard_legal\
+  \ = true;\nCREATE INDEX idx_cards_name ON cards(name);\nCREATE INDEX idx_cards_colors\
+  \ ON cards USING GIN(colors);\nCREATE INDEX idx_cards_embedding ON cards USING ivfflat(embedding\
+  \ vector_cosine_ops);\n```\n\n### Events Table\n\n```sql\nCREATE TABLE events (\n\
+  \    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    source VARCHAR(50) NOT\
+  \ NULL, -- 'mtgtop8'\n    source_id VARCHAR(100),\n    event_name VARCHAR(255) NOT\
+  \ NULL,\n    event_date DATE NOT NULL,\n    format VARCHAR(50) NOT NULL,\n    num_players\
+  \ INTEGER,\n    created_at TIMESTAMP DEFAULT NOW(),\n    UNIQUE(source, source_id)\n\
+  );\n\nCREATE INDEX idx_events_format_date ON events(format, event_date DESC);\n\
+  ```\n\n### Decklists Table\n\n```sql\nCREATE TABLE decklists (\n    id UUID PRIMARY\
+  \ KEY DEFAULT gen_random_uuid(),\n    event_id UUID REFERENCES events(id),\n   \
+  \ player_name VARCHAR(255),\n    finish_position VARCHAR(50),\n    archetype VARCHAR(100),\n\
+  \    archetype_tags VARCHAR(50)[],\n    main_deck JSONB NOT NULL, -- [{card_name,\
+  \ quantity}]\n    sideboard JSONB NOT NULL,\n    created_at TIMESTAMP DEFAULT NOW()\n\
+  );\n\nCREATE INDEX idx_decklists_archetype ON decklists(archetype);\nCREATE INDEX\
+  \ idx_decklists_event ON decklists(event_id);\n```\n\n### Meta Snapshots Table\n\
+  \n```sql\nCREATE TABLE meta_snapshots (\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n\
+  \    format VARCHAR(50) NOT NULL,\n    snapshot_date DATE NOT NULL,\n    archetype\
+  \ VARCHAR(100) NOT NULL,\n    meta_percentage DECIMAL(5,2),\n    sample_size INTEGER,\n\
+  \    avg_finish DECIMAL(4,2),\n    key_cards VARCHAR(255)[],\n    created_at TIMESTAMP\
+  \ DEFAULT NOW(),\n    UNIQUE(format, snapshot_date, archetype)\n);\n\nCREATE INDEX\
+  \ idx_meta_format_date ON meta_snapshots(format, snapshot_date DESC);\n```\n\n###\
+  \ Card Co-occurrence Table\n\n```sql\nCREATE TABLE card_cooccurrence (\n    card_a\
+  \ VARCHAR(255) NOT NULL,\n    card_b VARCHAR(255) NOT NULL,\n    cooccurrence_count\
+  \ INTEGER NOT NULL,\n    format VARCHAR(50) NOT NULL,\n    last_updated DATE NOT\
+  \ NULL,\n    PRIMARY KEY (card_a, card_b, format)\n);\n\nCREATE INDEX idx_cooccurrence_card\
+  \ ON card_cooccurrence(card_a, format);\n```\n\n### Conversations Table\n\n```sql\n\
+  CREATE TABLE conversations (\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n\
+  \    current_deck JSONB,\n    messages JSONB[], -- Array of {role, content, timestamp}\n\
+  \    created_at TIMESTAMP DEFAULT NOW(),\n    updated_at TIMESTAMP DEFAULT NOW()\n\
+  );\n```\n\n---\n\n## Success Metrics\n\n### Core Metrics\n\n1. **Card validity rate**:\
+  \ % of generated cards that exist and are format-legal\n   - Target: 100% (hard\
+  \ requirement)\n\n2. **Deck validity rate**: % of generated decks that pass validation\
+  \ (60+15, 4-of rule)\n   - Target: 100% (hard requirement)\n\n3. **Meta alignment**:\
+  \ How closely generated decks match tournament archetypes\n   - Measured by card\
+  \ overlap with reference decks\n\n4. **User satisfaction**: Qualitative feedback\
+  \ on deck quality and explanations\n\n### Technical Metrics\n\n1. **Response time**:\
+  \ Time from user message to complete deck generation\n   - Target: <30 seconds for\
+  \ full deck\n\n2. **Card search latency**: Time for semantic card search\n   - Target:\
+  \ <500ms\n\n3. **Data freshness**: Time since last Scryfall/mtgtop8 sync\n   - Target:\
+  \ Cards <24 hours, Meta <7 days"
+epics:
+- id: 37e1856b-EP-2
+  title: Core Deck Builder Engine
+  description: "Implements the AI-driven deck generation workflow: interpreting user\
+    \ intent, querying meta data, orchestrating slot-by-slot card selection, sideboard\
+    \ construction, deck iteration, and providing detailed explanations and matchup\
+    \ analysis. Enforces all deck validation rules (size, copy limits, legality)."
+  priority: 1
+- id: 37e1856b-EP-5
+  title: Chat Interface & Conversation Experience
+  description: Develops the React chat UI, conversation-memory backend, and related
+    API endpoints (chat, card search, deck import/export). Enables real-time interaction,
+    hoverable card details, deck export buttons, and persistent conversation state
+    per user.
+  priority: 1
+- id: 37e1856b-EP-4
+  title: Meta Data Management & Analytics
+  description: Collects tournament results from mtgtop8, classifies archetypes, computes
+    meta percentages, average finishes, and card co-occurrence statistics. Supplies
+    this data to the deck builder for meta-aware recommendations and matchup guidance.
+  priority: 2
+- id: 37e1856b-EP-3
+  title: Card Catalog & Anti-Hallucination Validation
+  description: Provides a searchable, up-to-date card database sourced from Scryfall,
+    including embeddings for semantic search. Enforces constraints (color, CMC, type,
+    legality) and returns candidate sets to the LLM. Performs final validation of
+    card existence, Standard legality, and copy limits before adding to a deck.
+  priority: 2
+- id: 37e1856b-EP-6
+  title: Deck Import, Export & Sharing
+  description: Parses multiple decklist formats (Arena, MTGO, simple text), validates
+    each entry, flags issues, and provides export options (Arena format, MTGO .txt,
+    shareable link). Supports auto-correction suggestions for misspelled or illegal
+    cards.
+  priority: 3
+- id: 37e1856b-EP-7
+  title: Operations, Data Sync & Monitoring
+  description: Implements scheduled jobs for daily Scryfall sync and weekly mtgtop8
+    scraping, including error handling, retries, and alerting. Provides health checks,
+    logging, and dashboards for data freshness and job success rates.
+  priority: 3
+- id: 37e1856b-EP-1
+  title: User Management & Account Services
+  description: Handles user registration, authentication, profile management, and
+    persistence of user-specific data such as saved decks, conversation history, and
+    preferences. Provides secure access controls for private decks and optional sharing
+    features.
+  priority: 4
+stories:
+- id: 37e1856b-EP-1-US-1
+  epic_id: 37e1856b-EP-1
+  actor: New player
+  action: register an account using email and password
+  benefit: gain a personalized space to store decks and conversation history, enabling
+    a continuous and tailored experience
+  acceptance_criteria:
+  - User can navigate to a registration page from the home screen
+  - Form requires a valid email address, a password meeting complexity rules, and
+    password confirmation
+  - Submitting valid data creates a new user record and sends a verification email
+  - User receives a verification email with a functional link that activates the account
+  - Attempting to register with an already-used email shows an appropriate error message
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-1-US-2
+  epic_id: 37e1856b-EP-1
+  actor: Returning player
+  action: log in with email and password
+  benefit: access personal decks, preferences, and conversation history securely
+  acceptance_criteria:
+  - Login page accepts email and password fields
+  - Valid credentials authenticate the user and create a session token
+  - After login, the user is redirected to their dashboard showing saved decks
+  - Invalid credentials display a clear error without revealing which field is incorrect
+  - Session expires after a configurable period of inactivity
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-1-US-3
+  epic_id: 37e1856b-EP-1
+  actor: Registered user
+  action: reset a forgotten password
+  benefit: restore access to the account without needing support intervention
+  acceptance_criteria:
+  - User can request a password reset from the login screen
+  - System sends a time-limited reset link to the user's verified email address
+  - Reset link leads to a page where the user can set a new password meeting complexity
+    rules
+  - After successful reset, the user can log in with the new password
+  - Expired or used reset links show an appropriate error
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-1-US-4
+  epic_id: 37e1856b-EP-1
+  actor: Authenticated user
+  action: view and edit their profile information (display name, avatar, and contact
+    email)
+  benefit: keep personal details up-to-date, improving identification and personalization
+    within the app
+  acceptance_criteria:
+  - Profile page displays current display name, avatar, and email
+  - User can modify display name and upload a new avatar image
+  - Changes are saved only after the user confirms and are reflected immediately in
+    the UI
+  - Email field is read-only unless the user initiates an email change flow that requires
+    re-verification
+  - Invalid inputs (e.g., empty display name) trigger validation errors
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-1-US-5
+  epic_id: 37e1856b-EP-1
+  actor: Authenticated user
+  action: save a newly generated deck to their account
+  benefit: preserve the deck for future reference, iteration, and sharing
+  acceptance_criteria:
+  - After a deck is generated, a 'Save Deck' button is visible
+  - User can provide a deck name and optional description before saving
+  - Saved deck appears in the user's 'My Decks' list with correct card quantities
+    and sideboard
+  - Deck data is persisted in the database and remains after logout and login
+  - Attempting to save a deck with a duplicate name prompts the user to rename or
+    overwrite
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-1-US-6
+  epic_id: 37e1856b-EP-1
+  actor: Authenticated user
+  action: view a list of their saved decks
+  benefit: quickly locate and load previously created decks for review or further
+    editing
+  acceptance_criteria:
+  - Dashboard shows a sortable list of saved decks with name, creation date, and privacy
+    status
+  - Clicking a deck loads its full details (main deck, sideboard, notes) in the deck
+    view screen
+  - List updates in real time when decks are added, edited, or deleted
+  - If no decks exist, a friendly message encourages the user to generate a deck
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-1-US-7
+  epic_id: 37e1856b-EP-1
+  actor: Authenticated user
+  action: delete a saved deck
+  benefit: remove outdated or unwanted decks, keeping the account organized
+  acceptance_criteria:
+  - User can select a deck from the 'My Decks' list and click a 'Delete' action
+  - System asks for confirmation before permanently removing the deck
+  - After deletion, the deck no longer appears in the list and is removed from the
+    database
+  - Attempting to access a deleted deck URL returns a 404 or friendly not-found message
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-1-US-8
+  epic_id: 37e1856b-EP-1
+  actor: Authenticated user
+  action: set a deck's privacy to private or public and generate a shareable link
+    for public decks
+  benefit: control who can view the deck while enabling easy sharing with friends
+    or the community
+  acceptance_criteria:
+  - When saving or editing a deck, user can choose 'Private' or 'Public' visibility
+  - Public decks display a 'Copy Share Link' button that provides a URL containing
+    a unique, non-guessable identifier
+  - Anyone with the share link can view the deck without authentication, but cannot
+    edit or delete it
+  - Private decks are inaccessible without the owner’s authentication
+  - Changing visibility updates access rights immediately
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-1-US-9
+  epic_id: 37e1856b-EP-1
+  actor: Authenticated user
+  action: view their conversation history with the AI assistant
+  benefit: review past advice, explanations, and deck iteration discussions without
+    re-asking the same questions
+  acceptance_criteria:
+  - Conversation page lists previous sessions with timestamps and brief summaries
+  - Selecting a session loads the full transcript, including user messages and assistant
+    responses
+  - Conversation data is persisted per user and remains available after logout and
+    login
+  - User can delete individual conversation entries, which removes them from storage
+  priority: could_have
+  status: ready
+- id: 37e1856b-EP-1-US-10
+  epic_id: 37e1856b-EP-1
+  actor: Authenticated user
+  action: set personal preferences such as default language, UI theme, and default
+    deck format
+  benefit: customize the application experience to match individual comfort and workflow
+  acceptance_criteria:
+  - Preferences page lists options for language (e.g., English, Spanish), theme (light/dark),
+    and default deck format (Standard)
+  - Changes are saved instantly and reflected in subsequent UI interactions
+  - Preferences persist across sessions and devices for the same user account
+  - Invalid selections are prevented by validation
+  priority: could_have
+  status: ready
+- id: 37e1856b-EP-2-US-11
+  epic_id: 37e1856b-EP-2
+  actor: Competitive player
+  action: request a new Standard deck by describing the desired archetype, colors,
+    and strategy
+  benefit: receives a complete, legal 60-card main deck and 15-card sideboard that
+    matches current meta, saving time on deck research and construction
+  acceptance_criteria:
+  - The system parses the natural-language request and identifies archetype, colors,
+    and strategic focus
+  - The generated deck contains exactly 60 main-deck cards and 15 sideboard cards
+  - All cards are Standard-legal and no card exceeds four copies across main and sideboard
+  - The deck includes a concise strategy summary and a list of card quantities
+  - The response includes a brief explanation for each major card choice
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-2-US-12
+  epic_id: 37e1856b-EP-2
+  actor: Competitive player
+  action: receive slot-by-slot card recommendations with reasoning during deck generation
+  benefit: understands why each card was chosen, increasing confidence in the deck
+    and facilitating learning
+  acceptance_criteria:
+  - For each deck slot (e.g., creature, removal, mana source) the system describes
+    the role and constraints
+  - The system queries the card database and presents a list of candidate cards
+  - The LLM selects a single candidate, specifies the quantity, and provides a clear
+    justification
+  - Selected cards respect all validation rules (legality, copy limits, mana curve
+    constraints)
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-2-US-13
+  epic_id: 37e1856b-EP-2
+  actor: Competitive player
+  action: receive a sideboard built specifically for the current meta and the generated
+    main deck
+  benefit: has targeted answers to the most common opponent archetypes, improving
+    tournament performance
+  acceptance_criteria:
+  - Sideboard contains exactly 15 cards
+  - All sideboard cards are Standard-legal and respect the four-copy limit across
+    the full deck
+  - Each sideboard entry includes the matchup(s) it addresses and a brief rationale
+  - Sideboard composition reflects the latest meta percentages (e.g., higher count
+    of cards against top-3 archetypes)
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-2-US-14
+  epic_id: 37e1856b-EP-2
+  actor: Competitive player
+  action: receive detailed explanations for any card in the generated deck on demand
+  benefit: gains insight into card synergies and alternatives, enabling better decision-making
+    and deck tuning
+  acceptance_criteria:
+  - When a user asks “Why [Card]?” the system returns a response that references the
+    card’s role in the deck, synergy with other cards, and possible alternatives
+  - Explanation is limited to the context of the current deck (no unrelated information)
+  - Response includes at least one concrete example of how the card contributes to
+    the deck’s strategy
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-2-US-15
+  epic_id: 37e1856b-EP-2
+  actor: Competitive player
+  action: ask for a matchup analysis of the generated deck against the current Standard
+    meta
+  benefit: understands strengths and weaknesses versus prevalent archetypes and can
+    plan sideboard adjustments
+  acceptance_criteria:
+  - System provides a table showing each top archetype, its meta share, and a qualitative
+    matchup rating (e.g., favored, even, unfavorable)
+  - For each unfavorable matchup, the system lists sideboard cards to bring in and
+    cards to cut
+  - Analysis references recent tournament data (no older than 7 days)
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-2-US-16
+  epic_id: 37e1856b-EP-2
+  actor: Competitive player
+  action: modify an existing deck by specifying a desired change (e.g., add splash
+    color, replace a card, make the deck faster)
+  benefit: quickly iterates on a deck without rebuilding from scratch, supporting
+    rapid experimentation
+  acceptance_criteria:
+  - User can submit a natural-language modification request referencing the current
+    deck
+  - System identifies cards to remove and proposes replacements that satisfy the new
+    constraints
+  - Resulting deck remains a valid 60-card main deck + 15-card sideboard with all
+    validation rules enforced
+  - System provides a change log that lists cards removed, added, and the reasoning
+    for each change
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-2-US-17
+  epic_id: 37e1856b-EP-2
+  actor: Competitive player
+  action: import an existing decklist in various common formats (Arena, MTGO, simple
+    text) for analysis
+  benefit: allows users to bring their own decks into the system for validation, meta
+    comparison, and improvement suggestions
+  acceptance_criteria:
+  - System accepts decklist text in at least three formats and parses card names and
+    quantities
+  - All imported cards are validated against the Standard card database; illegal or
+    misspelled cards generate clear error messages with suggestions
+  - After successful import, the system displays the deck summary and offers analysis
+    options (e.g., validation report, meta fit, improvement suggestions)
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-2-US-18
+  epic_id: 37e1856b-EP-2
+  actor: Competitive player
+  action: export the generated or imported deck in a format ready for use in external
+    tools (Arena, MTGO, plain text)
+  benefit: enables seamless transfer of the deck to gameplay platforms, reducing friction
+    in using the AI-generated deck
+  acceptance_criteria:
+  - User can select an export format (Arena, MTGO, plain text)
+  - Exported output matches the exact card quantities and includes sideboard separation
+    where applicable
+  - Exported file/text can be copied or downloaded without loss of information
+  priority: could_have
+  status: ready
+- id: 37e1856b-EP-2-US-19
+  epic_id: 37e1856b-EP-2
+  actor: System
+  action: validate every generated or imported deck against Standard rules (deck size,
+    copy limits, legality, banned list)
+  benefit: ensures that only playable, tournament-legal decks are presented to the
+    user, maintaining product credibility
+  acceptance_criteria:
+  - Validation runs automatically after deck generation or import
+  - If any rule is violated, the system returns a structured error detailing the issue(s)
+    (e.g., too many copies, illegal card, incorrect deck size)
+  - The user is prompted to correct the problem, and the system allows up to three
+    automatic retry attempts before requiring manual adjustment
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-3-US-20
+  epic_id: 37e1856b-EP-3
+  actor: Competitive player
+  action: search the card catalog using filters such as colors, CMC, type, and legality
+  benefit: quickly find only cards that fit the desired criteria, reducing time spent
+    manually sifting through irrelevant cards
+  acceptance_criteria:
+  - Given a set of filter parameters, the system returns a list of cards where each
+    card matches all supplied filters
+  - All returned cards have `legalities.standard = "legal"`
+  - The response includes card name, mana cost, type line, oracle text, and image
+    URL
+  - The search completes within 500 ms for typical filter combinations
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-3-US-21
+  epic_id: 37e1856b-EP-3
+  actor: Competitive player
+  action: perform a semantic search by describing a desired card in natural language
+  benefit: allows users to find appropriate cards without knowing exact names or technical
+    details, improving accessibility
+  acceptance_criteria:
+  - When a user submits a free-text query, the system returns a ranked list of cards
+    whose embeddings are closest to the query embedding
+  - Each returned card satisfies the standard-legal constraint
+  - The list includes at least 5 candidates and no more than 20
+  - Results are returned within 1 second
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-3-US-22
+  epic_id: 37e1856b-EP-3
+  actor: Deck-building AI (LLM)
+  action: request a candidate set of cards that satisfy a specific role and constraint
+    description
+  benefit: provides the AI with a bounded, valid pool of options, preventing hallucination
+    of non-existent or illegal cards
+  acceptance_criteria:
+  - Given a JSON request containing role description and constraints (colors, CMC
+    max, type, etc.), the system queries the card catalog and returns a JSON array
+    of candidate cards
+  - All candidates meet every constraint in the request
+  - Each candidate includes `id`, `name`, and `oracle_text`
+  - The candidate list contains between 3 and 10 cards
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-3-US-23
+  epic_id: 37e1856b-EP-3
+  actor: Deck-building AI (LLM)
+  action: select a card ID and quantity from the provided candidate set
+  benefit: ensures the AI’s choice is traceable to a real, legal card, enabling reliable
+    deck construction
+  acceptance_criteria:
+  - The AI submits a JSON object with `selection` (card ID), `quantity`, and `reasoning`
+  - The system verifies that the `selection` exists in the card catalog and is standard-legal
+  - The system confirms that `quantity` does not exceed 4 for non-basic-land cards
+  - On success, the card is added to the current deck draft and a confirmation response
+    is returned
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-3-US-24
+  epic_id: 37e1856b-EP-3
+  actor: Deck-building AI (LLM)
+  action: finalize a 75-card deck (60 main + 15 sideboard) and request validation
+  benefit: guarantees that the generated deck complies with all format rules before
+    being presented to the user
+  acceptance_criteria:
+  - The system checks that the main deck contains exactly 60 cards and the sideboard
+    exactly 15 cards
+  - No card appears more than 4 copies across main deck and sideboard combined, except
+    basic lands
+  - All cards are marked as `is_standard_legal = true`
+  - If any rule is violated, the system returns a structured error listing each issue
+    (e.g., deck size mismatch, copy limit exceeded, illegal card)
+  - When the deck passes all checks, the system returns a success response with the
+    complete deck list
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-3-US-25
+  epic_id: 37e1856b-EP-3
+  actor: Competitive player
+  action: import an existing decklist in any supported format
+  benefit: allows users to bring their own decks into the system for analysis, improvement,
+    and validation
+  acceptance_criteria:
+  - The system accepts Arena, MTGO, and simple "N Card Name" formats
+  - Each card name is matched against the card catalog; unmatched names trigger a
+    fuzzy-search suggestion list
+  - The system validates legality, copy limits, and total card counts, returning any
+    errors in a clear, actionable format
+  - On successful import, the deck is stored and can be used for further AI-driven
+    suggestions
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-3-US-26
+  epic_id: 37e1856b-EP-3
+  actor: System administrator
+  action: run a daily synchronization job that updates the card catalog from Scryfall
+  benefit: keeps the card database current so users always receive recommendations
+    based on the latest Standard legal cards
+  acceptance_criteria:
+  - The job fetches the latest bulk data from Scryfall each day at 02:00 UTC
+  - New cards are added, changed cards are updated, and rotated-out cards are marked
+    as not standard-legal without deletion
+  - The job logs the number of added, updated, and deprecated cards
+  - If the job fails, an alert is generated and the previous day's data remains unchanged
+  priority: could_have
+  status: ready
+- id: 37e1856b-EP-4-US-27
+  epic_id: 37e1856b-EP-4
+  actor: System Scheduler
+  action: automatically scrape tournament results from mtgtop8 every week
+  benefit: ensures the platform always has up-to-date tournament data for accurate
+    meta analysis
+  acceptance_criteria:
+  - A scheduled job runs at the configured weekly time without manual intervention
+  - The job fetches all Standard events from the past 7 days
+  - Each fetched event includes event name, date, player name, finish position, and
+    full decklist
+  - Scraped data is stored in the Meta Database with a unique event_id
+  - If the source site is unavailable, the job retries up to three times with exponential
+    back-off and logs the failure
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-4-US-28
+  epic_id: 37e1856b-EP-4
+  actor: Meta Processing Service
+  action: classify each scraped deck into an archetype and assign relevant tags
+  benefit: provides structured categorisation that powers meta statistics and recommendation
+    logic
+  acceptance_criteria:
+  - Every stored decklist is processed within 30 minutes of ingestion
+  - Archetype classification uses defined card-presence heuristics (e.g., ≥4 copies
+    of a signature card)
+  - Each deck receives an archetype name and an array of tags (e.g., ["aggro", "red",
+    "mono-colored"])
+  - If a deck cannot be matched to an existing archetype, it is flagged for manual
+    review
+  - Classification results are persisted in the Decklists table
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-4-US-29
+  epic_id: 37e1856b-EP-4
+  actor: Meta Analytics Engine
+  action: calculate the current meta share percentage for each archetype
+  benefit: gives users a clear view of which decks dominate the Standard format, informing
+    their building decisions
+  acceptance_criteria:
+  - Meta share is computed from all decks collected in the most recent 4-week window
+  - For each archetype, meta_percentage = (number of decks of that archetype ÷ total
+    decks) × 100, rounded to two decimals
+  - Results are stored in the meta_snapshots table with a snapshot_date of the calculation
+  - The engine updates the snapshot at least once per week after the scrape completes
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-4-US-30
+  epic_id: 37e1856b-EP-4
+  actor: Meta Analytics Engine
+  action: determine the average finish position for each archetype
+  benefit: helps users understand which archetypes perform best in tournaments, guiding
+    strategic choices
+  acceptance_criteria:
+  - Average finish is calculated using numeric conversion of finish_position (e.g.,
+    1st = 1, Top 4 = 4, Top 8 = 8)
+  - The calculation includes only decks from the same 4-week window used for meta
+    share
+  - The avg_finish value is stored with two decimal precision in the meta_snapshots
+    table
+  - Values are refreshed whenever the meta share snapshot is regenerated
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-4-US-31
+  epic_id: 37e1856b-EP-4
+  actor: Co-occurrence Service
+  action: generate a card-pair co-occurrence matrix from the collected decks
+  benefit: enables the deck builder to suggest synergistic cards based on real tournament
+    usage
+  acceptance_criteria:
+  - For every unique unordered pair of cards appearing together in a deck, a cooccurrence_count
+    is incremented
+  - Pairs with a count of zero are not stored
+  - The matrix is persisted in the card_cooccurrence table with the current format
+    and last_updated date
+  - The matrix is recomputed after each weekly scrape and completes within a reasonable
+    time (≤ 2 hours for the full dataset)
+  - Counts reflect only decks from the most recent 4-week window
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-4-US-32
+  epic_id: 37e1856b-EP-4
+  actor: Competitive Player (User)
+  action: view the current Standard meta dashboard showing archetype percentages,
+    average finishes, and key cards
+  benefit: gains quick insight into the competitive landscape to make informed deck-building
+    choices
+  acceptance_criteria:
+  - The dashboard loads within 2 seconds on the web UI
+  - "It displays a table with columns: Archetype, Meta %, Avg Finish, Sample Size,\
+    \ Top 3 Key Cards"
+  - Data reflects the latest meta_snapshot (no older than 7 days)
+  - Hovering over a key card shows its image and a brief description
+  - The UI is responsive and works on desktop and tablet screen sizes
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-4-US-33
+  epic_id: 37e1856b-EP-4
+  actor: Deck Builder AI (LLM)
+  action: use meta share and co-occurrence data to recommend sideboard cards tailored
+    to the user’s deck and current meta
+  benefit: provides meta-aware sideboard suggestions that improve matchup performance
+  acceptance_criteria:
+  - When generating a deck, the AI queries the Meta API for the latest archetype percentages
+  - The AI selects sideboard cards that appear in at least 5 % of decks opposing the
+    user’s archetype and have a co-occurrence count ≥ 3 with cards in the main deck
+  - 'Each sideboard recommendation includes a brief justification referencing the
+    meta data (e.g., “Rending Flame - effective against Mono-Red Aggro, which currently
+    holds 12 % of the meta”) '
+  - All suggested cards are validated as Standard-legal before being returned
+  - The sideboard contains exactly 15 cards, respecting the 4-copy limit
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-4-US-34
+  epic_id: 37e1856b-EP-4
+  actor: Deck Builder AI (LLM)
+  action: explain matchup strengths and weaknesses of the generated deck based on
+    current meta statistics
+  benefit: helps users understand how their deck performs against prevalent archetypes
+    and what sideboard plans to consider
+  acceptance_criteria:
+  - The AI produces a matchup section that lists each top-5 archetype by meta % with
+    a concise rating (Favored / Even / Unfavored)
+  - For each listed archetype, the explanation references average finish data and
+    highlights specific cards that counter or are vulnerable to that archetype
+  - The explanation includes actionable sideboard swaps (e.g., “Swap 2 Lightning Strike
+    for 2 Rending Flame against Mono-Red Aggro”)
+  - All referenced cards are validated as Standard-legal
+  - The section is generated within the same response as the deck list
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-4-US-35
+  epic_id: 37e1856b-EP-4
+  actor: System Administrator
+  action: monitor the health and freshness of meta data pipelines
+  benefit: ensures reliable delivery of up-to-date meta information to users, maintaining
+    trust in the platform
+  acceptance_criteria:
+  - A dashboard shows the timestamp of the last successful mtgtop8 scrape, meta snapshot
+    generation, and co-occurrence matrix update
+  - Alerts are sent via email/Slack if any pipeline fails to run within its scheduled
+    window
+  - Logs capture success/failure details for each step and are retained for at least
+    30 days
+  - The system can be manually triggered to re-run any pipeline step without data
+    corruption
+  priority: could_have
+  status: ready
+- id: 37e1856b-EP-5-US-36
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: start a new chat session and request a Standard-legal deck build
+  benefit: receive a ready-to-play deck tailored to my preferences without leaving
+    the application
+  acceptance_criteria:
+  - The UI displays a text input field and a Send button.
+  - When the user submits a request (e.g., "Build me a mono-red aggro deck"), the
+    system returns a chat bubble containing a full 60-card main deck and a 15-card
+    sideboard.
+  - All returned cards are present in the card database and marked as Standard-legal.
+  - The response includes the deck name, format, and a clear list of card names with
+    quantities.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-5-US-37
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: continue the conversation with the same deck context across multiple messages
+  benefit: avoid re-entering the deck each time I ask follow-up questions, making
+    the interaction efficient
+  acceptance_criteria:
+  - After a deck is generated, the conversation stores the deck state server-side.
+  - Subsequent user messages that reference the deck (e.g., "Why is Monastery Swiftspear
+    in the deck?") are answered using the previously generated deck without requiring
+    the user to resend it.
+  - A unique conversation_id is returned with the first response and is accepted in
+    later requests to maintain context.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-5-US-38
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: hover over any card name in a chat response to see an overlay with the card
+    image and oracle text
+  benefit: quickly view detailed card information without leaving the chat, improving
+    decision making
+  acceptance_criteria:
+  - When the cursor hovers over a card name, a tooltip appears within 200 ms.
+  - The tooltip displays the card's high-resolution image and full oracle text.
+  - The overlay works for cards listed in both the main deck and sideboard sections.
+  - The tooltip disappears when the cursor moves away.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-5-US-39
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: click a "Copy to Arena" button next to a generated deck
+  benefit: paste the deck directly into MTG Arena, saving time on manual transcription
+  acceptance_criteria:
+  - A button labeled "Copy to Arena" is displayed below the deck list.
+  - Clicking the button copies the deck to the clipboard in Arena export format (e.g.,
+    "4 Lightning Strike (DMU) 137").
+  - The copied text includes both main deck and sideboard sections and matches the
+    official Arena syntax.
+  - A confirmation toast appears indicating the copy succeeded.
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-5-US-40
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: click an "Export MTGO" button to download the deck as a .txt file
+  benefit: import the deck into MTGO without manual re-typing
+  acceptance_criteria:
+  - A button labeled "Export MTGO" is displayed below the deck list.
+  - Clicking the button triggers a download of a .txt file named "<deck-name>.txt".
+  - The file content follows the MTGO decklist format, including a sideboard section
+    prefixed with "SB:".
+  - The download works across major browsers (Chrome, Firefox, Safari).
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-5-US-41
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: paste an existing decklist (Arena, MTGO, or simple format) into the chat
+    for analysis
+  benefit: receive validation, meta-alignment feedback, and improvement suggestions
+    for my own deck
+  acceptance_criteria:
+  - The chat input accepts multi-line text representing a decklist.
+  - The system parses the decklist, recognizing quantities, card names, and optional
+    set codes.
+  - All cards are validated against the card database; illegal or unknown cards are
+    reported with suggestions.
+  - A summary message is returned showing the imported deck, any warnings, and a brief
+    analysis (e.g., archetype classification).
+  - The imported deck becomes the current deck context for subsequent conversation.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-5-US-42
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: see a real-time typing indicator while the system generates a response
+  benefit: feel that the chat is responsive and know when the answer is forthcoming
+  acceptance_criteria:
+  - When a request is submitted, a visible indicator (e.g., "Spellbook is typing…")
+    appears in the chat window.
+  - The indicator remains until the full response is rendered.
+  - The total time from request to final response is under 30 seconds for a full deck
+    generation.
+  - If the backend processing exceeds 30 seconds, a progress spinner continues until
+    completion.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-5-US-43
+  epic_id: 37e1856b-EP-5
+  actor: Registered user
+  action: have my conversation (including deck state) persisted across sessions
+  benefit: return later and continue the same discussion without losing progress
+  acceptance_criteria:
+  - When a user is authenticated, each conversation is stored in the Conversations
+    table with a unique ID.
+  - On login, the UI lists recent conversations; selecting one loads the full message
+    history and current deck.
+  - The persisted conversation includes all messages, timestamps, and the latest deck
+    JSON.
+  - The system can retrieve a conversation by its ID via the GET /api/conversations/{id}
+    endpoint.
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-5-US-44
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: ask a card-specific question (e.g., "Why is Lightning Strike in the deck?")
+    and receive an explanation referencing the deck context
+  benefit: understand the strategic reasoning behind each card choice, increasing
+    trust in the AI's suggestions
+  acceptance_criteria:
+  - The user can type a question that mentions a card present in the current deck.
+  - The system returns a chat bubble that includes the card name, its role in the
+    deck, and a concise explanation.
+  - The explanation references the deck's archetype or strategy (e.g., "Lightning
+    Strike provides efficient removal for 2-mana, 3-damage spells needed in a fast
+    aggro curve").
+  - No hallucinated cards appear in the response.
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-5-US-45
+  epic_id: 37e1856b-EP-5
+  actor: Competitive MTG player
+  action: receive clear error messages with suggestions when a requested card cannot
+    be found or violates Standard legality
+  benefit: quickly correct the request and continue building a valid deck
+  acceptance_criteria:
+  - "If the user asks for a non-existent or non-legal card, the system returns a structured\
+    \ error response containing:"
+  - '  - error type (e.g., "card_not_found" or "not_standard_legal"),'
+  - '  - the attempted card name,'
+  - '  - a list of up to three suggested alternatives (with card IDs and names),'
+  - '  - an instruction for the user (e.g., "Select a suggested card or describe a
+    different need").'
+  - The UI displays the error message prominently and allows the user to retry with
+    the suggested options.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-6-US-46
+  epic_id: 37e1856b-EP-6
+  actor: Competitive player
+  action: import a decklist in Arena export format
+  benefit: so I can quickly load an existing deck I already have in Arena for analysis
+    and further iteration
+  acceptance_criteria:
+  - The system accepts raw text pasted into the chat or uploaded file containing Arena-style
+    lines (e.g., "4 Lightning Strike (DMU) 137").
+  - All card names are parsed and matched against the card database.
+  - The imported deck is stored in the current conversation context with correct main-deck
+    and sideboard separation.
+  - A success message displays the total cards imported (60 main, 15 sideboard) or
+    indicates parsing errors.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-6-US-47
+  epic_id: 37e1856b-EP-6
+  actor: Competitive player
+  action: import a decklist in MTGO format
+  benefit: so I can reuse decks I have on MTGO without manually re-typing them
+  acceptance_criteria:
+  - The system recognises MTGO syntax, including optional "SB:" sideboard lines.
+  - Card quantities and names are correctly extracted and matched to the database.
+  - The deck is saved in the session with proper main-deck/sideboard classification.
+  - If any line cannot be parsed, the system reports the line number and content.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-6-US-48
+  epic_id: 37e1856b-EP-6
+  actor: Competitive player
+  action: import a simple text decklist ("4 Card Name" per line)
+  benefit: so I can paste any free-form list I have without worrying about exact formatting
+  acceptance_criteria:
+  - The parser accepts lines consisting of a quantity followed by a card name, ignoring
+    extra whitespace.
+  - Cards are matched case-insensitively against the database.
+  - If a line contains an unknown card, the system flags it and suggests possible
+    matches.
+  - The resulting deck is stored with correct card counts.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-6-US-49
+  epic_id: 37e1856b-EP-6
+  actor: Competitive player
+  action: receive validation feedback for an imported deck
+  benefit: so I can be confident the deck complies with Standard tournament rules
+    before I play
+  acceptance_criteria:
+  - The system checks that the main deck contains exactly 60 cards and the sideboard
+    exactly 15 cards.
+  - The system enforces the 4-copy limit for non-basic-land cards.
+  - All cards are verified to be Standard-legal; banned cards are identified.
+  - A summary of validation results is presented, listing any violations with clear
+    messages.
+  - If the deck passes validation, a green “Deck is valid” indicator is shown.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-6-US-50
+  epic_id: 37e1856b-EP-6
+  actor: Competitive player
+  action: receive auto-correction suggestions for misspelled or illegal cards during
+    import
+  benefit: so I can quickly fix errors without leaving the interface
+  acceptance_criteria:
+  - When a card name cannot be matched, the system performs a fuzzy search and presents
+    up to three likely intended cards.
+  - When a matched card is not Standard-legal, the system suggests up to three legal
+    alternatives with similar mana cost, type, or role.
+  - The user can accept a suggestion with a single click, which replaces the problematic
+    entry.
+  - After applying suggestions, the deck is re-validated automatically.
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-6-US-51
+  epic_id: 37e1856b-EP-6
+  actor: Competitive player
+  action: export my current deck in Arena format
+  benefit: so I can copy the text directly into the Arena client to play the deck
+  acceptance_criteria:
+  - A "Copy to Arena" button is displayed after a valid deck is present.
+  - Clicking the button copies a correctly formatted Arena decklist (including set
+    codes and collector numbers) to the clipboard.
+  - The exported text includes all 60 main-deck cards followed by sideboard cards,
+    each on a separate line.
+  - If the deck is invalid, the export button is disabled and an error message is
+    shown.
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-6-US-53
+  epic_id: 37e1856b-EP-6
+  actor: Competitive player
+  action: generate a shareable link for my deck
+  benefit: so I can easily send the deck to friends or post it online without attaching
+    files
+  acceptance_criteria:
+  - A "Share" button appears when a valid deck is loaded.
+  - Pressing the button creates a unique, permanent URL that encodes the deck data
+    securely.
+  - Visiting the URL loads the deck into the application in read-only mode, displaying
+    the full list and validation status.
+  - The link works without requiring the recipient to log in.
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-6-US-54
+  epic_id: 37e1856b-EP-6
+  actor: Competitive player
+  action: view a deck loaded via a shareable link in read-only mode
+  benefit: so I can quickly review decks that others have shared with me
+  acceptance_criteria:
+  - When opening a shared-deck URL, the app displays the deck list exactly as saved
+    by the creator.
+  - All validation information (e.g., legality, card count) is shown but editing controls
+    are disabled.
+  - The page includes a copy-to-clipboard button for both Arena and MTGO export formats.
+  - If the link is malformed or the deck data is corrupted, a user-friendly error
+    page is shown.
+  priority: could_have
+  status: ready
+- id: 37e1856b-EP-7-US-55
+  epic_id: 37e1856b-EP-7
+  actor: Operations Engineer
+  action: schedule a daily job that fetches the latest Scryfall bulk data and updates
+    the card database
+  benefit: keeps the card catalog current so users always receive accurate, Standard-legal
+    card information
+  acceptance_criteria:
+  - The job is automatically triggered at 02:00 UTC every day
+  - It downloads the Scryfall bulk data file and parses only cards where `legalities.standard
+    = "legal"`
+  - New cards are inserted, changed cards are updated, and cards that rotated out
+    are marked as non-legal without being deleted
+  - All database changes are committed in a single transaction; if any step fails,
+    no changes are persisted
+  - "A log entry is created containing: start timestamp, end timestamp, number of\
+    \ records inserted, updated, marked as rotated, and any error messages"
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-7-US-56
+  epic_id: 37e1856b-EP-7
+  actor: Operations Engineer
+  action: schedule a weekly job that scrapes mtgtop8.com for recent Standard events
+    and stores tournament decks
+  benefit: provides up-to-date meta data that powers deck recommendations and matchup
+    analysis
+  acceptance_criteria:
+  - The job runs automatically every Sunday at 06:00 UTC
+  - It retrieves all Standard events from the previous 7 days, extracts the top-8
+    decklists, and validates each card against the card database
+  - Extracted data is stored in the `events`, `decklists`, and `meta_snapshots` tables
+  - The job recomputes meta percentages and the card co-occurrence matrix after ingesting
+    the new decks
+  - A log entry records start/end times, number of events processed, number of decklists
+    stored, and any parsing warnings
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-7-US-57
+  epic_id: 37e1856b-EP-7
+  actor: DevOps Engineer
+  action: configure automatic retry with exponential back-off for both the Scryfall
+    sync and mtgtop8 scrape jobs
+  benefit: reduces transient failures and improves overall data availability without
+    manual intervention
+  acceptance_criteria:
+  - If a job fails, it is automatically retried up to three times
+  - Each retry uses exponential back-off (e.g., 1 min, 2 min, 4 min)
+  - After the final retry, the job is marked as failed and no further attempts are
+    made until the next scheduled run
+  - All retry attempts and outcomes are logged
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-7-US-58
+  epic_id: 37e1856b-EP-7
+  actor: Site Reliability Engineer
+  action: receive an alert whenever a scheduled job fails after all retries
+  benefit: enables rapid response to data pipeline issues, minimizing downtime for
+    end-users
+  acceptance_criteria:
+  - An alert is sent via the configured notification channel (e.g., Slack, email)
+    immediately after the final retry fails
+  - The alert includes the job name, scheduled run time, error details, and a link
+    to the job log
+  - Alerts are not sent for successful runs or for retries that eventually succeed
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-7-US-59
+  epic_id: 37e1856b-EP-7
+  actor: System Administrator
+  action: access a health-check endpoint that reports the current status of each scheduled
+    job
+  benefit: provides a quick way to verify that data sync processes are operating correctly
+  acceptance_criteria:
+  - The endpoint `/health/jobs` returns a JSON payload with an entry for each job
+    (Scryfall sync, mtgtop8 scrape)
+  - "Each entry includes: `last_success_timestamp`, `last_failure_timestamp`, `status`\
+    \ (healthy/unhealthy), and `next_scheduled_run`"
+  - The endpoint responds within 200 ms and returns HTTP 200 for a healthy system,
+    HTTP 503 if any job is unhealthy
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-7-US-60
+  epic_id: 37e1856b-EP-7
+  actor: Product Owner
+  action: view a dashboard that visualizes data freshness and job success rates over
+    time
+  benefit: gives stakeholders insight into the reliability of the data pipeline and
+    helps prioritize improvements
+  acceptance_criteria:
+  - The dashboard displays the timestamp of the most recent successful Scryfall sync
+    and mtgtop8 scrape
+  - A line chart shows daily success/failure counts for each job over the past 30 days
+  - The dashboard highlights any days with failures in red and provides a drill-down
+    to view the associated log entries
+  - Data on the dashboard updates automatically within 5 minutes of each job completion
+  priority: should_have
+  status: ready
+- id: 37e1856b-EP-7-US-61
+  epic_id: 37e1856b-EP-7
+  actor: Operations Engineer
+  action: record detailed execution logs for each run of the scheduled jobs
+  benefit: facilitates troubleshooting and auditability of data ingestion processes
+  acceptance_criteria:
+  - Log entries are written to a centralized logging system (e.g., Loki, CloudWatch)
+    with a consistent schema
+  - "Each log includes: job name, run ID, start time, end time, duration, number of\
+    \ records processed, number of records inserted/updated/marked, and any error\
+    \ or warning messages"
+  - Logs are searchable by job name, date range, and run status
+  - Log retention complies with the organization’s policy (minimum 90 days)
+  priority: must_have
+  status: ready
+- id: 37e1856b-EP-7-US-62
+  epic_id: 37e1856b-EP-7
+  actor: Administrator
+  action: trigger the Scryfall sync or mtgtop8 scrape job manually via an admin API
+  benefit: allows immediate data refresh when urgent updates are required, without
+    waiting for the next scheduled run
+  acceptance_criteria:
+  - A POST request to `/admin/jobs/{job_name}/run` starts the specified job immediately
+  - The API returns a run ID and initial status of `running`
+  - The manually triggered run follows the same processing, retry, logging, and alerting
+    logic as scheduled runs
+  - Only users with the `admin` role can access this endpoint; unauthorized requests
+    receive HTTP 403
+  priority: could_have
+  status: ready
+- id: 37e1856b-EP-7-US-63
+  epic_id: 37e1856b-EP-7
+  actor: Operations Engineer
+  action: view a history page that lists recent executions of each scheduled job
+  benefit: provides a quick reference to verify past runs, spot trends, and access
+    logs for specific executions
+  acceptance_criteria:
+  - "The page lists the last 50 runs for each job, showing: run ID, start time, end\
+    \ time, status (success/failure), and a link to the detailed log"
+  - Runs can be filtered by date range and status
+  - The UI loads within 2 seconds and updates automatically after each new run
+  - Pagination is available for more than 50 entries
+  priority: could_have
+  status: ready
+tasks:
+- id: 72cb794d-2c23-4638-a456-b7d5420e7f75
+  title: Expose a POST /deck/import endpoint that accepts raw deck text or an uploaded
+    file, invokes the parser, persists a new DeckView on success and returns any parsing/validation
+    errors.
+  story_id: 37e1856b-EP-3-US-25
+  epic_id: null
+  implementation_details: Add a FastAPI route handling multipart/form-data, call the
+    parser, write the deck to the DB (or Redis) within a transaction, and return a
+    JSON payload containing either the deck ID or the error report.
+  story_points: 4
+  depends_on:
+  - 44aeb820-208f-42eb-bf30-fea1b6fd0a8f
+- id: 207a0d5f-3cd9-46e1-925e-c4cba4496bd7
+  title: Integrate fuzzy-matching and legality-alternative suggestions into the import
+    flow, presenting up to three likely cards for misspellings and up to three Standard-legal
+    alternatives for illegal cards, with one-click acceptance that replaces the entry
+    and triggers automatic re-validation.
+  story_id: 37e1856b-EP-6-US-50
+  epic_id: null
+  implementation_details: Enhance the import parsers to call a SuggestionService when
+    a card lookup fails or returns a non-legal card. The service returns ranked candidates
+    based on Levenshtein distance and similarity of mana cost/type (using the CardInfo
+    attributes). Add a UI overlay on the import result panel showing suggestion buttons;
+    clicking a suggestion updates the DeckView entry and invokes the ValidationEngine
+    automatically. Ensure the flow works for all three import formats.
+  story_points: 5
+  depends_on:
+  - fd716ae2-1e4d-4d7b-9feb-4b4ea9222b68
+- id: 72cd8b28-1d3e-4ec2-8178-a8963abf3585
+  title: Create a "Copy to Arena" button that generates a correctly formatted Arena
+    decklist (including set codes and collector numbers), copies it to the clipboard,
+    and disables itself when the deck fails validation.
+  story_id: 37e1856b-EP-6-US-51
+  epic_id: null
+  implementation_details: Add an ExportDeck command variant for Arena format that
+    iterates over DeckView, builds lines like `4 Lightning Strike (DMU) 137`, and
+    returns the full text. Wire the UI component in ConversationView to display the
+    button only when a ValidationReport indicates a valid deck; otherwise show a disabled
+    button with an error tooltip. Use the browser Clipboard API (navigator.clipboard.writeText)
+    for copying. Follow the same command-handler pattern used for other export actions.
+  story_points: 4
+  depends_on:
+  - fd716ae2-1e4d-4d7b-9feb-4b4ea9222b68
+- id: dbcbc5fd-3d6d-4c3f-8664-75fc81064817
+  title: Define the core User domain model, database schema (including email, password
+    hash, verification token, token expiry, and preference fields) and set up the
+    repository layer; include migrations and unit-tests for the model.
+  story_id: 37e1856b-EP-1-US-1
+  epic_id: null
+  implementation_details: Use an ORM (e.g., TypeORM or Prisma) to map the User entity;
+    store verification tokens in a separate table with TTL; apply a unique index on
+    the email column; follow the existing repository pattern for data access; write
+    integration tests for creation and uniqueness constraints.
+  story_points: 6
+  depends_on: []
+- id: 832f207c-1d72-47ff-a312-d0e087415a40
+  title: Build the registration page with email/password/confirm fields, client-side
+    validation (email format, password complexity, matching confirmation), connect
+    it to a POST /register endpoint, handle duplicate-email errors, create the user
+    record, generate a verification token and dispatch a verification email with a
+    secure link.
+  story_id: 37e1856b-EP-1-US-1
+  epic_id: null
+  implementation_details: Create a React component using Formik/Yup for validation;
+    implement the /api/auth/register handler using async/await, bcrypt for password
+    hashing, and a mailer service following the existing async client pattern; store
+    the token and send an email via SendGrid (or similar) with a signed JWT link that
+    expires after 24h; return proper HTTP status codes for success and conflict.
+  story_points: 6
+  depends_on:
+  - dbcbc5fd-3d6d-4c3f-8664-75fc81064817
+- id: b0b71a5e-45d4-4c81-9e09-c84affcd54d9
+  title: Create the authentication endpoint (POST /login) that validates credentials,
+    issues a signed JWT (or session cookie) with configurable inactivity expiration,
+    and returns user profile data for the dashboard redirect.
+  story_id: 37e1856b-EP-1-US-2
+  epic_id: null
+  implementation_details: Leverage the existing auth middleware; compare password
+    hashes with bcrypt; generate JWT with a short-lived refresh token stored in Redis
+    with TTL; configure expiration via env variable; ensure error responses do not
+    reveal which field failed.
+  story_points: 6
+  depends_on:
+  - dbcbc5fd-3d6d-4c3f-8664-75fc81064817
+- id: b6663948-db86-4f45-a368-825f57e33e19
+  title: Design the login UI page, integrate it with the /login endpoint, display
+    generic error messages on failure, and redirect authenticated users to the dashboard
+    showing their saved decks.
+  story_id: 37e1856b-EP-1-US-2
+  epic_id: null
+  implementation_details: React component with controlled inputs, client-side required
+    validation, use Axios interceptor to store JWT in HttpOnly cookie, and React Router
+    navigation on success; show a toast for generic login errors.
+  story_points: 4
+  depends_on:
+  - b0b71a5e-45d4-4c81-9e09-c84affcd54d9
+- id: fc12863d-6506-4243-a9d4-06c22810b475
+  title: Implement the password-reset request endpoint (POST /password-reset/request)
+    that generates a time-limited reset token, stores it securely, and emails a reset
+    link to the verified address.
+  story_id: 37e1856b-EP-1-US-3
+  epic_id: null
+  implementation_details: Create a ResetToken entity linked to User, generate a cryptographically-random
+    token, hash it before storage, set a 1-hour expiry, and reuse the mailer service
+    pattern to send the link containing the token as a query param.
+  story_points: 5
+  depends_on:
+  - dbcbc5fd-3d6d-4c3f-8664-75fc81064817
+- id: 6b2b0a4e-e184-41a4-a838-46c32bd1ef60
+  title: Build the reset password page that validates the token, enforces password
+    complexity, updates the user's password hash, and invalidates the token after
+    use.
+  story_id: 37e1856b-EP-1-US-3
+  epic_id: null
+  implementation_details: React form with Yup schema for password rules; call POST
+    /password-reset/confirm with token and new password; backend verifies token hash
+    and expiry, updates password via bcrypt, deletes the token, and returns success;
+    handle expired/used token with a 400 response and friendly UI message.
+  story_points: 5
+  depends_on:
+  - fc12863d-6506-4243-a9d4-06c22810b475
+- id: 9768015f-a680-4b7b-b9d9-37b91e609fbe
+  title: "Create the profile management feature: UI showing display name, avatar,\
+    \ and read-only email; allow editing of name and avatar upload with validation;\
+    \ implement an email-change flow that sends a re-verification link before updating\
+    \ the email field."
+  story_id: 37e1856b-EP-1-US-4
+  epic_id: null
+  implementation_details: Add a Profile React component using Dropzone for avatar
+    uploads (size/type validation); backend PATCH /users/me updates name and avatar
+    URL; for email change, POST /users/me/email-change generates a verification token
+    and sends a link; once verified, PATCH updates the email; all endpoints use the
+    existing auth middleware and return updated profile data.
+  story_points: 7
+  depends_on:
+  - dbcbc5fd-3d6d-4c3f-8664-75fc81064817
+- id: 812000c0-685e-46bf-a9e1-2d6f096ee2bd
+  title: Introduce the Deck entity with fields for ownerId, name, description, mainDeck,
+    sideboard, visibility flag, and a unique share token; add database migrations
+    and repository methods for CRUD operations and name-uniqueness per user.
+  story_id: 37e1856b-EP-1-US-5
+  epic_id: null
+  implementation_details: Use the same ORM as User; enforce a composite unique index
+    on (ownerId, name); store shareToken as a UUID-v4; include soft-delete flag for
+    future audit; write unit tests for create, duplicate-name rejection, and visibility
+    handling.
+  story_points: 6
+  depends_on: []
+- id: e8d4ded6-84a6-4ac4-8d14-68338affb5e7
+  title: Add a 'Save Deck' button to the deck-generation view, collect deck name/description,
+    call POST /decks endpoint, handle duplicate-name prompts (rename or overwrite),
+    and display success feedback.
+  story_id: 37e1856b-EP-1-US-5
+  epic_id: null
+  implementation_details: Extend the existing DeckGenerator component; on click, open
+    a modal with name/description inputs; POST payload includes visibility default
+    (private); backend checks for duplicate and returns 409 with suggested actions;
+    UI shows a dialog offering rename or overwrite; on success, refresh the My Decks
+    list via WebSocket or refetch.
+  story_points: 6
+  depends_on:
+  - 812000c0-685e-46bf-a9e1-2d6f096ee2bd
+- id: d2685a6e-85f1-416a-aad1-c5d9f6bc422c
+  title: Develop the My Decks dashboard component that fetches the user's decks, displays
+    a sortable table (name, creation date, privacy), updates in real-time via a WebSocket
+    channel, and shows a friendly empty-state message when no decks exist.
+  story_id: 37e1856b-EP-1-US-6
+  epic_id: null
+  implementation_details: Create a DeckList React component; use GET /decks?owner=self;
+    integrate with existing socket.io service to listen for deck-created/updated/deleted
+    events; implement column sorting with lodash; render a placeholder card encouraging
+    deck generation when the list is empty.
+  story_points: 6
+  depends_on:
+  - 812000c0-685e-46bf-a9e1-2d6f096ee2bd
+- id: cdeb987f-2357-43d2-bc2f-1edfcfbe7e80
+  title: "Implement deck deletion flow: UI delete button with confirmation modal,\
+    \ DELETE /decks/:id endpoint that removes the record, and ensure a 404 response\
+    \ for any subsequent access to the removed deck URL."
+  story_id: 37e1856b-EP-1-US-7
+  epic_id: null
+  implementation_details: Add a Delete icon to each row in DeckList; on click, show
+    a modal asking for confirmation; backend verifies ownership, performs hard delete
+    (or soft-delete if audit needed), and returns 204; front-end removes the deck
+    from the list; global error handler maps 404 to a friendly 'Deck not found' page.
+  story_points: 5
+  depends_on:
+  - 812000c0-685e-46bf-a9e1-2d6f096ee2bd
+- id: 137469c4-2e5a-49c7-9220-370681506927
+  title: Extend deck save/edit API to accept a visibility flag, generate a non-guessable
+    share token for public decks, expose a public GET /public/decks/:shareToken endpoint
+    (read-only), and add UI controls for privacy selection plus a 'Copy Share Link'
+    button for public decks.
+  story_id: 37e1856b-EP-1-US-8
+  epic_id: null
+  implementation_details: Update POST /decks and PATCH /decks/:id to include visibility
+    enum; when visibility is set to public, generate a UUIDv4 shareToken if not present;
+    create a new public route that bypasses auth but validates the token; front-end
+    adds a toggle switch in the deck edit modal and a button that copies `https://app.example.com/public/decks/{shareToken}`
+    to clipboard using the Clipboard API.
+  story_points: 7
+  depends_on:
+  - 812000c0-685e-46bf-a9e1-2d6f096ee2bd
+- id: 7153ad75-5e4b-4559-b189-b9c0c1492db7
+  title: Define the Conversation entity linked to a user, with timestamps and transcript
+    storage; provide API endpoints to list sessions, fetch a full transcript, and
+    delete individual entries.
+  story_id: 37e1856b-EP-1-US-9
+  epic_id: null
+  implementation_details: Create a Conversation table (id, userId, createdAt, updatedAt,
+    summary); store messages as a JSONB array or separate Message table; implement
+    GET /conversations, GET /conversations/:id, DELETE /conversations/:id; ensure
+    cascade delete respects user ownership.
+  story_points: 6
+  depends_on: []
+- id: a7690f7c-9b5e-4caa-a8d6-4415836e5cb9
+  title: "Build the conversation history page: list sessions with timestamps and brief\
+    \ summaries, allow selection to view full transcript, and provide a delete button\
+    \ for each entry; ensure data persists across logins."
+  story_id: 37e1856b-EP-1-US-9
+  epic_id: null
+  implementation_details: React page using the ConversationList component; fetch list
+    via the new endpoint; clicking a row opens a modal showing messages with proper
+    styling; delete action calls DELETE endpoint and updates UI; use React Query for
+    caching and automatic refetch after mutations.
+  story_points: 6
+  depends_on:
+  - 7153ad75-5e4b-4559-b189-b9c0c1492db7
+- id: dc4b4490-ca6c-4ba3-9dc9-da5479ff959c
+  title: Create a Preferences model tied to the User, with fields for language, UI
+    theme, and default deck format; expose GET /users/me/preferences and PATCH /users/me/preferences
+    endpoints with validation.
+  story_id: 37e1856b-EP-1-US-10
+  epic_id: null
+  implementation_details: Add a Preferences JSON column or separate table; enforce
+    enum validation (e.g., 'en','es' for language; 'light','dark' for theme; 'standard','historic'
+    for format); backend returns the saved preferences and updates them atomically;
+    include unit tests for validation errors.
+  story_points: 5
+  depends_on:
+  - dbcbc5fd-3d6d-4c3f-8664-75fc81064817
+- id: 2d0e84a8-b09f-416c-9851-0e51344ea8d3
+  title: Implement the Preferences UI page with dropdowns for language, theme toggle,
+    and deck format selector; persist changes instantly, reflect them across the app
+    (e.g., theme switch), and ensure settings survive across devices.
+  story_id: 37e1856b-EP-1-US-10
+  epic_id: null
+  implementation_details: React Settings component; on change, call PATCH endpoint
+    and update a global context/provider (e.g., ThemeContext) to apply the new theme;
+    store selected language in i18n provider; use localStorage as a fallback cache;
+    show validation messages if an unsupported option is somehow selected.
+  story_points: 5
+  depends_on:
+  - dc4b4490-ca6c-4ba3-9dc9-da5479ff959c
+- id: 5c5f2153-8143-4c97-8a14-95dc3d591c1a
+  title: "Build the end-to-end deck generation flow: parse the user’s natural-language\
+    \ request, extract archetype, colors and strategic intent, invoke the LLM-driven\
+    \ deck synthesis engine, enforce Standard legality and four-copy limits, produce\
+    \ a 60-card main deck plus a 15-card sideboard, and attach a concise strategy\
+    \ summary with per-card rationale. Populate the DeckView read model and emit a\
+    \ DeckGenerated event."
+  story_id: 37e1856b-EP-2-US-11
+  epic_id: null
+  implementation_details: Create a RequestParser service that uses regex + LLM prompting
+    to identify archetype, colors and goals. Wire a DeckSynthesizer component that
+    queries the CardInfo store, runs a constrained optimization (mana curve, copy
+    limits) and calls the LLM for justification strings. Validate the result with
+    the central DeckValidator (see Story 9) before persisting to the DeckView aggregate.
+    Follow the existing async command-handler pattern for the GenerateDeck command.
+  story_points: 8
+  depends_on: []
+- id: 1bd11855-29ef-426c-b049-a1962a5a13ff
+  title: "Extend the generation pipeline to emit slot-by-slot recommendations: for\
+    \ each deck slot (creature, removal, mana, etc.) describe the role, query candidate\
+    \ cards, let the LLM pick the best candidate with quantity and a clear justification,\
+    \ and ensure every pick respects legality and curve constraints."
+  story_id: 37e1856b-EP-2-US-12
+  epic_id: null
+  implementation_details: Add a SlotRecommendationEngine that iterates over a predefined
+    slot schema, pulls candidate sets from the CardInfo read model, runs a lightweight
+    LLM prompt per slot, and aggregates the results into the DeckGenerated payload.
+    Reuse the DeckValidator for rule enforcement. Update the DeckView to include a
+    recommendations sub-section.
+  story_points: 6
+  depends_on:
+  - 5c5f2153-8143-4c97-8a14-95dc3d591c1a
+- id: 334065c9-f1dd-44a2-aed3-f553383b4674
+  title: Implement a meta-aware sideboard builder that consumes the latest MetaSnapshotView,
+    selects 15 cards targeting the top-3 archetypes, respects Standard legality and
+    copy limits, and annotates each entry with the matchup(s) it addresses and a short
+    rationale.
+  story_id: 37e1856b-EP-2-US-13
+  epic_id: null
+  implementation_details: Create a SideboardGenerator service that reads the MetaSnapshotView
+    (produced by the weekly MetaSnapshotCreated event), calculates weighted needs
+    per archetype, queries CardInfo for viable answers, and runs an LLM prompt to
+    produce justification text. Integrate with the DeckValidator to guarantee rule
+    compliance. Append the sideboard to the DeckView and fire a DeckGenerated event
+    with sideboard details.
+  story_points: 6
+  depends_on:
+  - e3623fb4-d307-4a84-8e77-70a843aec331
+- id: 6cf34a6c-0489-4031-a257-5402da18dbf0
+  title: "Add the ExplainCard command handling: when a user asks “Why [Card]?” retrieve\
+    \ the card’s data from CardInfo, analyse its role and synergies within the current\
+    \ DeckView, suggest alternatives, and return a concise explanation containing\
+    \ at least one concrete example of the card’s contribution."
+  story_id: 37e1856b-EP-2-US-14
+  epic_id: null
+  implementation_details: Introduce an ExplainCardHandler that fetches CardInfo, walks
+    the DeckView to locate interactions (e.g., combo partners, mana curve impact),
+    builds a context prompt for the LLM, and returns a CardExplanationProvided event.
+    Cache frequent explanations in Redis with a short TTL to improve latency.
+  story_points: 5
+  depends_on: []
+- id: 964e4cb3-59cc-487d-bb6b-418b45db1f7e
+  title: "Create the matchup analysis service: pull the most recent meta snapshot\
+    \ (≤ 7 days old), compute a rating table for each top archetype, list sideboard\
+    \ swaps for unfavorable matchups, and emit a MatchupAnalysisProvided event with\
+    \ a formatted table."
+  story_id: 37e1856b-EP-2-US-15
+  epic_id: null
+  implementation_details: Build a MatchupAnalyzer that accesses MetaSnapshotView,
+    calculates win-rate expectations using a simple heuristic (deck archetype vs opponent
+    archetype), and queries the SideboardGenerator for suggested cards. Format the
+    output as markdown/HTML for UI consumption. Ensure the analyzer respects the DeckValidator’s
+    rules for any suggested sideboard changes.
+  story_points: 7
+  depends_on:
+  - e3623fb4-d307-4a84-8e77-70a843aec331
+- id: e92cc26f-9ec1-4b19-9791-862c30622818
+  title: "Wire up the IterateDeck command: accept a natural-language modification\
+    \ request, diff the current DeckView, propose removals and replacements that satisfy\
+    \ the new constraints (e.g., splash color, faster curve), run validation, and\
+    \ produce a change-log detailing each alteration with reasoning."
+  story_id: 37e1856b-EP-2-US-16
+  epic_id: null
+  implementation_details: Add an IterateDeckHandler that re-uses the RequestParser
+    to extract modification intents, leverages the DeckSynthesizer in “delta” mode
+    to generate candidate swaps, validates the resulting deck via DeckValidator, and
+    records actions in a ChangeLog object attached to the DeckView. Emit a DeckIterationCompleted
+    event.
+  story_points: 7
+  depends_on:
+  - e3623fb4-d307-4a84-8e77-70a843aec331
+- id: b913ea58-9594-4cf1-b593-32ffe65bc441
+  title: "Develop the deck import pipeline: support Arena, MTGO and plain-text formats,\
+    \ parse card names and quantities, surface spelling/illegal-card errors with suggestions,\
+    \ run validation, and display the imported deck via DeckView with an initial ValidationReport."
+  story_id: 37e1856b-EP-2-US-17
+  epic_id: null
+  implementation_details: Create an ImportDeckService that detects format via simple
+    heuristics, uses a robust parser (regex + Scryfall fuzzy lookup) to resolve card
+    names, builds a temporary Deck aggregate, invokes the central DeckValidator, and
+    returns either DeckImported with DeckView or DeckImportFailed with structured
+    error messages. Hook the service to the ImportDeck command handler.
+  story_points: 6
+  depends_on:
+  - e3623fb4-d307-4a84-8e77-70a843aec331
+- id: ac6ec209-4edf-4cf9-a823-9e8a95b207fd
+  title: Expose an export endpoint that lets the user choose Arena, MTGO or plain-text
+    format, renders the current DeckView (including sideboard) into the appropriate
+    syntax, and provides either a downloadable .txt file or a copy-to-clipboard payload.
+  story_id: 37e1856b-EP-2-US-18
+  epic_id: null
+  implementation_details: Add an ExportDeckController with a POST /export endpoint
+    accepting a format enum. Implement formatters (ArenaFormatter, MTGOFormatter,
+    PlainTextFormatter) that walk the DeckView and produce correctly ordered lines
+    with sideboard separation. Return a file stream for MTGO/Plain-text and a JSON
+    payload with a ready-to-copy string for Arena. Ensure the controller respects
+    authentication and rate-limits.
+  story_points: 4
+  depends_on: []
+- id: e3623fb4-d307-4a84-8e77-70a843aec331
+  title: Construct a centralized deck validation engine that checks deck size, copy
+    limits, Standard legality, and the current banned list; returns structured error
+    objects; and implements automatic retry up to three attempts before surfacing
+    a manual-adjustment prompt.
+  story_id: 37e1856b-EP-2-US-19
+  epic_id: null
+  implementation_details: Develop a DeckValidator service used by generation, import,
+    iteration and sideboard creation. Pull legality data from the CardInfo read model
+    and the weekly BannedList snapshot. Provide a validate(deck) method that returns
+    ValidationReport with detailed rule violations. Integrate a retry wrapper that
+    re-invokes the generation/iteration logic up to three times, logging each attempt
+    in the ValidationLogView.
+  story_points: 6
+  depends_on: []
+- id: 784b0d13-88a0-4c76-8f4c-c0f84c430900
+  title: Add a filter-aware query layer to the CardInfo read model that supports color,
+    CMC, type and standard-legal constraints, create the necessary database indexes
+    and introduce a short-lived Redis cache for frequent filter combinations.
+  story_id: 37e1856b-EP-3-US-20
+  epic_id: null
+  implementation_details: Extend the existing repository pattern, add composite WHERE
+    clauses, use GIN indexes for array-based color fields, and wrap the query in a
+    cache-first lookup that falls back to the DB. Follow the async service pattern
+    used by other catalog queries.
+  story_points: 5
+  depends_on: []
+- id: db396520-1ecd-494f-825c-0403eada3735
+  title: Expose a GET /cards/search endpoint that parses query-string filters, calls
+    the new query layer, and returns name, mana cost, type line, oracle text and image
+    URL while guaranteeing a sub-500 ms response.
+  story_id: 37e1856b-EP-3-US-20
+  epic_id: null
+  implementation_details: Create a FastAPI (or similar) route, validate incoming parameters
+    with Pydantic, invoke the cached query service, and stream the JSON payload. Apply
+    response-time monitoring middleware to enforce the SLA.
+  story_points: 5
+  depends_on:
+  - 784b0d13-88a0-4c76-8f4c-c0f84c430900
+- id: e0182f4e-ba6b-49ea-841d-c49bd39a696e
+  title: Build an advanced search UI panel with dropdowns for colors, numeric input
+    for CMC range, type selector and a legality toggle; bind it to /cards/search and
+    render the result list with the required fields.
+  story_id: 37e1856b-EP-3-US-20
+  epic_id: null
+  implementation_details: Add a React component using existing design system, employ
+    debounce on filter changes, call the endpoint via the shared API client, and display
+    cards in a responsive grid with image thumbnails.
+  story_points: 4
+  depends_on:
+  - 784b0d13-88a0-4c76-8f4c-c0f84c430900
+  - db396520-1ecd-494f-825c-0403eada3735
+- id: 8adc4b1a-38fe-41bb-b5d7-9edc860bef0f
+  title: Integrate a vector store of pre-computed card embeddings and implement a
+    similarity lookup service that converts a free-text query into an embedding and
+    returns the top N standard-legal cards sorted by cosine similarity.
+  story_id: 37e1856b-EP-3-US-21
+  epic_id: null
+  implementation_details: Use the existing LLM client to generate the query embedding,
+    query an Elasticsearch (or Pinecone) index with a k-NN filter, post-filter for
+    standard legality, and cap results to 20. Cache recent queries in Redis for sub-second
+    latency.
+  story_points: 6
+  depends_on: []
+- id: 83055412-e1e3-4851-a0f1-e86f8da024b8
+  title: Create a POST /cards/semantic-search endpoint that forwards the user’s text
+    to the similarity service, enforces the 5-20 result window and returns the same
+    fields as the filtered search.
+  story_id: 37e1856b-EP-3-US-21
+  epic_id: null
+  implementation_details: Define a FastAPI route, validate the payload, invoke the
+    similarity service, slice the result list, and return a JSON array. Include a
+    timeout guard to keep the overall response under 1 second.
+  story_points: 4
+  depends_on:
+  - 8adc4b1a-38fe-41bb-b5d7-9edc860bef0f
+- id: e23020b9-424c-41a7-be25-190a054e2f19
+  title: Add a free-text semantic search component to the UI, send the query to /cards/semantic-search,
+    and display the ranked cards with thumbnails and full details.
+  story_id: 37e1856b-EP-3-US-21
+  epic_id: null
+  implementation_details: Implement a React search bar, hook it up to the shared API
+    client, show a loading spinner, and render results in the same card list component
+    used by the filtered search.
+  story_points: 4
+  depends_on:
+  - 83055412-e1e3-4851-a0f1-e86f8da024b8
+- id: 29e16561-f3c2-4c7d-821e-9acdf285ebfd
+  title: Expose a POST /ai/candidate-cards endpoint that accepts a JSON role description
+    plus constraints, validates the schema, re-uses the filter query layer from story 20,
+    limits the result set to 3-10 cards and returns id, name and oracle_text.
+  story_id: 37e1856b-EP-3-US-22
+  epic_id: null
+  implementation_details: Add a FastAPI route, use Pydantic for request validation,
+    call the existing filtered-catalog service, enforce min/max result counts, and
+    format the response for LLM consumption.
+  story_points: 5
+  depends_on: []
+- id: 63b89b5f-20c3-4316-bbe9-7025d010eba8
+  title: Implement a POST /ai/select-card endpoint that receives a selection object
+    (card ID, quantity, reasoning), verifies the card exists and is standard-legal,
+    enforces a max-4 copy rule for non-basic lands, updates the in-progress DeckView
+    and returns a confirmation payload.
+  story_id: 37e1856b-EP-3-US-23
+  epic_id: null
+  implementation_details: Create a FastAPI route, perform a DB lookup via the CardInfo
+    repository, apply business rules, mutate the draft deck stored in Redis or a transactional
+    DB table, and return the updated deck slice.
+  story_points: 5
+  depends_on: []
+- id: 0b8540b7-ab1d-4f62-904f-5f43c112ca2a
+  title: Build a deck-validation service that checks a DeckView for exact 60-card
+    main deck, 15-card sideboard, copy limits (≤4 except basic lands) and that every
+    card is flagged standard-legal, producing a structured error list or a success
+    object.
+  story_id: 37e1856b-EP-3-US-24
+  epic_id: null
+  implementation_details: Implement a pure-Python validator class, reuse the CardInfo
+    legality flag, iterate over card counts, and return a JSON schema-compatible error
+    report. Add unit tests covering each rule.
+  story_points: 5
+  depends_on: []
+- id: 3722e849-d2c1-4b45-9062-8b5af662a6ea
+  title: Add a POST /ai/validate-deck endpoint that receives a draft deck, calls the
+    validation service and returns either the structured error list or a success response
+    with the full deck list.
+  story_id: 37e1856b-EP-3-US-24
+  epic_id: null
+  implementation_details: Define a FastAPI route, deserialize the incoming deck JSON,
+    invoke the validator, and map the result to HTTP 200 (success) or 422 (validation
+    errors).
+  story_points: 3
+  depends_on:
+  - 0b8540b7-ab1d-4f62-904f-5f43c112ca2a
+- id: 44aeb820-208f-42eb-bf30-fea1b6fd0a8f
+  title: Write a deck-import parser that recognises Arena, MTGO and simple "N Card
+    Name" formats, matches each name against CardInfo, falls back to fuzzy-search
+    suggestions, and validates legality, copy limits and total counts.
+  story_id: 37e1856b-EP-3-US-25
+  epic_id: null
+  implementation_details: Create a parsing module using regex patterns for each format,
+    integrate the existing fuzzy-search service, and produce a detailed validation
+    report (errors, suggestions, and a clean internal deck representation).
+  story_points: 6
+  depends_on: []
+- id: cc5e9603-c6dc-4c21-a12b-f4ef7b37cef3
+  title: Design an import UI page with a textarea/file uploader, display parsing errors
+    with clickable fuzzy-search suggestions, and allow the user to confirm a corrected
+    deck for storage.
+  story_id: 37e1856b-EP-3-US-25
+  epic_id: null
+  implementation_details: Add a React page using the existing form components, call
+    the /deck/import endpoint, render error messages in a modal, and on user acceptance
+    trigger a second call to store the cleaned deck.
+  story_points: 4
+  depends_on:
+  - 72cb794d-2c23-4638-a456-b7d5420e7f75
+- id: 5cf99417-7614-4956-8ea2-7a94b28e19f3
+  title: Set up a daily scheduled job (Celery beat or equivalent) that runs at 02:00 UTC,
+    downloads the Scryfall bulk JSON, upserts new and changed cards, marks rotated-out
+    cards as not standard-legal, and logs counts of added, updated and deprecated
+    entries.
+  story_id: 37e1856b-EP-3-US-26
+  epic_id: null
+  implementation_details: Create a Celery task, use aiohttp for the HTTP fetch, process
+    the bulk file in streaming mode, perform bulk upserts via SQLAlchemy (or ORM),
+    and write an audit entry to the SyncLogView table.
+  story_points: 6
+  depends_on: []
+- id: abcad33f-43f0-491b-881c-a80869838534
+  title: "Add robust failure handling: wrap the sync in a transaction, on exception\
+    \ send an alert through the existing notification service, and ensure the previous\
+    \ day's catalog remains unchanged by staging updates in a temporary table before\
+    \ swapping."
+  story_id: 37e1856b-EP-3-US-26
+  epic_id: null
+  implementation_details: Implement try/except around the whole job, publish a message
+    to the admin Slack channel (or email) via the shared notifier, and use a rename-swap
+    pattern for the CardInfo table to guarantee atomicity.
+  story_points: 4
+  depends_on:
+  - 5cf99417-7614-4956-8ea2-7a94b28e19f3
+- id: 7d428077-5cbc-47ba-a767-16e19b8949db
+  title: Add a POST /api/decks/generate endpoint that receives the user prompt, invokes
+    the AI deck-generation service, validates that every returned card exists in the
+    CardInfo read model and is Standard-legal, then emits a DeckGenerated event containing
+    deck name, format, main-deck and sideboard lists. Include a short-lived “typing”
+    event so the UI can show a “Spellbook is typing…” indicator.
+  story_id: 37e1856b-EP-5-US-36
+  epic_id: null
+  implementation_details: Use the existing async command-handler pattern (similar
+    to SendMessage) to dispatch a GenerateDeck command. After the AI call, run a validation
+    routine against the in-memory CardInfo cache; illegal cards cause a DeckGenerationFailed
+    event with a structured error payload. Publish the typing indicator via a lightweight
+    WebSocket message that is cleared when the DeckGenerated event is sent.
+  story_points: 6
+  depends_on: []
+- id: 4898bfba-b0ba-4450-b31a-ec5cfae70688
+  title: "Wire up the chat UI: a text input with a Send button, message list rendering,\
+    \ and a deck-response bubble that shows the deck name, format, and a formatted\
+    \ list of 60-card main deck plus 15-card sideboard. Hook the component to the\
+    \ generate-deck endpoint and display the typing indicator until the response arrives."
+  story_id: 37e1856b-EP-5-US-36
+  epic_id: null
+  implementation_details: Create a React component (ChatWindow) that posts to /api/decks/generate,
+    stores the returned conversation_id, and subscribes to the WebSocket typing channel.
+    Render deck cards as clickable spans (to be used by the tooltip task). Use a toast
+    library for the copy-to-arena confirmation (shared later).
+  story_points: 5
+  depends_on: []
+- id: 5b76efd8-e648-472b-9497-6663e8b35834
+  title: Extend the ConversationState read model to store the latest deck JSON and
+    expose the conversation_id generated by the first DeckGenerated response. Subsequent
+    POST /api/messages include this id so the backend can retrieve the stored deck
+    and pass it to follow-up commands.
+  story_id: 37e1856b-EP-5-US-37
+  epic_id: null
+  implementation_details: Add a DeckContext column to the Conversations table (JSONB).
+    Update the GenerateDeck handler to write the deck into this column and return
+    the id. Modify the generic MessageHandler to look up the deck by conversation_id
+    and attach it to the command payload for ExplainCard or other deck-aware commands.
+  story_points: 5
+  depends_on:
+  - 7d428077-5cbc-47ba-a767-16e19b8949db
+- id: 60cbc9b7-b116-4ea0-b88a-5659a53a0f37
+  title: Build a CardTooltip component that appears when the user hovers any card
+    name inside a chat bubble, fetching the high-resolution image and oracle text
+    from the CardInfo cache and showing it within 200 ms. The tooltip hides on mouse-out.
+  story_id: 37e1856b-EP-5-US-38
+  epic_id: null
+  implementation_details: Leverage a debounced hover listener (200 ms) and a lightweight
+    in-memory CardInfo lookup. Render the tooltip using a portal to avoid overflow
+    issues. Cache the image URLs for subsequent hovers. Integrate the component with
+    the card-span elements emitted by the ChatWindow component.
+  story_points: 4
+  depends_on:
+  - 4898bfba-b0ba-4450-b31a-ec5cfae70688
+- id: 7fdf1797-40f3-4dc2-a346-0af5a2755886
+  title: Add a “Copy to Arena” button beneath each generated deck view that transforms
+    the deck JSON into Arena export syntax (e.g., “4 Lightning Strike (DMU) 137”),
+    copies the string to the clipboard, and shows a toast confirmation.
+  story_id: 37e1856b-EP-5-US-39
+  epic_id: null
+  implementation_details: Create a utility that walks the deck object and builds the
+    Arena lines. Use the Clipboard API with fallback for older browsers. Re-use the
+    toast component from the chat UI. Hook the button into the DeckView component
+    rendered by ChatWindow.
+  story_points: 3
+  depends_on:
+  - 4898bfba-b0ba-4450-b31a-ec5cfae70688
+- id: c161a895-c39e-4b80-85f4-e45040356a47
+  title: Implement an “Export MTGO” button that generates a .txt file named after
+    the deck, formats the list according to MTGO conventions (including an “SB:” sideboard
+    prefix), and triggers a cross-browser download.
+  story_id: 37e1856b-EP-5-US-40
+  epic_id: null
+  implementation_details: Create a formatter that outputs main-deck lines followed
+    by a blank line and an “SB:” section. Use the Blob API to create a downloadable
+    file and programmatically click an anchor element with the appropriate filename.
+    Ensure MIME type is text/plain and test on Chrome, Firefox, Safari.
+  story_points: 4
+  depends_on:
+  - 4898bfba-b0ba-4450-b31a-ec5cfae70688
+- id: 27950c8b-745c-438c-af99-a2080e4a7ac0
+  title: Upgrade the chat input to accept multi-line decklist text, parse quantities,
+    card names and optional set codes, validate each entry against CardInfo, and return
+    a summary message with warnings and a quick archetype classification. Store the
+    imported deck as the active deck context for the conversation.
+  story_id: 37e1856b-EP-5-US-41
+  epic_id: null
+  implementation_details: Add a textarea mode to the ChatWindow that detects line-breaks.
+    Implement a parser that normalises lines (e.g., “4 Lightning Strike (DMU)”). Validate
+    each card via the CardInfo read model; collect unknown or illegal cards and generate
+    suggestions (reuse the suggestion service from error handling). Emit a DeckImported
+    event and update the ConversationState deck column.
+  story_points: 6
+  depends_on:
+  - 7d428077-5cbc-47ba-a767-16e19b8949db
+- id: d3a8c527-0e8f-47dc-8037-e300f88d3529
+  title: Show a real-time typing indicator (“Spellbook is typing…”) in the chat window
+    while the backend processes a request, and keep a spinner visible if processing
+    exceeds 30 seconds.
+  story_id: 37e1856b-EP-5-US-42
+  epic_id: null
+  implementation_details: The typing indicator is already emitted by the generate-deck
+    endpoint (see story 36 task 0). Extend the ChatWindow component to render a placeholder
+    bubble when a typing WebSocket message is received, and start a 30-second timer
+    that swaps the placeholder for a spinner if the DeckGenerated event has not arrived.
+  story_points: 3
+  depends_on:
+  - 7d428077-5cbc-47ba-a767-16e19b8949db
+  - 4898bfba-b0ba-4450-b31a-ec5cfae70688
+- id: d52fdf81-2431-494d-a262-50afef509ecb
+  title: "Create the Conversations persistence layer: a Conversations table with id,\
+    \ user_id, message history (JSON), timestamps, and latest deck JSON. Expose GET\
+    \ /api/conversations/{id} and GET /api/conversations (recent list) endpoints,\
+    \ secured for authenticated users."
+  story_id: 37e1856b-EP-5-US-43
+  epic_id: null
+  implementation_details: Define a Sequelize (or equivalent) model for Conversation.
+    Implement repository methods for create, update, and fetch. Add Express routes
+    with JWT middleware that return the full read model (ConversationView) and a lightweight
+    list view. Ensure the deck JSON column is included in the detailed view.
+  story_points: 5
+  depends_on: []
+- id: ee901b2a-5e21-49a8-92d8-16b21094e1cd
+  title: Add a ConversationList component to the UI that fetches the recent conversations
+    for the logged-in user, displays each with a preview, and loads the selected conversation’s
+    full message history and deck into the ChatWindow.
+  story_id: 37e1856b-EP-5-US-43
+  epic_id: null
+  implementation_details: Use the GET /api/conversations endpoint, render a sidebar
+    with clickable items. On selection, call GET /api/conversations/{id} and hydrate
+    the ChatWindow’s state (messages array, conversation_id, current deck). Preserve
+    scroll position and allow returning to the list.
+  story_points: 4
+  depends_on: []
+- id: b057a38b-68c8-459d-b70c-5b879307b3bf
+  title: Implement the ExplainCard command handler that receives a user question,
+    extracts the mentioned card, looks up the current deck context, and returns a
+    concise explanation tying the card to the deck’s archetype or strategy. Ensure
+    no hallucinated cards appear.
+  story_id: 37e1856b-EP-5-US-44
+  epic_id: null
+  implementation_details: Parse the question for a known card name (using the same
+    CardInfo lookup as the tooltip). Retrieve the deck from ConversationState, determine
+    the archetype via a simple heuristic (e.g., dominant creature type or mana curve).
+    Call the AI service with a prompt that includes the deck list and the target card,
+    then emit CardExplanationProvided. Validate that the returned card name matches
+    the request; otherwise fallback to an error response.
+  story_points: 5
+  depends_on:
+  - 7d428077-5cbc-47ba-a767-16e19b8949db
+  - 5b76efd8-e648-472b-9497-6663e8b35834
+- id: 0c12f9d1-26b0-42fa-a68e-8080294c16df
+  title: Render the explanation bubble inside the chat flow, re-using the existing
+    message component styling, and link the card name to the tooltip component for
+    quick hover details.
+  story_id: 37e1856b-EP-5-US-44
+  epic_id: null
+  implementation_details: Add a new message type (explanation) to the ChatWindow renderer.
+    When the payload contains a card name, wrap it in the same span class used by
+    the tooltip so hover works automatically.
+  story_points: 3
+  depends_on: []
+- id: 6e611b45-ca1c-4825-8833-32c98210f66b
+  title: "Enhance error handling for deck generation and import: when a requested\
+    \ or parsed card is missing or not Standard-legal, construct a structured error\
+    \ object containing error type, attempted name, up to three suggested alternatives\
+    \ (with IDs and names), and a short user instruction."
+  story_id: 37e1856b-EP-5-US-45
+  epic_id: null
+  implementation_details: In the GenerateDeck and DeckImport handlers, after validation,
+    if a card fails, query the CardInfo index for similar names (Levenshtein distance)
+    and return them in the error payload. Emit a DeckGenerationFailed or DeckImportFailed
+    event with this structure.
+  story_points: 4
+  depends_on:
+  - 7d428077-5cbc-47ba-a767-16e19b8949db
+  - 27950c8b-745c-438c-af99-a2080e4a7ac0
+- id: 8fb09b40-d1e0-4f5e-a090-6e8f759b6733
+  title: Display the structured error in the chat UI as a highlighted bubble, list
+    the suggested alternatives as clickable options, and allow the user to retry the
+    request with a chosen suggestion.
+  story_id: 37e1856b-EP-5-US-45
+  epic_id: null
+  implementation_details: Add an ErrorMessage component that reads the error object,
+    renders the message with a red border, and maps each suggestion to a button that,
+    when clicked, re-submits the original request with the suggested card name. Hook
+    into the existing message dispatch flow.
+  story_points: 3
+  depends_on: []
+- id: 8990f95d-54e4-4bd6-aaeb-154ee82c297b
+  title: Add Arena-style deck import handling to the ImportDeck command, parsing each
+    line (quantity, card name, set code, collector number), matching cards against
+    the CardInfo read model, separating main-deck and sideboard, storing the result
+    in the current ConversationContext's DeckView, and returning a success message
+    with card counts or detailed parsing errors.
+  story_id: 37e1856b-EP-6-US-46
+  epic_id: null
+  implementation_details: Create a parser service that uses a regular expression like
+    `/^(\d+)\s+(.+?)\s+\((\w{3})\)\s+(\d+)$/` to extract fields. Reuse the existing
+    card-lookup utility to resolve names case-insensitively. Populate a DeckView aggregate
+    and emit a MessageSent event containing the import summary. Integrate the service
+    into the ImportDeck command handler following the same async command-handler pattern
+    used for other imports.
+  story_points: 3
+  depends_on: []
+- id: 8cf15ae8-1d55-4d38-8392-526129b5a3e6
+  title: Extend the ImportDeck command to recognise MTGO syntax, including optional
+    "SB:" sideboard markers, extract quantities and card names, validate each against
+    the card database, store the deck in DeckView and report any unparsable lines
+    with line numbers.
+  story_id: 37e1856b-EP-6-US-47
+  epic_id: null
+  implementation_details: Add a second parsing branch that splits the raw text into
+    lines, detects a leading "SB:" token to route cards to the sideboard collection,
+    and uses a simple `/^(\d+)\s+(.+)$/` regex. For each failure, collect the line
+    index and content and include them in the MessageSent payload. Leverage the same
+    card-lookup service as the Arena parser to keep logic consistent.
+  story_points: 3
+  depends_on: []
+- id: 2d66bb78-6cec-4b01-91dd-24cdf87ae5ef
+  title: Implement a free-form text deck importer that accepts lines of "quantity
+    card name", ignores extra whitespace, matches names case-insensitively, flags
+    unknown cards and suggests possible matches.
+  story_id: 37e1856b-EP-6-US-48
+  epic_id: null
+  implementation_details: Introduce a generic line parser that trims whitespace and
+    splits on the first space. Use the existing CardInfo lookup with a case-insensitive
+    map. When a name is not found, call the fuzzy-search utility (Levenshtein distance)
+    to generate up to three suggestions and attach them to the import response. Store
+    the parsed deck in DeckView as with the other import formats.
+  story_points: 3
+  depends_on: []
+- id: fd716ae2-1e4d-4d7b-9feb-4b4ea9222b68
+  title: Build a deck-validation service that checks 60-card main deck size, 15-card
+    sideboard size, 4-copy limit for non-basic lands, and Standard legality, then
+    produce a ValidationReport read model and render a concise UI summary with green/red
+    indicators.
+  story_id: 37e1856b-EP-6-US-49
+  epic_id: null
+  implementation_details: Create a ValidationEngine that receives a DeckView, iterates
+    over cards, counts copies, queries the CardInfo model for legality flags, and
+    aggregates violations. Emit a ValidationReport event and persist it in the read
+    model store. Add a ConversationView component that subscribes to ValidationReport
+    and displays a summary list; show a green badge when no violations exist. Re-use
+    the same validation logic for both imported and iterated decks.
+  story_points: 5
+  depends_on: []
+- id: ed90fba1-c94e-4295-933c-7d5623b80d26
+  title: Add a "Share" button that creates a permanent, URL-safe identifier for the
+    current deck, stores the deck data securely, and returns a short shareable link;
+    the link loads the deck in read-only mode without requiring authentication.
+  story_id: 37e1856b-EP-6-US-53
+  epic_id: null
+  implementation_details: Implement a ShareDeck command that serialises the DeckView
+    (JSON), encrypts or signs it, stores it in a lightweight persistence layer (e.g.,
+    Redis with a TTL of 30 days or a DB table with a UUID key), and returns a URL
+    like `/share/{uuid}`. The UI component appears when ValidationReport is positive.
+    Ensure the endpoint validates the UUID, fetches the stored deck, and returns it
+    with a read-only flag. Follow existing command-handler conventions and reuse the
+    DeckExport logic for generating the payload.
+  story_points: 5
+  depends_on:
+  - fd716ae2-1e4d-4d7b-9feb-4b4ea9222b68
+- id: c6bd635a-2e2d-42af-b103-84ce301829ab
+  title: Render a shared-deck URL in a read-only view that displays the full deck
+    list, validation status, and copy-to-clipboard buttons for both Arena and MTGO
+    formats, while handling malformed or corrupted links with a friendly error page.
+  story_id: 37e1856b-EP-6-US-54
+  epic_id: null
+  implementation_details: Create a route handler for `/share/{uuid}` that retrieves
+    the stored deck, constructs a read-only DeckView, runs the ValidationEngine to
+    produce a ValidationReport, and renders a dedicated SharedDeckView component.
+    The component disables any editing controls, shows validation results, and provides
+    two export buttons (Arena and MTGO) that reuse the existing ExportDeck logic.
+    Add error handling that catches missing or invalid UUIDs and displays a fallback
+    UI with a clear message.
+  story_points: 5
+  depends_on:
+  - ed90fba1-c94e-4295-933c-7d5623b80d26
+  - fd716ae2-1e4d-4d7b-9feb-4b4ea9222b68
+- id: 39de5d20-5237-4b0a-ade2-6b218a00606b
+  title: "Build the daily Scryfall bulk-data sync job: schedule it for 02:00 UTC,\
+    \ download the bulk file, filter for Standard-legal cards, upsert new and changed\
+    \ records, flag rotated-out cards as non-legal, wrap all DB writes in a single\
+    \ transaction, and emit a structured log entry with start/end timestamps, counts\
+    \ of inserted/updated/rotated records and any error details."
+  story_id: 37e1856b-EP-7-US-55
+  epic_id: null
+  implementation_details: Use the existing job-runner framework (e.g., APScheduler
+    or Celery beat) to define a recurring task. Stream the bulk CSV/JSON directly
+    from Scryfall using an async HTTP client. Apply a bulk-upsert pattern with PostgreSQL
+    `INSERT … ON CONFLICT … DO UPDATE`. After the upsert, run a separate UPDATE to
+    set `legalities.standard = 'not_legal'` for cards no longer present. Commit the
+    whole operation in one transaction; on exception roll back. Log via the centralized
+    logging abstraction with a JSON schema (job_name, run_id, timestamps, record counts,
+    error).
+  story_points: 7
+  depends_on: []
+- id: f4e09eec-976b-44db-a8b3-5cb88d2a126b
+  title: "Create the weekly mtgtop8 scrape job: trigger every Sunday at 06:00 UTC,\
+    \ pull all Standard events from the previous 7 days, extract the top-8 decklists,\
+    \ validate each card against the card DB, persist events, decklists and meta_snapshot\
+    \ rows, recompute meta percentages and the co-occurrence matrix, and write a comprehensive\
+    \ log entry with processing statistics and parsing warnings."
+  story_id: 37e1856b-EP-7-US-56
+  epic_id: null
+  implementation_details: Leverage the same scheduler as the daily job. Implement
+    a scraper module that respects robots.txt and uses an async HTML parser (e.g.,
+    Playwright or aiohttp + BeautifulSoup). For each decklist, cross-check card identifiers
+    with the CardInfo read model; reject unknown cards and record warnings. Insert
+    data using bulk inserts into `events`, `decklists`, and `meta_snapshots`. After
+    ingestion, call existing services that calculate meta percentages and the co-occurrence
+    matrix, persisting their results. Log with the central logger using the same schema
+    as the daily job.
+  story_points: 7
+  depends_on: []
+- id: 8a32fb39-11d3-47d4-9995-cd04facf2d8a
+  title: Add exponential-backoff retry logic to the job-runner so that both the Scryfall
+    sync and mtgtop8 scrape automatically retry up to three times (1 min, 2 min, 4 min)
+    before marking the run as failed.
+  story_id: 37e1856b-EP-7-US-57
+  epic_id: null
+  implementation_details: Extend the base job class with a retry wrapper that tracks
+    attempt count, schedules the next attempt using the scheduler’s `add_job` with
+    a delay calculated as 2^attempt minutes, and records each attempt in the log.
+    Ensure the wrapper is transparent to existing job implementations (daily and weekly
+    jobs).
+  story_points: 4
+  depends_on:
+  - 39de5d20-5237-4b0a-ade2-6b218a00606b
+  - f4e09eec-976b-44db-a8b3-5cb88d2a126b
+- id: d0e32035-777a-43b9-9e30-a5fdfad63f17
+  title: "Wire up failure-after-retries alerts: when a job exhausts its retry attempts,\
+    \ push a notification to the configured channel (Slack webhook or email) containing\
+    \ job name, scheduled run time, error stack, and a link to the detailed log entry."
+  story_id: 37e1856b-EP-7-US-58
+  epic_id: null
+  implementation_details: Create an alert service that follows the existing notification
+    pattern (e.g., a `Notifier` interface). Hook it into the job-runner’s final-failure
+    path. Build the message payload with required fields and send via the configured
+    transport. Guard against duplicate alerts by only firing on the last attempt.
+  story_points: 5
+  depends_on:
+  - 39de5d20-5237-4b0a-ade2-6b218a00606b
+  - f4e09eec-976b-44db-a8b3-5cb88d2a126b
+  - 8a32fb39-11d3-47d4-9995-cd04facf2d8a
+- id: ede4e927-ff44-413e-8dc4-5195fba01dbc
+  title: Expose a `/health/jobs` HTTP endpoint that returns JSON status for each scheduled
+    job (last_success_timestamp, last_failure_timestamp, health flag, next_scheduled_run)
+    and responds with 200 OK when all jobs are healthy or 503 Service Unavailable
+    if any are unhealthy, guaranteeing sub-200 ms latency.
+  story_id: 37e1856b-EP-7-US-59
+  epic_id: null
+  implementation_details: Add a FastAPI (or existing web framework) route under `/health/jobs`.
+    Pull job metadata from the scheduler’s job store and the latest log entries. Compute
+    health based on a configurable threshold (e.g., no failure in last 24 h). Use
+    async DB calls and cache the result for a few seconds to meet latency. Return
+    appropriate HTTP status codes.
+  story_points: 5
+  depends_on:
+  - 39de5d20-5237-4b0a-ade2-6b218a00606b
+  - f4e09eec-976b-44db-a8b3-5cb88d2a126b
+- id: 0af3e3c6-3df6-402f-9941-32821d20297f
+  title: "Build the operations dashboard: backend endpoints that aggregate recent\
+    \ job run metrics (latest success timestamps, daily success/failure counts for\
+    \ the past 30 days) and a front-end page showing those timestamps, a line chart\
+    \ with failure highlights, drill-down links to logs, and auto-refresh within 5 minutes\
+    \ of each job completion."
+  story_id: 37e1856b-EP-7-US-60
+  epic_id: null
+  implementation_details: Create a metrics service that queries the centralized logs
+    for run records, groups by job and date, and returns JSON suitable for charting.
+    Add a new route `/admin/dashboard/jobs` returning this payload. On the UI side,
+    add a React (or existing SPA) page that consumes the endpoint, renders a Chart.js
+    (or similar) line chart, colors failure days red, and provides a modal with log
+    details when a point is clicked. Use a short-interval polling or WebSocket to
+    refresh data after job completion.
+  story_points: 6
+  depends_on:
+  - ede4e927-ff44-413e-8dc4-5195fba01dbc
+  - c1c14a6c-c092-44b4-a5f3-aaf409a9da45
+- id: c1c14a6c-c092-44b4-a5f3-aaf409a9da45
+  title: "Standardize execution logging: define a JSON schema for job run logs, integrate\
+    \ all jobs (daily sync, weekly scrape, manual runs) with the central logging platform\
+    \ (e.g., Loki or CloudWatch), ensure logs contain run ID, timestamps, duration,\
+    \ record counts, and error/warning messages, and configure retention for at least\
+    \ 90 days."
+  story_id: 37e1856b-EP-7-US-61
+  epic_id: null
+  implementation_details: Create a logging helper that formats logs according to the
+    schema and writes to the chosen backend via its SDK. Update the job-runner base
+    class to emit a log entry at start, on each retry, and on completion/failure.
+    Add index fields for job_name, run_id, status, and timestamps to enable efficient
+    queries. Set up retention policies in the logging service configuration.
+  story_points: 5
+  depends_on: []
+- id: a0eeba6e-c28a-43ab-994a-84033f7a2f7e
+  title: Add an admin-only POST `/admin/jobs/{job_name}/run` endpoint that validates
+    the `job_name` (scryfall_sync or mtgtop8_scrape), creates a new run ID, triggers
+    the corresponding job immediately using the same processing, retry, logging and
+    alerting pipeline, and returns the run ID with an initial `running` status.
+  story_id: 37e1856b-EP-7-US-62
+  epic_id: null
+  implementation_details: Extend the API layer with a protected route guarded by role-based
+    access control (admin role). Resolve the requested job name to the existing job
+    implementation and invoke its `run_now` method. Reuse the retry wrapper from story
+    57 and the logging/alerting hooks from stories 61 and 58. Return a JSON payload
+    `{run_id, status}`. Ensure proper 403 handling for unauthorized callers.
+  story_points: 6
+  depends_on:
+  - 39de5d20-5237-4b0a-ade2-6b218a00606b
+  - f4e09eec-976b-44db-a8b3-5cb88d2a126b
+  - 8a32fb39-11d3-47d4-9995-cd04facf2d8a
+  - d0e32035-777a-43b9-9e30-a5fdfad63f17
+  - c1c14a6c-c092-44b4-a5f3-aaf409a9da45
+- id: 5ab14010-268e-4f8b-bf84-a5e145b9f4f6
+  title: "Create the job-run history UI: backend endpoint that returns the last 50\
+    \ executions per job with filtering (date range, status) and pagination, and a\
+    \ front-end page that displays run ID, start/end times, status, and a link to\
+    \ the detailed log, loading within 2 seconds and auto-refreshing after each new\
+    \ run."
+  story_id: 37e1856b-EP-7-US-63
+  epic_id: null
+  implementation_details: Add a `/admin/jobs/history` API that queries the centralized
+    logs table, applies filters, orders by start time, and supports limit/offset pagination.
+    Expose a lightweight DTO for the UI. On the client side, build a React component
+    with a table, filter controls, and pagination UI. Use the log link to open a modal
+    that fetches the full log entry from the logging service. Implement a short-interval
+    poll or server-sent events to prepend new runs after they finish.
+  story_points: 6
+  depends_on:
+  - c1c14a6c-c092-44b4-a5f3-aaf409a9da45
+functional_requirements:
+- id: FR-001
+  category: User Management
+  requirement: System shall allow new users to register with a valid email address
+    and password, enforce password complexity rules, and send an email verification
+    link.
+  priority: Must Have
+- id: FR-002
+  category: User Management
+  requirement: System shall authenticate users with email and password, issue a secure
+    session token, and redirect authenticated users to their dashboard.
+  priority: Must Have
+- id: FR-003
+  category: User Management
+  requirement: System shall provide a password-reset workflow that sends a time-limited
+    reset link to the verified email address and allows the user to set a new password.
+  priority: Must Have
+- id: FR-004
+  category: User Management
+  requirement: System shall enable authenticated users to view and edit their profile
+    information, including display name, avatar image, and contact email.
+  priority: Must Have
+- id: FR-005
+  category: User Management
+  requirement: System shall allow a user to save a generated deck with a user-provided
+    name and optional description, storing the main-deck, sideboard, and metadata
+    in the user's account.
+  priority: Must Have
+- id: FR-006
+  category: User Management
+  requirement: System shall present a sortable list of a user's saved decks showing
+    name, creation date, and privacy status, and allow the user to open any deck for
+    viewing or editing.
+  priority: Must Have
+- id: FR-007
+  category: User Management
+  requirement: System shall permit a user to delete a saved deck after confirming
+    the action, permanently removing it from the user's account.
+  priority: Must Have
+- id: FR-008
+  category: User Management
+  requirement: System shall let a user set a deck's visibility to Private or Public
+    and, for public decks, generate a unique, non-guessable shareable URL that loads
+    the deck in read-only mode.
+  priority: Must Have
+- id: FR-009
+  category: User Management
+  requirement: System shall store each conversation session (messages and current
+    deck state) and allow an authenticated user to view a history of past sessions
+    with timestamps and brief summaries.
+  priority: Must Have
+- id: FR-010
+  category: User Management
+  requirement: System shall provide a preferences page where a user can select default
+    language, UI theme (light/dark), and default deck format (Standard), persisting
+    the choices for future sessions.
+  priority: Should Have
+- id: FR-011
+  category: Deck Builder Engine
+  requirement: System shall accept a natural-language request describing desired archetype,
+    colors, and strategy, and generate a complete Standard-legal 60-card main deck
+    plus a 15-card sideboard.
+  priority: Must Have
+- id: FR-012
+  category: Deck Builder Engine
+  requirement: System shall provide slot-by-slot card recommendations, each accompanied
+    by a concise explanation of why the card fits the requested role.
+  priority: Must Have
+- id: FR-013
+  category: Deck Builder Engine
+  requirement: System shall construct a sideboard of exactly 15 cards that addresses
+    the top-5 archetypes in the current Standard meta, including a brief matchup rationale
+    for each card.
+  priority: Must Have
+- id: FR-014
+  category: Deck Builder Engine
+  requirement: System shall answer on-demand questions about any card in the generated
+    deck, providing a role-specific explanation, synergy notes, and alternative suggestions.
+  priority: Must Have
+- id: FR-015
+  category: Deck Builder Engine
+  requirement: System shall produce a matchup analysis section that lists each major
+    archetype, its meta share, a qualitative rating (Favored/Even/Unfavored), and
+    recommended sideboard adjustments.
+  priority: Must Have
+- id: FR-016
+  category: Deck Builder Engine
+  requirement: System shall accept a natural-language modification request for an
+    existing deck, identify cards to replace, propose suitable alternatives respecting
+    all constraints, and return the updated deck with explanations.
+  priority: Must Have
+- id: FR-017
+  category: Deck Builder Engine
+  requirement: System shall allow users to import an existing decklist (Arena, MTGO,
+    or simple text), validate it against the Standard card pool, and present analysis
+    and improvement suggestions.
+  priority: Must Have
+- id: FR-018
+  category: Deck Builder Engine
+  requirement: System shall enable users to export a deck in Arena format, MTGO format,
+    or plain-text, and provide a one-click copy-to-clipboard or file-download action.
+  priority: Must Have
+- id: FR-019
+  category: Deck Builder Engine
+  requirement: System shall automatically validate every generated or imported deck
+    for Standard legality, exact deck sizes (60 main, 15 sideboard), and the 4-copy
+    limit, returning detailed error messages when violations occur.
+  priority: Must Have
+- id: FR-020
+  category: Card Catalog
+  requirement: System shall provide a card-search endpoint that accepts filters for
+    colors, CMC, type, and legality, returning only cards that satisfy all supplied
+    criteria.
+  priority: Must Have
+- id: FR-021
+  category: Card Catalog
+  requirement: System shall support semantic search by accepting a free-text description,
+    computing an embedding, and returning the top-N Standard-legal cards ranked by
+    cosine similarity.
+  priority: Must Have
+- id: FR-022
+  category: Card Catalog
+  requirement: System shall accept a JSON request describing a role and constraints
+    (colors, CMC max, type, etc.) and return a bounded list of candidate cards that
+    satisfy those constraints.
+  priority: Must Have
+- id: FR-023
+  category: Card Catalog
+  requirement: System shall allow the LLM to select a card by its unique ID, specify
+    a quantity, and provide a reasoning field; the selection shall be verified against
+    the candidate list before acceptance.
+  priority: Must Have
+- id: FR-024
+  category: Card Catalog
+  requirement: System shall enable the LLM to submit a finalized 75-card deck (60
+    main + 15 sideboard) for validation, and shall reject the deck with a structured
+    list of violations if any rule is broken.
+  priority: Must Have
+- id: FR-025
+  category: Deck Import & Export
+  requirement: System shall parse decklists supplied in Arena export format, extracting
+    quantity, card name, set code, and collector number, and map each card to the
+    internal card ID.
+  priority: Must Have
+- id: FR-026
+  category: Deck Import & Export
+  requirement: System shall parse decklists supplied in MTGO format, handling optional
+    sideboard lines ("SB:"), and map each entry to the internal card ID.
+  priority: Must Have
+- id: FR-027
+  category: Deck Import & Export
+  requirement: System shall parse simple "N Card Name" lines, ignore extra whitespace,
+    and map each card name case-insensitively to the internal card ID.
+  priority: Must Have
+- id: FR-028
+  category: Deck Import & Export
+  requirement: System shall provide validation feedback for imported decks, reporting
+    illegal cards, quantity errors, and format violations, and suggest corrective
+    actions.
+  priority: Must Have
+- id: FR-029
+  category: Deck Import & Export
+  requirement: System shall offer fuzzy-search suggestions when a card name cannot
+    be matched, presenting up to three likely alternatives.
+  priority: Must Have
+- id: FR-030
+  category: Deck Import & Export
+  requirement: System shall suggest Standard-legal alternatives when a user requests
+    a card that is not legal in the current format, providing up to three viable replacements.
+  priority: Must Have
+- id: FR-031
+  category: Meta Data Management
+  requirement: System shall run a scheduled job every Sunday at 06:00 UTC that scrapes
+    mtgtop8.com for Standard events from the previous seven days, extracts the top-8
+    decklists, and stores them in the meta database.
+  priority: Must Have
+- id: FR-032
+  category: Meta Data Management
+  requirement: System shall classify each scraped deck into an archetype and assign
+    relevant tags using predefined card-presence heuristics.
+  priority: Must Have
+- id: FR-033
+  category: Meta Data Management
+  requirement: System shall compute the meta share percentage for each archetype based
+    on decks collected in the most recent four-week window.
+  priority: Must Have
+- id: FR-034
+  category: Meta Data Management
+  requirement: System shall calculate the average finish position for each archetype
+    using numeric conversion of finish positions (1st = 1, Top 4 = 4, etc.) over the
+    same four-week window.
+  priority: Must Have
+- id: FR-035
+  category: Meta Data Management
+  requirement: System shall generate a card-pair co-occurrence matrix that records
+    how many decks contain each unordered pair of cards, updating it after each successful
+    scrape.
+  priority: Must Have
+- id: FR-036
+  category: Meta Data Management
+  requirement: System shall expose a meta-dashboard endpoint that returns a table
+    of archetype, meta %, average finish, sample size, and top three key cards, and
+    shall render this view in the UI within two seconds.
+  priority: Must Have
+- id: FR-037
+  category: Meta Data Management
+  requirement: System shall allow the deck-building AI to query the latest meta percentages
+    and co-occurrence data when constructing sideboards, ensuring recommendations
+    are meta-aware.
+  priority: Must Have
+- id: FR-038
+  category: Meta Data Management
+  requirement: System shall enable the AI to generate matchup explanations that reference
+    current meta statistics (share, avg finish) for each archetype.
+  priority: Must Have
+- id: FR-039
+  category: Operations & Monitoring
+  requirement: System shall provide a health-check endpoint (/health/jobs) that reports
+    the last success timestamp, last failure timestamp, and current status for each
+    scheduled job.
+  priority: Must Have
+- id: FR-040
+  category: Operations & Monitoring
+  requirement: System shall send an alert (e.g., Slack or email) whenever a scheduled
+    job fails after all retries, including job name, scheduled time, error details,
+    and a link to logs.
+  priority: Must Have
+- id: FR-041
+  category: Operations & Monitoring
+  requirement: System shall implement automatic retry with exponential back-off for
+    both the daily Scryfall sync and weekly mtgtop8 scrape jobs, retrying up to three
+    times before marking the run as failed.
+  priority: Must Have
+- id: FR-042
+  category: Operations & Monitoring
+  requirement: System shall log detailed execution information for each scheduled
+    job (job name, run ID, start/end time, duration, record counts, and any errors)
+    to a centralized logging service.
+  priority: Must Have
+- id: FR-043
+  category: Operations & Monitoring
+  requirement: System shall provide a dashboard that visualizes data freshness (timestamp
+    of last Scryfall sync and mtgtop8 scrape) and job success rates over the past
+    30 days.
+  priority: Should Have
+- id: FR-044
+  category: Operations & Monitoring
+  requirement: System shall run a daily job at 02:00 UTC that fetches the Scryfall
+    bulk data, updates the card database with new or changed Standard-legal cards,
+    and marks rotated-out cards as non-legal.
+  priority: Must Have
+- id: FR-045
+  category: Chat Interface
+  requirement: System shall present a chat UI with a text input field, a Send button,
+    and a visible typing indicator (“Spellbook is typing…”) while the backend processes
+    a request.
+  priority: Must Have
+- id: FR-046
+  category: Chat Interface
+  requirement: System shall maintain conversation context so that after a deck is
+    generated, subsequent user messages are answered with reference to the same deck
+    without requiring the user to resend the deck.
+  priority: Must Have
+- id: FR-047
+  category: Chat Interface
+  requirement: System shall render card names in chat responses as clickable/hoverable
+    elements; hovering displays a tooltip within 200 ms containing the high-resolution
+    card image and full oracle text.
+  priority: Must Have
+- id: FR-048
+  category: Chat Interface
+  requirement: System shall provide a “Copy to Arena” button beneath each generated
+    deck that copies the deck to the clipboard in Arena export format (quantity, card
+    name, set code, collector number).
+  priority: Must Have
+- id: FR-049
+  category: Chat Interface
+  requirement: System shall provide an “Export MTGO” button that triggers download
+    of a .txt file containing the deck in MTGO format.
+  priority: Must Have
+- id: FR-050
+  category: Chat Interface
+  requirement: System shall allow users to paste a multi-line decklist directly into
+    the chat input; the backend shall parse, validate, and respond with analysis,
+    errors, and improvement suggestions.
+  priority: Must Have
+- id: FR-051
+  category: Chat Interface
+  requirement: System shall persist each conversation (including deck state) in the
+    database and list recent sessions on the user’s dashboard for later retrieval.
+  priority: Must Have
+- id: FR-052
+  category: Chat Interface
+  requirement: System shall return structured error messages when a user requests
+    a non-existent or non-legal card, including the error type, the attempted name,
+    and up to three suggested alternatives.
+  priority: Must Have
+- id: FR-053
+  category: Deck Sharing
+  requirement: System shall generate a permanent, unique shareable URL for any public
+    deck, and when visited, display the deck in read-only mode with all validation
+    information.
+  priority: Must Have
+- id: FR-054
+  category: Deck Sharing
+  requirement: System shall allow a user to set a deck’s privacy to Public, automatically
+    creating the shareable link, and to Private, disabling link generation.
+  priority: Must Have
+non_functional_requirements:
+- id: NFR-001
+  category: Performance
+  requirement: System shall generate a complete deck (including sideboard and explanations)
+    and return the response to the user within 30 seconds for 95% of requests.
+  priority: Must Have
+- id: NFR-002
+  category: Performance
+  requirement: Card search (filter or semantic) shall return results within 500 ms
+    for 95% of queries.
+  priority: Must Have
+- id: NFR-003
+  category: Performance
+  requirement: Meta-dashboard page shall load and render the archetype table within
+    2 seconds for 95% of users.
+  priority: Must Have
+- id: NFR-004
+  category: Data Freshness
+  requirement: Card database shall be refreshed with the latest Scryfall bulk data
+    at least once every 24 hours, and new Standard-legal cards shall be available
+    to users within 2 hours of release.
+  priority: Must Have
+- id: NFR-005
+  category: Data Freshness
+  requirement: Meta data (archetype percentages, average finishes, co-occurrence matrix)
+    shall be updated weekly and be no older than 12 hours after the scheduled mtgtop8
+    scrape.
+  priority: Must Have
+- id: NFR-006
+  category: Availability
+  requirement: System shall achieve 99.5% monthly uptime, measured as the proportion
+    of time the API endpoints and chat UI are reachable.
+  priority: Must Have
+- id: NFR-007
+  category: Security
+  requirement: User passwords shall be stored using a strong one-way hash (e.g., bcrypt
+    with a work factor of at least 12).
+  priority: Must Have
+- id: NFR-008
+  category: Security
+  requirement: Authentication tokens shall be JSON Web Tokens signed with a server-side
+    secret, have an expiration of 1 hour, and be transmitted only over HTTPS.
+  priority: Must Have
+- id: NFR-009
+  category: Security
+  requirement: Access to user-specific resources (saved decks, conversation history,
+    preferences) shall be enforced via role-based access control, ensuring a user
+    can only access their own data.
+  priority: Must Have
+- id: NFR-010
+  category: Scalability
+  requirement: System shall support at least 10,000 concurrent chat sessions without
+    degradation of response time beyond the limits defined in NFR-001.
+  priority: Should Have
+- id: NFR-011
+  category: Reliability
+  requirement: Scheduled jobs shall automatically retry up to three times with exponential
+    back-off (1 min, 2 min, 4 min) before marking the run as failed.
+  priority: Must Have
+- id: NFR-012
+  category: Observability
+  requirement: All application logs, including job execution logs and API request
+    logs, shall be aggregated in a searchable central system (e.g., Loki or CloudWatch)
+    and retained for at least 90 days.
+  priority: Should Have
+- id: NFR-013
+  category: Data Protection
+  requirement: System shall comply with GDPR by providing users the ability to export
+    all personal data and to request permanent deletion of their account and associated
+    data.
+  priority: Must Have
+- id: NFR-014
+  category: Accessibility
+  requirement: User interface shall meet WCAG 2.1 AA criteria, including keyboard
+    navigation, sufficient color contrast, and screen-reader compatible markup.
+  priority: Should Have
+- id: NFR-015
+  category: Internationalization
+  requirement: System shall support at least English and Spanish languages for all
+    UI text and error messages, selectable via the user preferences page.
+  priority: Could Have
+- id: NFR-016
+  category: Rate Limiting
+  requirement: API endpoints shall enforce a limit of 100 requests per minute per
+    authenticated user, returning HTTP 429 when exceeded.
+  priority: Must Have
