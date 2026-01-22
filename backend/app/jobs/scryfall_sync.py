@@ -178,32 +178,52 @@ async def upsert_cards(db: AsyncSession, cards_data: List[Dict[str, Any]]) -> in
     return len(cards_data)
 
 
-async def compute_card_embeddings(db: AsyncSession) -> int:
+async def compute_card_embeddings(db: AsyncSession, batch_size: int = 50) -> int:
     """
     Compute embeddings for cards that don't have them.
-    Uses Anthropic API or falls back to simple text-based vectors.
+    Uses OpenAI embeddings API for semantic search capability.
     """
-    # Find cards without embeddings
+    from app.services.embedding_service import get_embedding_service
+
+    embedding_service = get_embedding_service()
+
+    # Find Standard-legal cards without embeddings (prioritize these)
     result = await db.execute(
-        select(Card).where(Card.embedding.is_(None)).limit(100)
+        select(Card)
+        .where(Card.embedding.is_(None))
+        .where(Card.is_standard_legal == True)
+        .limit(batch_size)
     )
-    cards = result.scalars().all()
+    cards = list(result.scalars().all())
 
     if not cards:
+        logger.info("All Standard cards have embeddings")
         return 0
 
-    updated = 0
+    logger.info(f"Computing embeddings for {len(cards)} cards")
+
+    # Build text for each card
+    texts = []
     for card in cards:
-        # Create a simple text representation for embedding
-        text = f"{card.name} {card.type_line or ''} {card.oracle_text or ''}"
+        text = embedding_service._build_card_text(
+            name=card.name,
+            type_line=card.type_line,
+            oracle_text=card.oracle_text,
+            keywords=card.keywords,
+        )
+        texts.append(text)
 
-        # For now, we'll skip actual embedding computation
-        # In production, this would call an embedding API
-        # card.embedding = await generate_embedding(text)
+    # Get embeddings in batch
+    embeddings = await embedding_service.get_embeddings_batch(texts, batch_size=batch_size)
 
-        updated += 1
+    updated = 0
+    for card, embedding in zip(cards, embeddings):
+        if embedding:
+            card.embedding = embedding
+            updated += 1
 
     await db.commit()
+    logger.info(f"Updated embeddings for {updated} cards")
     return updated
 
 

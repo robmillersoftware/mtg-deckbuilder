@@ -3,10 +3,11 @@ from uuid import UUID
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, func, text
 
 from app.models.card import Card
 from app.schemas.card import CardResponse
+from app.services.embedding_service import get_embedding_service
 
 logger = logging.getLogger(__name__)
 
@@ -149,14 +150,69 @@ class CardService:
         query: str,
         limit: int = 10,
         standard_only: bool = True,
+        colors: Optional[List[str]] = None,
     ) -> List[Card]:
         """
-        Search cards using semantic similarity.
+        Search cards using semantic similarity via embeddings.
         Falls back to text search if embeddings are not available.
         """
-        # For now, fallback to text search
-        # TODO: Implement vector search with pgvector when embeddings are populated
-        return await self.search(q=query, standard_only=standard_only, limit=limit)
+        embedding_service = get_embedding_service()
+        query_embedding = await embedding_service.get_query_embedding(query)
+
+        if query_embedding is None:
+            logger.info("No embedding available, falling back to text search")
+            return await self.search(q=query, standard_only=standard_only, limit=limit, colors=colors)
+
+        try:
+            # Build the vector search query using cosine distance (<=>)
+            # pgvector uses <=> for cosine distance, <-> for L2 distance
+            embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+            conditions = ["embedding IS NOT NULL"]
+            if standard_only:
+                conditions.append("is_standard_legal = true")
+            if colors:
+                for color in colors:
+                    if color.upper() in ["W", "U", "B", "R", "G"]:
+                        conditions.append(f"'{color.upper()}' = ANY(colors)")
+
+            where_clause = " AND ".join(conditions)
+
+            # Use raw SQL for vector similarity search
+            sql = text(f"""
+                SELECT id, name, mana_cost, cmc, type_line, oracle_text, power, toughness,
+                       colors, color_identity, keywords, legalities, set_code, collector_number,
+                       rarity, image_uri, image_uri_small, image_uri_art_crop, price_usd,
+                       price_usd_foil, scryfall_uri, oracle_id, set_name, scryfall_id,
+                       is_standard_legal, created_at, updated_at,
+                       embedding <=> :embedding AS distance
+                FROM cards
+                WHERE {where_clause}
+                ORDER BY embedding <=> :embedding
+                LIMIT :limit
+            """)
+
+            result = await self.db.execute(sql, {"embedding": embedding_str, "limit": limit * 3})
+            rows = result.fetchall()
+
+            # Deduplicate by name (keep highest similarity)
+            seen_names = set()
+            unique_cards = []
+            for row in rows:
+                if row.name not in seen_names:
+                    seen_names.add(row.name)
+                    # Fetch the full Card object
+                    card = await self.get_by_name(row.name, standard_only=False)
+                    if card:
+                        unique_cards.append(card)
+                    if len(unique_cards) >= limit:
+                        break
+
+            return unique_cards
+
+        except Exception as e:
+            logger.error(f"Vector search failed: {e}, falling back to text search")
+            return await self.search(q=query, standard_only=standard_only, limit=limit, colors=colors)
 
     async def get_candidates(
         self,
@@ -166,12 +222,43 @@ class CardService:
         exclude_cards: Optional[List[str]] = None,
         min_results: int = 3,
         max_results: int = 10,
+        use_semantic: bool = True,
     ) -> List[Card]:
         """
         Get candidate cards for a specific role based on constraints.
+        Uses semantic search when a description is provided and embeddings are available.
         Used by the AI to select cards for deck building.
         """
         constraints = constraints or {}
+
+        # If we have a description, try semantic search first
+        if description and use_semantic:
+            colors = constraints.get("colors", [])
+            semantic_results = await self.semantic_search(
+                query=f"{role}: {description}",
+                limit=max_results * 2,
+                standard_only=True,
+                colors=colors if colors else None,
+            )
+
+            # Filter by other constraints
+            if semantic_results:
+                filtered = []
+                for card in semantic_results:
+                    if exclude_cards and card.name in exclude_cards:
+                        continue
+                    if "cmc_max" in constraints and card.cmc and card.cmc > constraints["cmc_max"]:
+                        continue
+                    if "cmc_min" in constraints and card.cmc and card.cmc < constraints["cmc_min"]:
+                        continue
+                    if "type" in constraints and constraints["type"].lower() not in (card.type_line or "").lower():
+                        continue
+                    filtered.append(card)
+
+                if len(filtered) >= min_results:
+                    return filtered[:max_results]
+
+        # Fall back to database query
         query = select(Card).where(Card.is_standard_legal == True)
         conditions = []
 

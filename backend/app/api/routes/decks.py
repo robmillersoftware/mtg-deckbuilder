@@ -14,6 +14,7 @@ from app.schemas.deck import (
     DeckUpdate,
     DeckResponse,
     DeckListResponse,
+    PaginatedDeckResponse,
     DeckImportRequest,
     DeckImportResponse,
     DeckExportRequest,
@@ -36,33 +37,38 @@ from app.core.security import generate_share_token
 router = APIRouter()
 
 
-@router.get("", response_model=List[DeckListResponse])
+@router.get("", response_model=PaginatedDeckResponse)
 async def list_user_decks(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """List all decks owned by the current user."""
+    from sqlalchemy import func
+
+    # Get total count
+    count_result = await db.execute(
+        select(func.count()).select_from(Deck).where(Deck.owner_id == current_user.id)
+    )
+    total = count_result.scalar()
+
+    # Get decks with pagination
     result = await db.execute(
         select(Deck)
         .where(Deck.owner_id == current_user.id)
         .order_by(Deck.updated_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     decks = result.scalars().all()
 
-    return [
-        DeckListResponse(
-            id=deck.id,
-            name=deck.name,
-            format=deck.format,
-            archetype=deck.archetype,
-            visibility=deck.visibility,
-            main_deck_count=deck.get_main_deck_count(),
-            sideboard_count=deck.get_sideboard_count(),
-            created_at=deck.created_at,
-            updated_at=deck.updated_at,
-        )
-        for deck in decks
-    ]
+    return PaginatedDeckResponse(
+        items=decks,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=DeckResponse, status_code=status.HTTP_201_CREATED)

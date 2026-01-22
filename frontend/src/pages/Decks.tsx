@@ -108,7 +108,7 @@ export function DecksPage() {
 
                 <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-800">
                   <div className="text-xs text-gray-500">
-                    {deck.main_deck.reduce((sum, e) => sum + e.quantity, 0)} cards • {formatDate(deck.updated_at)}
+                    {(deck.main_deck || []).reduce((sum, e) => sum + e.quantity, 0)} cards • {formatDate(deck.updated_at)}
                   </div>
                   <div className="flex items-center space-x-2">
                     <Link

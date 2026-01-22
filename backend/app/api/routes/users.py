@@ -102,8 +102,6 @@ async def update_user_preferences(
 
     if prefs_data.language is not None:
         preferences.language = prefs_data.language
-    if prefs_data.theme is not None:
-        preferences.theme = prefs_data.theme
     if prefs_data.default_format is not None:
         preferences.default_format = prefs_data.default_format
 

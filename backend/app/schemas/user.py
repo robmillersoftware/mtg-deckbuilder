@@ -61,13 +61,11 @@ class PasswordResetConfirm(BaseModel):
 
 class PreferencesUpdate(BaseModel):
     language: Optional[str] = Field(None, pattern="^(en|es|fr|de|pt|ja)$")
-    theme: Optional[str] = Field(None, pattern="^(light|dark)$")
     default_format: Optional[str] = Field(None, pattern="^(standard|historic|modern|legacy)$")
 
 
 class PreferencesResponse(BaseModel):
     language: str
-    theme: str
     default_format: str
 
     class Config:

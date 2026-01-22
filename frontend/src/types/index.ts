@@ -13,7 +13,6 @@ export interface User {
 
 export interface UserPreferences {
   default_format: string;
-  theme: 'light' | 'dark' | 'system';
   card_display_size: 'small' | 'medium' | 'large';
   show_card_prices: boolean;
   auto_save_decks: boolean;

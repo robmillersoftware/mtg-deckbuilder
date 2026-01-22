@@ -103,7 +103,7 @@ export const usersApi = {
 
   getPreferences: () => api.get('/users/me/preferences'),
 
-  updatePreferences: (preferences: { language?: string; theme?: string; default_format?: string }) =>
+  updatePreferences: (preferences: { language?: string; default_format?: string }) =>
     api.patch('/users/me/preferences', preferences),
 
   changePassword: (currentPassword: string, newPassword: string) =>

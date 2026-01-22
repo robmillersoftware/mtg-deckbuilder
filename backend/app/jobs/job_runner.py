@@ -10,7 +10,7 @@ Provides a wrapper for scheduled jobs that implements:
 import asyncio
 import logging
 import traceback
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from typing import Callable, Dict, Any, Optional
 from uuid import uuid4
 
@@ -53,7 +53,7 @@ class JobRunner:
             Dict containing job execution results and metadata
         """
         run_id = str(uuid4())
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.utcnow()
 
         result = {
             "run_id": run_id,
@@ -65,7 +65,7 @@ class JobRunner:
         }
 
         for attempt in range(1, self.max_retries + 1):
-            attempt_start = datetime.now(timezone.utc)
+            attempt_start = datetime.utcnow()
             attempt_result = await self._execute_attempt(run_id, attempt)
             result["attempts"].append(attempt_result)
 
@@ -80,7 +80,7 @@ class JobRunner:
             # Job failed - check if we should retry
             if attempt < self.max_retries:
                 delay = self._calculate_delay(attempt)
-                next_retry = datetime.now(timezone.utc) + timedelta(seconds=delay)
+                next_retry = datetime.utcnow() + timedelta(seconds=delay)
 
                 logger.warning(
                     f"Job {self.job_name} failed on attempt {attempt}. "
@@ -109,7 +109,7 @@ class JobRunner:
 
     async def _execute_attempt(self, run_id: str, attempt: int) -> Dict[str, Any]:
         """Execute a single job attempt."""
-        attempt_start = datetime.now(timezone.utc)
+        attempt_start = datetime.utcnow()
 
         async with async_session_factory() as db:
             # Create or update job run record
@@ -121,7 +121,7 @@ class JobRunner:
 
                 # Update success status
                 job_run.status = JobStatus.SUCCESS.value
-                job_run.ended_at = datetime.now(timezone.utc)
+                job_run.ended_at = datetime.utcnow()
                 job_run.duration_seconds = int(
                     (job_run.ended_at - attempt_start).total_seconds()
                 )
@@ -147,7 +147,7 @@ class JobRunner:
 
                 # Update failure status
                 job_run.status = JobStatus.FAILED.value
-                job_run.ended_at = datetime.now(timezone.utc)
+                job_run.ended_at = datetime.utcnow()
                 job_run.duration_seconds = int(
                     (job_run.ended_at - attempt_start).total_seconds()
                 )
@@ -180,7 +180,7 @@ class JobRunner:
             # Update for retry
             job_run.status = JobStatus.RUNNING.value
             job_run.attempt_number = attempt
-            job_run.started_at = datetime.now(timezone.utc)
+            job_run.started_at = datetime.utcnow()
             job_run.ended_at = None
             job_run.error_message = None
         else:
@@ -189,7 +189,7 @@ class JobRunner:
                 job_name=self.job_name,
                 run_id=run_id,
                 status=JobStatus.RUNNING.value,
-                started_at=datetime.now(timezone.utc),
+                started_at=datetime.utcnow(),
                 attempt_number=attempt,
             )
             db.add(job_run)

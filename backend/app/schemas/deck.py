@@ -73,6 +73,14 @@ class DeckListResponse(BaseModel):
     updated_at: datetime
 
 
+class PaginatedDeckResponse(BaseModel):
+    """Paginated list of decks."""
+    items: List[DeckResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class DeckValidationError(BaseModel):
     type: str
     message: str

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { metaApi } from '@/services/api';
 import { MetaArchetype } from '@/types';
+import { CardTooltip } from '@/components/CardTooltip';
 import clsx from 'clsx';
 
 export function MetaPage() {
@@ -128,12 +129,11 @@ export function MetaPage() {
                       <span className="text-sm text-gray-400 block mb-2">Key Cards</span>
                       <div className="flex flex-wrap gap-2">
                         {selectedArchetype.key_cards.map((card) => (
-                          <span
-                            key={card}
-                            className="px-2 py-1 bg-gray-800 rounded text-sm text-gray-300"
-                          >
-                            {card}
-                          </span>
+                          <CardTooltip key={card} cardName={card}>
+                            <span className="px-2 py-1 bg-gray-800 rounded text-sm text-gray-300 cursor-pointer hover:bg-gray-700 transition-colors">
+                              {card}
+                            </span>
+                          </CardTooltip>
                         ))}
                       </div>
                     </div>
