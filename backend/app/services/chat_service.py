@@ -122,12 +122,28 @@ class ChatService:
             # Build context for Claude
             deck_context = ""
             if current_deck:
+                main_deck_list = current_deck.get('main_deck', [])
+                sideboard_list = current_deck.get('sideboard', [])
+
+                # Format card lists
+                main_cards_str = ", ".join(
+                    f"{e.get('quantity', 1)}x {e.get('card_name', 'Unknown')}"
+                    for e in main_deck_list[:20]  # Limit for context size
+                )
+                if len(main_deck_list) > 20:
+                    main_cards_str += f"... and {len(main_deck_list) - 20} more"
+
+                sideboard_cards_str = ", ".join(
+                    f"{e.get('quantity', 1)}x {e.get('card_name', 'Unknown')}"
+                    for e in sideboard_list
+                )
+
                 deck_context = f"""
 Current deck in conversation:
 - Name: {current_deck.get('name', 'Unnamed')}
 - Archetype: {current_deck.get('archetype', 'Unknown')}
-- Main deck: {len(current_deck.get('main_deck', []))} cards
-- Sideboard: {len(current_deck.get('sideboard', []))} cards
+- Main deck ({sum(e.get('quantity', 1) for e in main_deck_list)} cards): {main_cards_str}
+- Sideboard ({sum(e.get('quantity', 1) for e in sideboard_list)} cards): {sideboard_cards_str}
 """
 
             system_prompt = f"""You are Spellbook, an expert Magic: The Gathering deck building assistant for Standard format.
