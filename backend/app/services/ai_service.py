@@ -8,9 +8,13 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.services.card_service import CardService
-from app.models.meta import Decklist, Event
+from app.models.meta import Decklist, Event, CardCooccurrence
 
 logger = logging.getLogger(__name__)
+
+
+# Maximum number of full decklist examples to include in prompt
+MAX_DECKLIST_EXAMPLES = 3
 
 
 class AIService:
@@ -263,6 +267,24 @@ IMPORTANT: If the user mentions a card name (like "Tezzeret", "Lightning Bolt", 
             # Get cards commonly played in similar tournament decks
             meta_cards = await self._get_meta_cards(archetype) if not template_cards else template_cards
 
+            # Get co-occurrence data for synergy recommendations
+            cooccurrence_cards = []
+            if specific_cards:
+                cooccurrence_cards = await self._get_cooccurrence_cards(specific_cards, colors)
+                print(f"[AI-SERVICE] Found {len(cooccurrence_cards)} co-occurring cards for synergy")
+
+            # Get semantic search results for strategy-relevant cards
+            semantic_cards = await self._semantic_card_search(strategy, colors)
+            print(f"[AI-SERVICE] Found {len(semantic_cards)} semantically relevant cards")
+
+            # Get sideboard patterns from tournament data
+            sideboard_patterns = await self._get_sideboard_patterns(archetype, colors)
+            print(f"[AI-SERVICE] Found {len(sideboard_patterns.get('sideboard_staples', []))} sideboard staples")
+
+            # Get deck composition from actual tournament data
+            composition = await self._get_deck_composition_from_meta(archetype, colors)
+            print(f"[AI-SERVICE] Deck composition from {composition['sample_size']} decks: {composition['avg_creatures']} creatures, {composition['avg_spells']} spells, {composition['avg_lands']} lands")
+
             # Get mana base recommendations from tournament decks
             mana_base_data = await self._get_mana_base_from_meta(archetype, colors)
             recommended_lands = mana_base_data.get("recommended_lands", [])
@@ -284,6 +306,22 @@ IMPORTANT: If the user mentions a card name (like "Tezzeret", "Lightning Bolt", 
 REQUIRED CARDS - The user specifically requested these cards be included:
 {chr(10).join(f"- {card}" for card in specific_cards)}
 You MUST include these cards in the deck (use 4 copies unless the card is legendary or there's a good reason for fewer).
+"""
+
+            # Format full decklist examples (if we have tournament decks)
+            # If we don't have template_decks from specific cards, get decklists for the archetype
+            decklist_examples_text = ""
+            example_decklists = template_decks
+            if not example_decklists and archetype:
+                example_decklists = await self._get_archetype_decklists(archetype, colors)
+                print(f"[AI-SERVICE] Found {len(example_decklists)} decklists for archetype {archetype}")
+
+            if example_decklists:
+                decklist_examples_text = f"""
+WINNING TOURNAMENT DECKLISTS - Study and emulate these actual winning decklists:
+{self._format_decklists_as_examples(example_decklists)}
+
+Use these decklists as your primary reference. Copy their card choices and quantities.
 """
 
             # Format meta cards section
@@ -314,6 +352,46 @@ COMPETITIVELY PROVEN CARDS - These cards are commonly played in tournament {arch
 Prioritize these cards when building the deck - they have proven competitive performance.
 """
 
+            # Format co-occurrence synergy section
+            cooccurrence_text = ""
+            if cooccurrence_cards:
+                cooccurrence_text = f"""
+SYNERGY CARDS (cards that frequently appear with your requested cards in winning decks):
+{chr(10).join(f"- {c['name']} (appeared together {c['cooccurrence_count']} times)" for c in cooccurrence_cards[:20])}
+
+These cards have proven synergy - prioritize them.
+"""
+
+            # Format semantic search results
+            semantic_text = ""
+            if semantic_cards:
+                semantic_text = f"""
+STRATEGY-RELEVANT CARDS (semantically matched to your request):
+{chr(10).join(f"- {c['name']}: {c['type_line']}" for c in semantic_cards[:15])}
+"""
+
+            # Format sideboard patterns
+            sideboard_guide_text = ""
+            if sideboard_patterns.get("sideboard_staples"):
+                sideboard_guide_text = f"""
+SIDEBOARD GUIDE - These cards appear most frequently in tournament sideboards for this archetype:
+{chr(10).join(f"- {c['name']}: {c['avg_quantity']} copies (in {c['frequency']}/{c['total_decks']} decks)" for c in sideboard_patterns['sideboard_staples'][:15])}
+
+Use these as your sideboard template - they are what competitive players actually use.
+"""
+
+            # Format deck composition guidance
+            composition_text = ""
+            if composition.get("sample_size", 0) > 0:
+                composition_text = f"""
+DECK COMPOSITION (based on {composition['sample_size']} tournament {archetype} decks):
+- Creatures: ~{composition['avg_creatures']} cards
+- Spells (instants/sorceries/enchantments/artifacts/planeswalkers): ~{composition['avg_spells']} cards
+- Lands: ~{composition['avg_lands']} cards
+
+Follow this composition - it's what winning decks actually use.
+"""
+
             # Log what we're sending to the AI
             logger.info(f"Sending {len(available_cards)} available cards to AI for {archetype} deck")
             if available_cards:
@@ -334,7 +412,12 @@ YOU MUST BUILD A COMPLETE 60-CARD DECK + 15-CARD SIDEBOARD.
 
 Colors: {', '.join(colors)}
 {specific_cards_text}
+{decklist_examples_text}
 {meta_cards_text}
+{cooccurrence_text}
+{semantic_text}
+{composition_text}
+{sideboard_guide_text}
 
 TOURNAMENT-PLAYED CARDS IN YOUR COLORS (USE THESE):
 {chr(10).join(f"- {name}" for name in on_color_tournament[:150])}
@@ -345,10 +428,11 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
 DECK BUILDING RULES:
 1. Main deck = EXACTLY 60 cards (count them!)
 2. Sideboard = EXACTLY 15 cards
-3. Use 22-26 lands typically
+3. Use {composition.get('avg_lands', 24)} lands (based on tournament data)
 4. Max 4 copies of non-basic cards
-5. ONLY use cards from the tournament list above or basic lands
+5. ONLY use cards from the tournament lists above or basic lands
 6. Every card must match colors {colors} or be colorless/land
+7. COPY the winning decklist examples above - they show exactly what works
 
 USER REQUEST: {archetype} deck
 
@@ -889,6 +973,394 @@ Return modifications as JSON:
         # Sort by frequency
         common_cards.sort(key=lambda x: x["frequency"], reverse=True)
         return common_cards
+
+    async def _get_archetype_decklists(
+        self,
+        archetype: str,
+        colors: List[str],
+        limit: int = MAX_DECKLIST_EXAMPLES
+    ) -> List[Decklist]:
+        """Get tournament decklists for a given archetype."""
+        from app.models.card import Card
+        from sqlalchemy import func
+
+        query = select(Decklist).join(Event).where(
+            Event.format == "standard"
+        )
+
+        # Match archetype name (fuzzy)
+        if archetype:
+            query = query.where(Decklist.archetype.ilike(f"%{archetype}%"))
+
+        # Order by placement (best finishes first)
+        query = query.order_by(Decklist.placement.asc().nullslast()).limit(limit * 3)
+
+        result = await self.db.execute(query)
+        decklists = result.scalars().all()
+
+        if not decklists:
+            # Fallback: get any recent top-placing decklists
+            query = select(Decklist).join(Event).where(
+                Event.format == "standard"
+            ).order_by(Decklist.placement.asc().nullslast()).limit(limit * 3)
+            result = await self.db.execute(query)
+            decklists = result.scalars().all()
+
+        # Filter to decklists that roughly match the requested colors
+        if colors and decklists:
+            colors_upper = set(c.upper() for c in colors)
+            matching_decklists = []
+            for decklist in decklists:
+                # Infer deck colors from archetype name
+                deck_colors = self._infer_colors_from_archetype(decklist.archetype or "")
+                if not deck_colors or deck_colors == colors_upper or deck_colors.issubset(colors_upper):
+                    matching_decklists.append(decklist)
+                    if len(matching_decklists) >= limit:
+                        break
+            return matching_decklists
+
+        return decklists[:limit]
+
+    def _infer_colors_from_archetype(self, archetype: str) -> set:
+        """Infer color identity from archetype name."""
+        archetype_lower = archetype.lower()
+        colors = set()
+
+        color_keywords = {
+            "white": "W", "mono-w": "W", "mono white": "W",
+            "blue": "U", "mono-u": "U", "mono blue": "U",
+            "black": "B", "mono-b": "B", "mono black": "B",
+            "red": "R", "mono-r": "R", "mono red": "R",
+            "green": "G", "mono-g": "G", "mono green": "G",
+            "azorius": "WU", "dimir": "UB", "rakdos": "BR",
+            "gruul": "RG", "selesnya": "GW", "orzhov": "WB",
+            "izzet": "UR", "golgari": "BG", "boros": "RW",
+            "simic": "GU", "esper": "WUB", "grixis": "UBR",
+            "jund": "BRG", "naya": "RGW", "bant": "GWU",
+            "abzan": "WBG", "jeskai": "URW", "sultai": "BGU",
+            "mardu": "RWB", "temur": "GUR",
+        }
+
+        for keyword, color_str in color_keywords.items():
+            if keyword in archetype_lower:
+                colors.update(color_str)
+
+        return colors
+
+    def _format_decklists_as_examples(self, decklists: List[Decklist], max_examples: int = MAX_DECKLIST_EXAMPLES) -> str:
+        """Format tournament decklists as full examples for the AI prompt."""
+        if not decklists:
+            return ""
+
+        # Sort by placement (best finishes first) and limit
+        sorted_decklists = sorted(
+            decklists,
+            key=lambda d: d.placement if d.placement else 999
+        )[:max_examples]
+
+        examples = []
+        for decklist in sorted_decklists:
+            # Format main deck
+            main_deck_lines = []
+            for entry in (decklist.main_deck or []):
+                card_name = entry.get("card_name", "")
+                quantity = entry.get("quantity", 0)
+                if card_name and quantity:
+                    main_deck_lines.append(f"{quantity} {card_name}")
+
+            # Format sideboard
+            sideboard_lines = []
+            for entry in (decklist.sideboard or []):
+                card_name = entry.get("card_name", "")
+                quantity = entry.get("quantity", 0)
+                if card_name and quantity:
+                    sideboard_lines.append(f"{quantity} {card_name}")
+
+            # Build example string
+            finish_str = f" ({decklist.finish_position})" if decklist.finish_position else ""
+            archetype_str = decklist.archetype or "Unknown"
+            player_str = decklist.player_name or "Unknown"
+
+            example = f"""
+--- {archetype_str}{finish_str} by {player_str} ---
+Main Deck ({sum(e.get('quantity', 0) for e in decklist.main_deck or [])} cards):
+{chr(10).join(main_deck_lines)}
+
+Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
+{chr(10).join(sideboard_lines)}
+"""
+            examples.append(example)
+
+        return "\n".join(examples)
+
+    async def _get_cooccurrence_cards(
+        self,
+        card_names: List[str],
+        colors: List[str],
+        limit: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get cards that frequently co-occur with the given cards in tournament decks."""
+        from app.models.card import Card
+        from sqlalchemy import func, or_, union_all, literal_column
+
+        if not card_names:
+            return []
+
+        card_names_lower = [n.lower() for n in card_names]
+
+        # Co-occurrence stores pairs in sorted order, so we need to check both directions
+        # Query 1: where card_a matches, return card_b
+        query_a = select(
+            CardCooccurrence.card_b.label("partner"),
+            CardCooccurrence.cooccurrence_count.label("count")
+        ).where(
+            CardCooccurrence.format == "standard",
+            func.lower(CardCooccurrence.card_a).in_(card_names_lower)
+        )
+
+        # Query 2: where card_b matches, return card_a
+        query_b = select(
+            CardCooccurrence.card_a.label("partner"),
+            CardCooccurrence.cooccurrence_count.label("count")
+        ).where(
+            CardCooccurrence.format == "standard",
+            func.lower(CardCooccurrence.card_b).in_(card_names_lower)
+        )
+
+        # Union and aggregate
+        combined = union_all(query_a, query_b).subquery()
+        final_query = select(
+            combined.c.partner,
+            func.sum(combined.c.count).label("total_count")
+        ).group_by(
+            combined.c.partner
+        ).order_by(
+            func.sum(combined.c.count).desc()
+        ).limit(limit * 2)
+
+        result = await self.db.execute(final_query)
+        cooccurrence_results = result.all()
+
+        if not cooccurrence_results:
+            logger.info(f"No co-occurrence data found for {card_names}")
+            return []
+
+        # Get card info to filter by color
+        card_names_to_check = [row[0] for row in cooccurrence_results]
+        colors_upper = [c.upper() for c in colors]
+
+        card_query = select(Card).where(
+            func.lower(Card.name).in_([n.lower() for n in card_names_to_check]),
+            Card.is_standard_legal == True
+        )
+        card_result = await self.db.execute(card_query)
+        cards = card_result.scalars().all()
+
+        # Build map of card name to colors
+        card_color_map = {}
+        for card in cards:
+            card_colors = card.colors or []
+            is_colorless = len(card_colors) == 0
+            is_land = "land" in (card.type_line or "").lower()
+            matches_colors = all(c in colors_upper for c in card_colors)
+            if is_colorless or is_land or matches_colors:
+                card_color_map[card.name.lower()] = card
+
+        # Filter results by color and build output
+        synergy_cards = []
+        for card_b, count in cooccurrence_results:
+            card_b_lower = card_b.lower()
+            if card_b_lower in card_color_map and card_b_lower not in [n.lower() for n in card_names]:
+                synergy_cards.append({
+                    "name": card_color_map[card_b_lower].name,
+                    "cooccurrence_count": count,
+                    "recommended_quantity": 4,  # Will be refined later
+                })
+                if len(synergy_cards) >= limit:
+                    break
+
+        logger.info(f"Found {len(synergy_cards)} co-occurring cards for {card_names}")
+        return synergy_cards
+
+    async def _get_sideboard_patterns(
+        self,
+        archetype: str,
+        colors: List[str]
+    ) -> Dict[str, Any]:
+        """Analyze sideboard patterns from tournament decks to identify hate cards."""
+        from app.models.card import Card
+        from sqlalchemy import func
+
+        colors_upper = [c.upper() for c in colors]
+
+        # Get decklists with sideboards
+        query = select(Decklist).join(Event).where(
+            Event.format == "standard"
+        )
+        if archetype:
+            query = query.where(Decklist.archetype.ilike(f"%{archetype}%"))
+        query = query.limit(100)
+
+        result = await self.db.execute(query)
+        decklists = result.scalars().all()
+
+        if not decklists:
+            return {"sideboard_staples": [], "matchup_cards": {}}
+
+        # Count sideboard card frequencies
+        sideboard_counts = defaultdict(lambda: {"count": 0, "total_quantity": 0})
+        all_sideboard_names = set()
+
+        for decklist in decklists:
+            for entry in (decklist.sideboard or []):
+                card_name = entry.get("card_name", "")
+                quantity = entry.get("quantity", 0)
+                if card_name:
+                    all_sideboard_names.add(card_name)
+                    sideboard_counts[card_name]["count"] += 1
+                    sideboard_counts[card_name]["total_quantity"] += quantity
+
+        # Filter to cards matching the deck's colors
+        valid_sideboard_cards = set()
+        if all_sideboard_names:
+            card_query = select(Card).where(
+                func.lower(Card.name).in_([n.lower() for n in all_sideboard_names]),
+                Card.is_standard_legal == True
+            )
+            card_result = await self.db.execute(card_query)
+            cards = card_result.scalars().all()
+
+            for card in cards:
+                card_colors = card.colors or []
+                is_colorless = len(card_colors) == 0
+                matches_colors = all(c in colors_upper for c in card_colors)
+                if is_colorless or matches_colors:
+                    valid_sideboard_cards.add(card.name.lower())
+
+        # Build sideboard staples list
+        sideboard_staples = []
+        for card_name, data in sideboard_counts.items():
+            if card_name.lower() in valid_sideboard_cards and data["count"] >= 3:
+                avg_qty = round(data["total_quantity"] / data["count"])
+                sideboard_staples.append({
+                    "name": card_name,
+                    "frequency": data["count"],
+                    "avg_quantity": avg_qty,
+                    "total_decks": len(decklists),
+                })
+
+        # Sort by frequency
+        sideboard_staples.sort(key=lambda x: x["frequency"], reverse=True)
+
+        return {
+            "sideboard_staples": sideboard_staples[:20],
+            "sample_size": len(decklists),
+        }
+
+    async def _get_deck_composition_from_meta(
+        self,
+        archetype: str,
+        colors: List[str]
+    ) -> Dict[str, Any]:
+        """Analyze actual tournament decks to derive typical composition ratios."""
+        from app.models.card import Card
+        from sqlalchemy import func
+
+        query = select(Decklist).join(Event).where(Event.format == "standard")
+        if archetype:
+            query = query.where(Decklist.archetype.ilike(f"%{archetype}%"))
+        query = query.limit(50)
+
+        result = await self.db.execute(query)
+        decklists = result.scalars().all()
+
+        if not decklists:
+            return {
+                "avg_creatures": 20,
+                "avg_spells": 16,
+                "avg_lands": 24,
+                "sample_size": 0
+            }
+
+        # Collect all card names to query types
+        all_card_names = set()
+        for decklist in decklists:
+            for entry in (decklist.main_deck or []):
+                all_card_names.add(entry.get("card_name", ""))
+
+        # Query card types
+        card_query = select(Card.name, Card.type_line).where(
+            func.lower(Card.name).in_([n.lower() for n in all_card_names])
+        )
+        card_result = await self.db.execute(card_query)
+        card_types = {row[0].lower(): row[1] for row in card_result.all()}
+
+        # Analyze composition
+        compositions = []
+        for decklist in decklists:
+            creatures = 0
+            lands = 0
+            other_spells = 0
+
+            for entry in (decklist.main_deck or []):
+                card_name = entry.get("card_name", "")
+                quantity = entry.get("quantity", 0)
+                type_line = card_types.get(card_name.lower(), "").lower()
+
+                if "land" in type_line:
+                    lands += quantity
+                elif "creature" in type_line:
+                    creatures += quantity
+                else:
+                    other_spells += quantity
+
+            compositions.append({
+                "creatures": creatures,
+                "lands": lands,
+                "spells": other_spells,
+            })
+
+        # Calculate averages
+        avg_creatures = round(sum(c["creatures"] for c in compositions) / len(compositions))
+        avg_lands = round(sum(c["lands"] for c in compositions) / len(compositions))
+        avg_spells = round(sum(c["spells"] for c in compositions) / len(compositions))
+
+        logger.info(f"Deck composition for {archetype}: {avg_creatures} creatures, {avg_spells} spells, {avg_lands} lands (from {len(decklists)} decks)")
+
+        return {
+            "avg_creatures": avg_creatures,
+            "avg_spells": avg_spells,
+            "avg_lands": avg_lands,
+            "sample_size": len(decklists),
+        }
+
+    async def _semantic_card_search(
+        self,
+        strategy: str,
+        colors: List[str],
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Use semantic search to find relevant cards based on strategy description."""
+        try:
+            cards = await self.card_service.semantic_search(
+                query=strategy,
+                limit=limit,
+                standard_only=True,
+                colors=colors if colors else None,
+            )
+
+            return [
+                {
+                    "name": c.name,
+                    "type_line": c.type_line,
+                    "oracle_text": c.oracle_text,
+                    "relevance": "semantic_match",
+                }
+                for c in cards
+            ]
+        except Exception as e:
+            logger.warning(f"Semantic search failed: {e}")
+            return []
 
     async def _detect_card_themes(self, card_names: List[str]) -> List[str]:
         """Detect themes from requested cards' oracle text and types."""

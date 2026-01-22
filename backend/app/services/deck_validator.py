@@ -128,7 +128,7 @@ class DeckValidator:
                         )
                     )
 
-        # TODO: Check banned list when implemented
+        # Note: Banned cards are already handled - Scryfall marks them as not standard-legal
 
         return DeckValidationReport(
             is_valid=len(errors) == 0,
