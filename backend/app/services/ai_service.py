@@ -210,7 +210,7 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
 
             client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-            # Phase 1: Handle specific cards (may change colors)
+            # Phase 1: Handle specific cards and strategy-based archetype matching (may change colors)
             template_decks = []
             template_cards = []
             detected_themes = []
@@ -231,6 +231,19 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
                         template_cards = await self._get_tournament_synergy_cards(detected_themes)
                         print(f"[AI-SERVICE] Found {len(template_cards)} tournament-played synergy cards")
 
+            # Phase 1b: If no specific cards, try to find archetype decklists based on strategy
+            # This allows strategy keywords like "graveyard" to find "Reanimator" decks and use their colors
+            if not template_decks and strategy:
+                strategy_decks = await self._get_archetype_decklists(archetype, [], strategy, limit=5)
+                if strategy_decks:
+                    print(f"[AI-SERVICE] Found {len(strategy_decks)} tournament decks matching strategy '{strategy}'")
+                    strategy_colors = self._extract_colors_from_decks(strategy_decks)
+                    if strategy_colors:
+                        print(f"[AI-SERVICE] Overriding colors from {colors} to {strategy_colors} based on strategy-matched decks")
+                        colors = strategy_colors
+                    template_decks = strategy_decks
+                    template_cards = self._extract_cards_from_decks(strategy_decks)
+
             # Phase 2: Run independent queries in parallel
             parallel_tasks = {
                 'available_cards': self._get_available_cards(colors),
@@ -245,9 +258,9 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
             if specific_cards:
                 parallel_tasks['cooccurrence_cards'] = self._get_cooccurrence_cards(specific_cards, colors)
             if not template_cards:
-                parallel_tasks['meta_cards'] = self._get_meta_cards(archetype)
+                parallel_tasks['meta_cards'] = self._get_meta_cards(archetype, strategy)
             if not template_decks and archetype:
-                parallel_tasks['example_decklists'] = self._get_archetype_decklists(archetype, colors)
+                parallel_tasks['example_decklists'] = self._get_archetype_decklists(archetype, colors, strategy)
 
             # Execute all queries in parallel
             task_names = list(parallel_tasks.keys())
@@ -1282,15 +1295,45 @@ Return modifications as JSON:
             "recommended_lands": recommended_lands[:15],  # Top 15 lands
         }
 
-    async def _get_meta_cards(self, archetype: str) -> List[Dict[str, Any]]:
+    async def _get_meta_cards(self, archetype: str, strategy: str = "") -> List[Dict[str, Any]]:
         """Get commonly played non-land cards from tournament decks for the given archetype."""
         from app.models.card import Card
+        from sqlalchemy import or_
+
+        # Map strategy keywords to archetype search terms
+        strategy_archetype_map = {
+            "graveyard": ["reanimator", "graveyard", "dredge"],
+            "reanimate": ["reanimator"],
+            "reanimation": ["reanimator"],
+            "mill": ["mill", "reanimator"],
+            "self-mill": ["mill", "reanimator"],
+            "discard": ["reanimator", "madness"],
+            "sacrifice": ["sacrifice", "aristocrats"],
+            "tokens": ["tokens", "go-wide"],
+            "ramp": ["ramp", "big mana"],
+            "control": ["control"],
+            "aggro": ["aggro", "red deck"],
+            "burn": ["burn", "red deck", "aggro"],
+        }
+
+        # Build archetype search terms from both archetype and strategy
+        search_terms = []
+        if archetype:
+            search_terms.append(archetype)
+
+        # Add strategy-based search terms
+        strategy_lower = strategy.lower()
+        for keyword, terms in strategy_archetype_map.items():
+            if keyword in strategy_lower:
+                search_terms.extend(terms)
 
         # Find similar decklists from tournaments
         query = select(Decklist).join(Event).where(Event.format == "standard")
 
-        if archetype:
-            query = query.where(Decklist.archetype.ilike(f"%{archetype}%"))
+        if search_terms:
+            # Search for any matching archetype term
+            conditions = [Decklist.archetype.ilike(f"%{term}%") for term in search_terms]
+            query = query.where(or_(*conditions))
 
         query = query.limit(20)
         result = await self.db.execute(query)
@@ -1452,34 +1495,87 @@ Return modifications as JSON:
         return matching_decklists
 
     def _extract_colors_from_decks(self, decklists: List[Decklist]) -> List[str]:
-        """Extract the most common color combination from decklists."""
+        """Extract colors by analyzing the actual land base in decklists."""
         from collections import Counter
 
-        # Count color combinations
-        color_combos = Counter()
+        # Count colors based on dual lands in the decks
+        color_counts = Counter()
+
+        # Map of dual land names to their colors
+        dual_land_colors = {
+            # Shock lands
+            "hallowed fountain": ["W", "U"], "watery grave": ["U", "B"],
+            "blood crypt": ["B", "R"], "stomping ground": ["R", "G"],
+            "temple garden": ["G", "W"], "godless shrine": ["W", "B"],
+            "steam vents": ["U", "R"], "overgrown tomb": ["B", "G"],
+            "sacred foundry": ["R", "W"], "breeding pool": ["G", "U"],
+            # Slow lands
+            "deserted beach": ["W", "U"], "shipwreck marsh": ["U", "B"],
+            "haunted ridge": ["B", "R"], "rockfall vale": ["R", "G"],
+            "overgrown farmland": ["G", "W"], "shattered sanctum": ["W", "B"],
+            "stormcarved coast": ["U", "R"], "deathcap glade": ["B", "G"],
+            "sundown pass": ["R", "W"], "dreamroot cascade": ["G", "U"],
+            # Pain lands
+            "adarkar wastes": ["W", "U"], "underground river": ["U", "B"],
+            "sulfurous springs": ["B", "R"], "karplusan forest": ["R", "G"],
+            "brushland": ["G", "W"], "caves of koilos": ["W", "B"],
+            "shivan reef": ["U", "R"], "llanowar wastes": ["B", "G"],
+            "battlefield forge": ["R", "W"], "yavimaya coast": ["G", "U"],
+            # Surveil lands
+            "meticulous archive": ["W", "U"], "undercity sewers": ["U", "B"],
+            "raucous theater": ["B", "R"], "commercial district": ["R", "G"],
+            "lush portico": ["G", "W"], "shadowy backstreet": ["W", "B"],
+            "thundering falls": ["U", "R"], "underground mortuary": ["B", "G"],
+            "elegant parlor": ["R", "W"], "hedge maze": ["G", "U"],
+            # Fast lands
+            "seachrome coast": ["W", "U"], "darkslick shores": ["U", "B"],
+            "blackcleave cliffs": ["B", "R"], "copperline gorge": ["R", "G"],
+            "razorverge thicket": ["G", "W"], "concealed courtyard": ["W", "B"],
+            "spirebluff canal": ["U", "R"], "blooming marsh": ["B", "G"],
+            "inspiring vantage": ["R", "W"], "botanical sanctum": ["G", "U"],
+            # Pathways and other common duals
+            "hengegate pathway": ["W", "U"], "clearwater pathway": ["U", "B"],
+            "blightstep pathway": ["B", "R"], "cragcrown pathway": ["R", "G"],
+            "branchloft pathway": ["G", "W"], "brightclimb pathway": ["W", "B"],
+            "riverglide pathway": ["U", "R"], "darkbore pathway": ["B", "G"],
+            "needleverge pathway": ["R", "W"], "barkchannel pathway": ["G", "U"],
+            # Verge lands
+            "sunlit verge": ["W", "U"], "gloomlake verge": ["U", "B"],
+            "blazemire verge": ["B", "R"], "thornspire verge": ["R", "G"],
+            "willowrush verge": ["G", "W"], "shadowed verge": ["W", "B"],
+            "stormwild verge": ["U", "R"], "wastewood verge": ["B", "G"],
+            "emberfall verge": ["R", "W"], "flooded verge": ["G", "U"],
+        }
+
         for decklist in decklists:
-            # Try to infer colors from archetype name or cards
-            archetype = (decklist.archetype or "").lower()
+            deck_colors = set()
+            for entry in (decklist.main_deck or []):
+                card_name = entry.get("card_name", "").lower()
+                if card_name in dual_land_colors:
+                    for color in dual_land_colors[card_name]:
+                        deck_colors.add(color)
+                # Also check basic lands
+                elif card_name == "plains":
+                    deck_colors.add("W")
+                elif card_name == "island":
+                    deck_colors.add("U")
+                elif card_name == "swamp":
+                    deck_colors.add("B")
+                elif card_name == "mountain":
+                    deck_colors.add("R")
+                elif card_name == "forest":
+                    deck_colors.add("G")
 
-            colors = []
-            if "red" in archetype or "mono-r" in archetype or "gruul" in archetype or "izzet" in archetype or "rakdos" in archetype or "boros" in archetype:
-                colors.append("R")
-            if "blue" in archetype or "mono-u" in archetype or "izzet" in archetype or "dimir" in archetype or "azorius" in archetype or "simic" in archetype:
-                colors.append("U")
-            if "black" in archetype or "mono-b" in archetype or "dimir" in archetype or "rakdos" in archetype or "golgari" in archetype or "orzhov" in archetype:
-                colors.append("B")
-            if "white" in archetype or "mono-w" in archetype or "azorius" in archetype or "boros" in archetype or "selesnya" in archetype or "orzhov" in archetype:
-                colors.append("W")
-            if "green" in archetype or "mono-g" in archetype or "gruul" in archetype or "simic" in archetype or "golgari" in archetype or "selesnya" in archetype:
-                colors.append("G")
+            if deck_colors:
+                color_combos = tuple(sorted(deck_colors))
+                color_counts[color_combos] += 1
 
-            if colors:
-                color_combos[tuple(sorted(set(colors)))] += 1
-
-        if color_combos:
-            most_common = color_combos.most_common(1)[0][0]
+        if color_counts:
+            most_common = color_counts.most_common(1)[0][0]
+            print(f"[AI-SERVICE] Extracted colors {list(most_common)} from {len(decklists)} decklists")
             return list(most_common)
 
+        print(f"[AI-SERVICE] Could not extract colors from decklists")
         return []
 
     def _extract_cards_from_decks(self, decklists: List[Decklist]) -> List[Dict[str, Any]]:
@@ -1512,19 +1608,48 @@ Return modifications as JSON:
         self,
         archetype: str,
         colors: List[str],
+        strategy: str = "",
         limit: int = MAX_DECKLIST_EXAMPLES
     ) -> List[Decklist]:
         """Get tournament decklists for a given archetype."""
         from app.models.card import Card
-        from sqlalchemy import func
+        from sqlalchemy import func, or_
+
+        # Map strategy keywords to archetype search terms
+        strategy_archetype_map = {
+            "graveyard": ["reanimator", "graveyard", "dredge"],
+            "reanimate": ["reanimator"],
+            "reanimation": ["reanimator"],
+            "mill": ["mill", "reanimator"],
+            "self-mill": ["mill", "reanimator"],
+            "discard": ["reanimator", "madness"],
+            "sacrifice": ["sacrifice", "aristocrats"],
+            "tokens": ["tokens", "go-wide"],
+            "ramp": ["ramp", "big mana"],
+            "control": ["control"],
+            "aggro": ["aggro", "red deck"],
+            "burn": ["burn", "red deck", "aggro"],
+        }
+
+        # Build archetype search terms from both archetype and strategy
+        search_terms = []
+        if archetype:
+            search_terms.append(archetype)
+
+        # Add strategy-based search terms
+        strategy_lower = strategy.lower()
+        for keyword, terms in strategy_archetype_map.items():
+            if keyword in strategy_lower:
+                search_terms.extend(terms)
 
         query = select(Decklist).join(Event).where(
             Event.format == "standard"
         )
 
-        # Match archetype name (fuzzy)
-        if archetype:
-            query = query.where(Decklist.archetype.ilike(f"%{archetype}%"))
+        # Match archetype name (fuzzy) with any search term
+        if search_terms:
+            conditions = [Decklist.archetype.ilike(f"%{term}%") for term in search_terms]
+            query = query.where(or_(*conditions))
 
         # Order by placement (best finishes first)
         query = query.order_by(Decklist.placement.asc().nullslast()).limit(limit * 3)
@@ -2233,19 +2358,44 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
 
         # Fix main deck
         if main_count < 60:
-            # Add basic lands to reach 60
             deficit = 60 - main_count
-            # Check if we already have the basic land in the deck
-            existing_basic = None
-            for entry in main_deck:
-                if entry.get("card_name") == primary_basic:
-                    existing_basic = entry
+            print(f"[AI-SERVICE] Deck has {main_count} cards, need {deficit} more")
+
+            # First, try to add more non-land cards from available cards
+            existing_cards = {entry.get("card_name", "").lower() for entry in main_deck}
+
+            # Get non-land available cards that aren't already in the deck
+            available_nonlands = [
+                c for c in available_cards
+                if c.get("name", "").lower() not in existing_cards
+                and not (c.get("type_line") or "").lower().startswith("land")
+                and "land" not in (c.get("type_line") or "").lower().split(" — ")[0].lower()
+            ]
+
+            # Add cards from available pool (prefer cards that appear in tournament decks)
+            cards_added = 0
+            for card in available_nonlands:
+                if deficit <= 0:
                     break
-            if existing_basic:
-                existing_basic["quantity"] += deficit
-            else:
-                main_deck.append({"card_name": primary_basic, "quantity": deficit})
-            print(f"[AI-SERVICE] Added {deficit} {primary_basic} to reach 60 cards")
+                # Add 2-4 copies depending on how many we need
+                qty_to_add = min(4, deficit)
+                main_deck.append({"card_name": card["name"], "quantity": qty_to_add})
+                deficit -= qty_to_add
+                cards_added += qty_to_add
+                print(f"[AI-SERVICE] Added {qty_to_add}x {card['name']} to fill deck")
+
+            # If still short, add basic lands as last resort
+            if deficit > 0:
+                existing_basic = None
+                for entry in main_deck:
+                    if entry.get("card_name") == primary_basic:
+                        existing_basic = entry
+                        break
+                if existing_basic:
+                    existing_basic["quantity"] += deficit
+                else:
+                    main_deck.append({"card_name": primary_basic, "quantity": deficit})
+                print(f"[AI-SERVICE] Added {deficit} {primary_basic} as filler (last resort)")
 
         elif main_count > 60:
             # Remove cards from the end (typically less important)
