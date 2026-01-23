@@ -122,11 +122,21 @@ async def get_card_by_name(
     name: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a specific card by exact name."""
+    """Get a specific card by exact name. Handles DFC names automatically."""
+    # Try exact match first
     result = await db.execute(
         select(Card).where(func.lower(Card.name) == name.lower()).limit(1)
     )
     card = result.scalar_one_or_none()
+
+    # If not found, try matching as front face of a DFC (name starts with search term + " // ")
+    if card is None:
+        result = await db.execute(
+            select(Card).where(
+                func.lower(Card.name).like(f"{name.lower()} // %")
+            ).limit(1)
+        )
+        card = result.scalar_one_or_none()
 
     if card is None:
         raise HTTPException(

@@ -8,7 +8,7 @@ import { useAuth } from '@/hooks/useAuth';
 import clsx from 'clsx';
 
 export function HomePage() {
-  const { currentDeck, updateCardQuantity } = useDeckStore();
+  const { currentDeck, updateCardQuantity, addCard } = useDeckStore();
   const { isAuthenticated } = useAuth();
   const [mobileTab, setMobileTab] = useState<'chat' | 'deck'>('chat');
 
@@ -18,6 +18,10 @@ export function HomePage() {
     target: 'main' | 'sideboard'
   ) => {
     updateCardQuantity(cardName, quantity, target);
+  };
+
+  const handleAddCard = (cardName: string, target: 'main' | 'sideboard') => {
+    addCard({ card_name: cardName, quantity: 1 }, target);
   };
 
   const deckCardCount = (currentDeck?.main_deck || []).reduce((sum, e) => sum + e.quantity, 0);
@@ -81,6 +85,7 @@ export function HomePage() {
               title={currentDeck.name || 'Current Deck'}
               cardExplanations={currentDeck.card_explanations}
               onQuantityChange={handleQuantityChange}
+              onAddCard={handleAddCard}
               editable
               className="flex-1 overflow-y-auto"
             />

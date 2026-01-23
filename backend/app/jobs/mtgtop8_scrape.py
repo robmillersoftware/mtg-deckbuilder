@@ -514,6 +514,16 @@ async def scrape_mtgtop8() -> Dict[str, Any]:
             stats["errors"].append(str(e))
             raise
 
+    # Compute archetype templates from the updated decklists
+    try:
+        from app.jobs.compute_archetype_templates import compute_archetype_templates
+        template_stats = await compute_archetype_templates()
+        stats["archetype_templates_updated"] = template_stats.get("templates_saved", 0)
+        logger.info(f"Updated {stats['archetype_templates_updated']} archetype templates")
+    except Exception as e:
+        logger.warning(f"Failed to compute archetype templates: {e}")
+        stats["errors"].append(f"Archetype templates error: {e}")
+
     stats["completed_at"] = datetime.utcnow().isoformat()
     return stats
 

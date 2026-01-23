@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.models.deck import Deck
 from app.models.conversation import Conversation
-from app.models.meta import MetaSnapshot
+from app.models.meta import MetaSnapshot, ArchetypeTemplate
 from app.schemas.deck import (
     DeckResponse,
     DeckGenerateResponse,
@@ -44,7 +44,6 @@ class DeckGenerator:
         user_id: Optional[UUID] = None,
         conversation_id: Optional[UUID] = None,
         include_sideboard: bool = True,
-        include_explanations: bool = True,
     ) -> DeckGenerateResponse:
         """
         Generate a deck based on natural language prompt.
@@ -54,7 +53,6 @@ class DeckGenerator:
             user_id: Optional user ID for saving conversation
             conversation_id: Optional existing conversation to continue
             include_sideboard: Whether to generate sideboard
-            include_explanations: Whether to include card explanations
 
         Returns:
             DeckGenerateResponse with complete deck and strategy
@@ -71,6 +69,16 @@ class DeckGenerator:
         # Get meta data for context
         meta_data = await self._get_meta_context()
 
+        # Get archetype template for role distribution guidance
+        archetype_template = await self._get_archetype_template(
+            parsed_request.get("archetype", "")
+        )
+        if archetype_template:
+            logger.info(
+                f"Using {archetype_template['archetype_category']} template "
+                f"(from {archetype_template['sample_size']} tournament decks)"
+            )
+
         # Generate the deck
         deck_data = await self.ai_service.generate_deck(
             archetype=parsed_request.get("archetype", ""),
@@ -79,6 +87,7 @@ class DeckGenerator:
             meta_context=meta_data,
             include_sideboard=include_sideboard,
             specific_cards=parsed_request.get("specific_cards", []),
+            archetype_template=archetype_template,
         )
 
         # Validate all cards exist and are legal
@@ -91,27 +100,14 @@ class DeckGenerator:
         # Run deck validation
         validation = await self.validator.validate(validated_main, validated_sideboard)
 
-        # Generate card explanations if requested
-        card_explanations = {}
-        if include_explanations:
-            card_explanations = await self.ai_service.generate_card_explanations(
-                deck_data={
-                    "name": deck_data.get("name", "Generated Deck"),
-                    "main_deck": validated_main,
-                    "sideboard": validated_sideboard,
-                },
-                archetype=parsed_request.get("archetype", ""),
-                strategy=deck_data.get("strategy_summary", parsed_request.get("strategy", "")),
-            )
-            logger.info(f"Generated {len(card_explanations)} card explanations")
-
         # Generate unique deck name if user is logged in
         deck_name = deck_data.get("name", "Generated Deck")
         if user_id:
             deck_name = await self._get_unique_deck_name(user_id, deck_name)
 
-        # Create deck object
+        # Create deck object (not saved to DB - user must explicitly save)
         deck = Deck(
+            id=uuid4(),
             owner_id=user_id,
             name=deck_name,
             format="standard",
@@ -119,13 +115,9 @@ class DeckGenerator:
             main_deck=validated_main,
             sideboard=validated_sideboard,
             strategy_summary=deck_data.get("strategy_summary", ""),
-            card_explanations=card_explanations if card_explanations else None,
             is_validated=validation.is_valid,
             validation_errors=[e.model_dump() for e in validation.errors] if validation.errors else None,
         )
-
-        if user_id:
-            self.db.add(deck)
 
         # Update conversation with deck
         conversation.current_deck = {
@@ -141,7 +133,6 @@ class DeckGenerator:
         conversation.summary = f"Deck: {deck.name}"
 
         await self.db.commit()
-        await self.db.refresh(deck) if user_id else None
         await self.db.refresh(conversation)
 
         # Build slot recommendations
@@ -169,7 +160,7 @@ class DeckGenerator:
 
         return DeckGenerateResponse(
             deck=DeckResponse(
-                id=deck.id if user_id else uuid4(),
+                id=deck.id,
                 owner_id=user_id or uuid4(),
                 name=deck.name,
                 description=deck.description,
@@ -431,6 +422,41 @@ class DeckGenerator:
                 }
                 for s in snapshots
             ]
+        }
+
+    async def _get_archetype_template(self, archetype: str, format: str = "standard") -> Optional[Dict[str, Any]]:
+        """Get the archetype template for role distribution guidance."""
+        # Map archetype to category
+        archetype_lower = archetype.lower() if archetype else ""
+
+        # Categorization rules (same as compute_archetype_templates.py)
+        category = "other"
+        if any(kw in archetype_lower for kw in ["aggro", "weenie", "red deck wins", "rdw", "burn", "sligh"]):
+            category = "aggro"
+        elif any(kw in archetype_lower for kw in ["control"]):
+            category = "control"
+        elif any(kw in archetype_lower for kw in ["midrange", "landfall", "rhythm", "ramp", "value"]):
+            category = "midrange"
+        elif any(kw in archetype_lower for kw in ["combo", "reanimate", "reanimator", "storm"]):
+            category = "combo"
+
+        result = await self.db.execute(
+            select(ArchetypeTemplate)
+            .where(ArchetypeTemplate.archetype_category == category)
+            .where(ArchetypeTemplate.format == format)
+        )
+        template = result.scalar_one_or_none()
+
+        if not template:
+            logger.info(f"No archetype template found for category '{category}'")
+            return None
+
+        return {
+            "archetype_category": template.archetype_category,
+            "sample_size": template.sample_size,
+            "avg_lands": float(template.avg_lands),
+            "avg_nonlands": float(template.avg_nonlands),
+            "role_distribution": template.role_distribution,
         }
 
     async def _validate_and_fix_cards(

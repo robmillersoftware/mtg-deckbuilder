@@ -40,8 +40,8 @@ export function useCardSearch() {
   }, []);
 
   return {
-    cards: data?.items || [],
-    total: data?.total || 0,
+    cards: data || [],
+    total: data?.length || 0,
     isLoading,
     error,
     search,

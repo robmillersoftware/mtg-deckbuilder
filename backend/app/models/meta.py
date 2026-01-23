@@ -104,6 +104,38 @@ class MetaSnapshot(Base):
     )
 
 
+class ArchetypeTemplate(Base):
+    """
+    Aggregated role distributions for deck archetypes.
+    Computed from tournament decklists to guide deck generation.
+    """
+
+    __tablename__ = "archetype_templates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    archetype_category = Column(String(50), nullable=False)  # aggro, midrange, control, combo
+    format = Column(String(50), nullable=False, default="standard")
+
+    # Sample info
+    sample_size = Column(Integer, nullable=False)  # Number of decklists analyzed
+    computed_at = Column(DateTime, default=datetime.utcnow)
+
+    # Land counts
+    avg_lands = Column(Numeric(4, 1), nullable=False)
+    avg_nonlands = Column(Numeric(4, 1), nullable=False)
+
+    # Role distributions as JSONB: {role_name: avg_count, ...}
+    role_distribution = Column(JSONB, nullable=False, default=dict)
+
+    # Detailed archetype breakdown: {specific_archetype: count, ...}
+    archetype_breakdown = Column(JSONB, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("archetype_category", "format", name="uq_archetype_template"),
+        Index("idx_archetype_template_format", "format"),
+    )
+
+
 class CardCooccurrence(Base):
     """
     Card co-occurrence matrix for synergy recommendations.

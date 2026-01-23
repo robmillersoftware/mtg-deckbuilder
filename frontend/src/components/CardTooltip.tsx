@@ -16,7 +16,9 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
   const triggerRef = useRef<HTMLSpanElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const { data: card, isLoading } = useCardByName(isVisible ? cardName : undefined);
+  // For DFCs, use only the front face name for API lookup
+  const lookupName = cardName.includes(' // ') ? cardName.split(' // ')[0] : cardName;
+  const { data: card, isLoading } = useCardByName(isVisible ? lookupName : undefined);
 
   const handleMouseEnter = (e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect();

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { DeckEntry, Card } from '@/types';
 import { CardTooltip } from './CardTooltip';
+import { CardSearch } from './CardSearch';
 import clsx from 'clsx';
 
 interface DeckListProps {
@@ -10,6 +11,7 @@ interface DeckListProps {
   cardExplanations?: Record<string, string>;
   onCardClick?: (cardName: string) => void;
   onQuantityChange?: (cardName: string, quantity: number, target: 'main' | 'sideboard') => void;
+  onAddCard?: (cardName: string, target: 'main' | 'sideboard') => void;
   editable?: boolean;
   className?: string;
 }
@@ -21,6 +23,7 @@ export function DeckList({
   cardExplanations,
   onCardClick,
   onQuantityChange,
+  onAddCard,
   editable = false,
   className,
 }: DeckListProps) {
@@ -37,6 +40,14 @@ export function DeckList({
     [sideboard]
   );
 
+  // Track existing card names for search highlighting
+  const existingCards = useMemo(() => {
+    const names = new Set<string>();
+    mainDeck.forEach((e) => names.add(e.card_name));
+    sideboard.forEach((e) => names.add(e.card_name));
+    return names;
+  }, [mainDeck, sideboard]);
+
   return (
     <div className={clsx('bg-gray-900 rounded-lg', className)}>
       {title && (
@@ -46,6 +57,12 @@ export function DeckList({
       )}
 
       <div className="p-4 space-y-4">
+        {/* Card Search - shown when editable */}
+        {editable && onAddCard && (
+          <div className="pb-3 border-b border-gray-700">
+            <CardSearch onAddCard={onAddCard} existingCards={existingCards} />
+          </div>
+        )}
         {/* Main Deck */}
         <div>
           <h3 className="text-sm font-medium text-gray-400 mb-2">
@@ -190,7 +207,10 @@ const LAND_KEYWORDS = [
 
 // Check if a card name looks like a land
 function isLikelyLand(cardName: string): boolean {
-  const lower = cardName.toLowerCase();
+  // For DFCs (double-faced cards), only check the front face name
+  // e.g., "Ojer Axonil, Deepest Might // Temple of Power" -> only check "Ojer Axonil, Deepest Might"
+  const frontFace = cardName.includes(' // ') ? cardName.split(' // ')[0] : cardName;
+  const lower = frontFace.toLowerCase();
 
   // Check basic lands
   if (BASIC_LANDS.includes(lower)) return true;

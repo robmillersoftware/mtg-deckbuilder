@@ -7,10 +7,10 @@ from app.db.session import Base
 
 # Import all models to register them with Base
 from app.models.user import User, VerificationToken, ResetToken, Preferences
-from app.models.card import Card
+from app.models.card import Card, CardRole, CARD_ROLES
 from app.models.deck import Deck
 from app.models.conversation import Conversation
-from app.models.meta import Event, Decklist, MetaSnapshot, CardCooccurrence
+from app.models.meta import Event, Decklist, MetaSnapshot, CardCooccurrence, ArchetypeTemplate
 from app.models.job import JobRun
 
 __all__ = [
@@ -20,11 +20,14 @@ __all__ = [
     "ResetToken",
     "Preferences",
     "Card",
+    "CardRole",
+    "CARD_ROLES",
     "Deck",
     "Conversation",
     "Event",
     "Decklist",
     "MetaSnapshot",
     "CardCooccurrence",
+    "ArchetypeTemplate",
     "JobRun",
 ]

@@ -2,6 +2,7 @@ from typing import Optional, List, Dict, Any
 from collections import defaultdict
 import logging
 import json
+import time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -15,6 +16,13 @@ logger = logging.getLogger(__name__)
 
 # Maximum number of full decklist examples to include in prompt
 MAX_DECKLIST_EXAMPLES = 3
+
+# Cache for tournament cards (shared across requests)
+_tournament_cards_cache: Dict[str, Any] = {
+    "data": None,
+    "timestamp": 0,
+    "ttl": 300,  # 5 minutes
+}
 
 
 class AIService:
@@ -34,9 +42,10 @@ class AIService:
         - Colors
         - Strategy focus
         - Specific card requests
+
+        Uses Haiku for fast parsing (~0.5s vs 2-3s with Sonnet).
         """
         if not settings.ANTHROPIC_API_KEY:
-            # Fallback parsing without API
             return await self._fallback_parse(prompt)
 
         try:
@@ -45,37 +54,25 @@ class AIService:
             client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                system="""You are a Magic: The Gathering deck building assistant.
-Parse the user's deck request and extract the following information in JSON format:
-{
-    "archetype": "aggro|control|midrange|combo|tempo",
-    "colors": ["W", "U", "B", "R", "G"],
-    "strategy": "brief description of the strategy",
-    "specific_cards": ["any cards specifically mentioned by name"],
-    "budget": "competitive|budget|any",
-    "focus": "speed|value|resilience|interaction"
-}
+                model="claude-3-5-haiku-20241022",  # Fast model for parsing
+                max_tokens=512,
+                system="""Parse MTG deck request into JSON:
+{"archetype": "aggro|control|midrange|combo|tempo", "colors": ["W","U","B","R","G"], "strategy": "brief description", "specific_cards": ["card names mentioned"]}
 
-IMPORTANT: If the user mentions a card name (like "Tezzeret", "Lightning Bolt", etc.), add it to specific_cards.""",
+Color codes: W=White, U=Blue, B=Black, R=Red, G=Green
+Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, Izzet=UR, Golgari=BG, Boros=RW, Simic=GU""",
                 messages=[{"role": "user", "content": prompt}],
             )
 
-            print(f"[AI-SERVICE] Parse response: {response.content[0].text if response.content else 'EMPTY'}")
-
-            # Extract JSON from response
-            if not response.content:
-                raise ValueError("Empty AI response")
-            content = response.content[0].text
-            # Try to find JSON in response
-            if "{" in content:
-                json_start = content.index("{")
-                json_end = content.rindex("}") + 1
-                return json.loads(content[json_start:json_end])
+            if response.content:
+                content = response.content[0].text
+                if "{" in content:
+                    json_start = content.index("{")
+                    json_end = content.rindex("}") + 1
+                    return json.loads(content[json_start:json_end])
 
         except Exception as e:
-            logger.error(f"AI parse error: {e}", exc_info=True)
+            logger.warning(f"Haiku parse failed, using fallback: {e}")
 
         return await self._fallback_parse(prompt)
 
@@ -190,9 +187,17 @@ IMPORTANT: If the user mentions a card name (like "Tezzeret", "Lightning Bolt", 
         meta_context: Dict[str, Any],
         include_sideboard: bool = True,
         specific_cards: List[str] = None,
+        archetype_template: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
         Generate a complete deck using AI with constrained card selection.
+
+        archetype_template: Optional dict with role distribution targets from tournament data:
+            - archetype_category: aggro/midrange/control/combo
+            - sample_size: number of tournament decks analyzed
+            - avg_lands: average land count
+            - avg_nonlands: average nonland count
+            - role_distribution: {role: avg_count} targets
         """
         specific_cards = specific_cards or []
 
@@ -200,12 +205,12 @@ IMPORTANT: If the user mentions a card name (like "Tezzeret", "Lightning Bolt", 
             return await self._generate_fallback_deck(archetype, colors, strategy)
 
         try:
+            import asyncio
             import anthropic
 
             client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-            # If specific cards are requested, find tournament decks that use them
-            # and use those as templates for colors and card choices
+            # Phase 1: Handle specific cards (may change colors)
             template_decks = []
             template_cards = []
             detected_themes = []
@@ -214,32 +219,64 @@ IMPORTANT: If the user mentions a card name (like "Tezzeret", "Lightning Bolt", 
                 template_decks = await self._find_decks_with_cards(specific_cards)
                 print(f"[AI-SERVICE] Found {len(template_decks)} tournament decks with specific cards")
                 if template_decks:
-                    # Override colors based on what tournament decks actually use
                     template_colors = self._extract_colors_from_decks(template_decks)
                     if template_colors:
                         print(f"[AI-SERVICE] Overriding colors from {colors} to {template_colors} based on tournament decks")
                         colors = template_colors
-                    # Get the most played cards from these decks
                     template_cards = self._extract_cards_from_decks(template_decks)
-                    print(f"[AI-SERVICE] Found {len(template_decks)} tournament decks using {specific_cards}")
                 else:
-                    # No tournament data - detect themes from the requested cards
-                    print(f"[AI-SERVICE] No tournament decks found for {specific_cards}, detecting themes...")
                     detected_themes = await self._detect_card_themes(specific_cards)
                     print(f"[AI-SERVICE] Detected themes: {detected_themes}")
                     if detected_themes:
-                        # Get synergy cards that ALSO appear in tournament play
                         template_cards = await self._get_tournament_synergy_cards(detected_themes)
-                        print(f"[AI-SERVICE] Found {len(template_cards)} tournament-played synergy cards for themes {detected_themes}")
+                        print(f"[AI-SERVICE] Found {len(template_cards)} tournament-played synergy cards")
 
-            # Get available cards for the colors
-            available_cards = await self._get_available_cards(colors)
+            # Phase 2: Run independent queries in parallel
+            parallel_tasks = {
+                'available_cards': self._get_available_cards(colors),
+                'sideboard_patterns': self._get_sideboard_patterns(archetype, colors),
+                'composition': self._get_deck_composition_from_meta(archetype, colors),
+                'mana_base_data': self._get_mana_base_from_meta(archetype, colors),
+                'semantic_cards': self._semantic_card_search(strategy, colors),
+                'tournament_cards': self._get_all_tournament_cards(),
+            }
 
-            # If we have template cards, add them to available cards to ensure they pass hallucination filter
+            # Add conditional parallel tasks
+            if specific_cards:
+                parallel_tasks['cooccurrence_cards'] = self._get_cooccurrence_cards(specific_cards, colors)
+            if not template_cards:
+                parallel_tasks['meta_cards'] = self._get_meta_cards(archetype)
+            if not template_decks and archetype:
+                parallel_tasks['example_decklists'] = self._get_archetype_decklists(archetype, colors)
+
+            # Execute all queries in parallel
+            task_names = list(parallel_tasks.keys())
+            results = await asyncio.gather(*parallel_tasks.values(), return_exceptions=True)
+            parallel_results = {}
+            for name, result in zip(task_names, results):
+                if isinstance(result, Exception):
+                    logger.warning(f"Parallel query {name} failed: {result}")
+                    parallel_results[name] = [] if name != 'composition' else {'sample_size': 0}
+                else:
+                    parallel_results[name] = result
+
+            # Unpack results
+            available_cards = parallel_results.get('available_cards', [])
+            sideboard_patterns = parallel_results.get('sideboard_patterns', {})
+            composition = parallel_results.get('composition', {'sample_size': 0})
+            mana_base_data = parallel_results.get('mana_base_data', {})
+            semantic_cards = parallel_results.get('semantic_cards', [])
+            tournament_cards = parallel_results.get('tournament_cards', [])
+            cooccurrence_cards = parallel_results.get('cooccurrence_cards', [])
+            meta_cards = template_cards if template_cards else parallel_results.get('meta_cards', [])
+            example_decklists = template_decks if template_decks else parallel_results.get('example_decklists', [])
+
+            print(f"[AI-SERVICE] Parallel queries complete: {len(available_cards)} available, {len(tournament_cards)} tournament cards")
+
+            # Add template cards to available cards if needed
             if template_cards:
                 template_card_names = {c["name"] for c in template_cards}
                 existing_names = {c["name"] for c in available_cards}
-                # Find template cards not already in available cards and fetch them
                 missing_names = template_card_names - existing_names
                 if missing_names:
                     from app.models.card import Card
@@ -250,7 +287,6 @@ IMPORTANT: If the user mentions a card name (like "Tezzeret", "Lightning Bolt", 
                     )
                     missing_result = await self.db.execute(missing_query)
                     missing_cards_raw = missing_result.scalars().all()
-                    # Deduplicate by name
                     seen = set()
                     for c in missing_cards_raw:
                         if c.name not in seen:
@@ -262,33 +298,8 @@ IMPORTANT: If the user mentions a card name (like "Tezzeret", "Lightning Bolt", 
                                 "oracle_text": c.oracle_text,
                                 "cmc": float(c.cmc) if c.cmc else 0,
                             })
-                    logger.info(f"Added {len(seen)} template cards to available cards list")
 
-            # Get cards commonly played in similar tournament decks
-            meta_cards = await self._get_meta_cards(archetype) if not template_cards else template_cards
-
-            # Get co-occurrence data for synergy recommendations
-            cooccurrence_cards = []
-            if specific_cards:
-                cooccurrence_cards = await self._get_cooccurrence_cards(specific_cards, colors)
-                print(f"[AI-SERVICE] Found {len(cooccurrence_cards)} co-occurring cards for synergy")
-
-            # Get semantic search results for strategy-relevant cards
-            semantic_cards = await self._semantic_card_search(strategy, colors)
-            print(f"[AI-SERVICE] Found {len(semantic_cards)} semantically relevant cards")
-
-            # Get sideboard patterns from tournament data
-            sideboard_patterns = await self._get_sideboard_patterns(archetype, colors)
-            print(f"[AI-SERVICE] Found {len(sideboard_patterns.get('sideboard_staples', []))} sideboard staples")
-
-            # Get deck composition from actual tournament data
-            composition = await self._get_deck_composition_from_meta(archetype, colors)
-            print(f"[AI-SERVICE] Deck composition from {composition['sample_size']} decks: {composition['avg_creatures']} creatures, {composition['avg_spells']} spells, {composition['avg_lands']} lands")
-
-            # Get mana base recommendations from tournament decks
-            mana_base_data = await self._get_mana_base_from_meta(archetype, colors)
             recommended_lands = mana_base_data.get("recommended_lands", [])
-            logger.info(f"Mana base recommendations for {archetype}: {recommended_lands}")
 
             # Format the land recommendations
             if recommended_lands:
@@ -308,14 +319,8 @@ REQUIRED CARDS - The user specifically requested these cards be included:
 You MUST include these cards in the deck (use 4 copies unless the card is legendary or there's a good reason for fewer).
 """
 
-            # Format full decklist examples (if we have tournament decks)
-            # If we don't have template_decks from specific cards, get decklists for the archetype
+            # Format full decklist examples (already fetched in parallel)
             decklist_examples_text = ""
-            example_decklists = template_decks
-            if not example_decklists and archetype:
-                example_decklists = await self._get_archetype_decklists(archetype, colors)
-                print(f"[AI-SERVICE] Found {len(example_decklists)} decklists for archetype {archetype}")
-
             if example_decklists:
                 decklist_examples_text = f"""
 WINNING TOURNAMENT DECKLISTS - Study and emulate these actual winning decklists:
@@ -392,17 +397,92 @@ DECK COMPOSITION (based on {composition['sample_size']} tournament {archetype} d
 Follow this composition - it's what winning decks actually use.
 """
 
+            # Format role distribution guidance from archetype template
+            role_distribution_text = ""
+            if archetype_template and archetype_template.get("role_distribution"):
+                role_dist = archetype_template["role_distribution"]
+                category = archetype_template.get("archetype_category", archetype)
+                sample_size = archetype_template.get("sample_size", 0)
+                avg_lands = archetype_template.get("avg_lands", 24)
+
+                # Get cards grouped by role for actionable guidance
+                # Pass archetype category to filter tournament decks by similar archetypes
+                role_cards = await self._get_cards_by_role(colors, role_dist, category)
+                logger.info(f"Found cards for {len(role_cards)} roles (filtered by {category} archetypes)")
+
+                # Human-readable role names
+                role_labels = {
+                    "threat_cheap": "CHEAP THREATS (CMC ≤2)",
+                    "threat_midrange": "MIDRANGE THREATS (CMC 3-4)",
+                    "threat_finisher": "FINISHERS (CMC 5+)",
+                    "removal_targeted": "TARGETED REMOVAL",
+                    "removal_mass": "BOARD WIPES",
+                    "removal_artifact_enchantment": "ARTIFACT/ENCHANTMENT REMOVAL",
+                    "card_draw": "CARD DRAW",
+                    "card_selection": "CARD SELECTION",
+                    "ramp": "MANA RAMP",
+                    "counterspell": "COUNTERSPELLS",
+                    "discard": "DISCARD",
+                    "burn": "BURN/DIRECT DAMAGE",
+                    "protection": "PROTECTION",
+                    "lifegain": "LIFEGAIN",
+                    "recursion": "RECURSION",
+                    "graveyard_hate": "GRAVEYARD HATE",
+                    "tutor": "TUTORS",
+                }
+
+                # Build role-based card selection sections
+                role_sections = []
+                for role, target_count in sorted(role_dist.items(), key=lambda x: -x[1]):
+                    if role.startswith("land_"):
+                        continue  # Skip lands, handled separately
+                    if target_count < 1.0:
+                        continue  # Skip minor roles
+
+                    label = role_labels.get(role, role.replace("_", " ").upper())
+                    cards_for_role = role_cards.get(role, [])
+
+                    if cards_for_role:
+                        # Show tournament-proven cards first with their counts
+                        proven_cards = [c for c in cards_for_role if c.get("tournament_count", 0) > 0]
+                        other_cards = [c for c in cards_for_role if c.get("tournament_count", 0) == 0]
+
+                        card_list = []
+                        for c in proven_cards[:10]:
+                            card_list.append(f"{c['name']} ({c['tournament_count']} decks)")
+                        # Add a few non-tournament cards as alternatives
+                        for c in other_cards[:3]:
+                            card_list.append(c["name"])
+
+                        role_sections.append(
+                            f"{label} (target: ~{int(target_count)} cards):\n"
+                            f"  PROVEN: {', '.join(card_list)}"
+                        )
+                    else:
+                        role_sections.append(f"{label} (target: ~{int(target_count)} cards)")
+
+                role_distribution_text = f"""
+=== ROLE-BASED DECK CONSTRUCTION (from {sample_size} winning {category.upper()} decks) ===
+
+*** LAND COUNT: EXACTLY {int(avg_lands)} LANDS ***
+This is NON-NEGOTIABLE. Tournament {category} decks run {int(avg_lands)} lands.
+You have {60 - int(avg_lands)} slots for non-land cards.
+
+Fill these functional slots from the options listed:
+
+{chr(10).join(role_sections)}
+
+REMINDER: {int(avg_lands)} LANDS + {60 - int(avg_lands)} NON-LANDS = 60 CARDS TOTAL.
+"""
+                logger.info(f"Using {category} role distribution from {sample_size} tournament decks")
+
             # Log what we're sending to the AI
             logger.info(f"Sending {len(available_cards)} available cards to AI for {archetype} deck")
             if available_cards:
                 logger.info(f"Sample available cards: {[c['name'] for c in available_cards[:10]]}")
 
-            # Get cards that appear in tournament decklists for quality reference
-            tournament_cards = await self._get_all_tournament_cards()
+            # Filter tournament cards (already fetched in parallel) to deck's colors
             tournament_card_names = {c.lower() for c in tournament_cards}
-            print(f"[AI-SERVICE] Found {len(tournament_card_names)} unique cards from tournament decklists")
-
-            # Filter tournament cards to only those matching the deck's colors
             on_color_tournament = await self._filter_tournament_cards_by_color(tournament_card_names, colors)
             print(f"[AI-SERVICE] {len(on_color_tournament)} tournament cards match colors {colors}")
 
@@ -417,6 +497,7 @@ Colors: {', '.join(colors)}
 {cooccurrence_text}
 {semantic_text}
 {composition_text}
+{role_distribution_text}
 {sideboard_guide_text}
 
 TOURNAMENT-PLAYED CARDS IN YOUR COLORS (USE THESE):
@@ -426,25 +507,26 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
 {land_recommendations}
 
 DECK BUILDING RULES:
-1. Main deck = EXACTLY 60 cards (count them!)
+1. Main deck = EXACTLY 60 cards
 2. Sideboard = EXACTLY 15 cards
-3. Use {composition.get('avg_lands', 24)} lands (based on tournament data)
+3. *** LANDS: EXACTLY {archetype_template.get('avg_lands', composition.get('avg_lands', 24)) if archetype_template else composition.get('avg_lands', 24)} LANDS *** (this is what tournament decks use - do NOT use fewer!)
 4. Max 4 copies of non-basic cards
-5. ONLY use cards from the tournament lists above or basic lands
-6. Every card must match colors {colors} or be colorless/land
-7. COPY the winning decklist examples above - they show exactly what works
+5. ONLY use cards from the PROVEN tournament lists above - these are what actually win
+6. Every non-land card must match colors {colors}
+7. For {len(colors)}-color decks: {"Use mostly basic lands. Fetch lands and fixing are unnecessary." if len(colors) == 1 else "Use appropriate dual lands for fixing."}
+8. EVERY card must have a clear purpose - if you can't explain why it's in the deck, don't include it
 
 USER REQUEST: {archetype} deck
 
-Return JSON with EXACTLY 60 main deck cards and 15 sideboard cards:
+Return JSON with reasoning for key cards:
 {{
     "name": "Deck Name",
-    "strategy_summary": "Brief strategy description",
+    "strategy_summary": "2-3 sentence strategy description",
     "main_deck": [
-        {{"card_name": "Card Name", "quantity": 4}}
+        {{"card_name": "Card Name", "quantity": 4, "reason": "Why this card"}}
     ],
     "sideboard": [
-        {{"card_name": "Card Name", "quantity": 3}}
+        {{"card_name": "Card Name", "quantity": 3, "reason": "What matchups"}}
     ]
 }}"""
 
@@ -517,6 +599,10 @@ Return JSON with EXACTLY 60 main deck cards and 15 sideboard cards:
 
                 deck_data["main_deck"] = filtered_main
                 deck_data["sideboard"] = filtered_sideboard
+
+                # Validate and fix land count
+                target_lands = int(archetype_template.get('avg_lands', 24)) if archetype_template else 24
+                await self._fix_land_count(deck_data, target_lands, colors)
 
                 # Filter out cards that don't match the deck's colors
                 deck_data = await self._filter_by_color(deck_data, colors)
@@ -769,6 +855,240 @@ Return modifications as JSON:
             logger.error(f"AI iteration error: {e}")
 
         return {"changes": [], "summary": "Unable to process modification"}
+
+    async def _fix_land_count(
+        self,
+        deck_data: Dict[str, Any],
+        target_lands: int,
+        colors: List[str],
+    ) -> None:
+        """
+        Validate and fix the land count in a generated deck.
+        If the deck has too few lands, add basics. If too many, remove some.
+        Modifies deck_data in place.
+        """
+        main_deck = deck_data.get("main_deck", [])
+
+        # Count current lands
+        land_count = 0
+        land_entries = []
+        nonland_entries = []
+
+        for entry in main_deck:
+            card_name = entry.get("card_name", "").lower()
+            # Check if it's a land (basic or otherwise)
+            is_land = any(basic in card_name for basic in ["plains", "island", "swamp", "mountain", "forest"]) or \
+                      "land" in card_name.lower()
+
+            # Also check by querying the database for type_line
+            if not is_land:
+                from app.models.card import Card
+                from sqlalchemy import func
+                query = select(Card.type_line).where(
+                    func.lower(Card.name) == card_name.lower()
+                ).limit(1)
+                result = await self.db.execute(query)
+                type_line = result.scalar_one_or_none()
+                if type_line and "land" in type_line.lower():
+                    is_land = True
+
+            if is_land:
+                land_count += entry.get("quantity", 1)
+                land_entries.append(entry)
+            else:
+                nonland_entries.append(entry)
+
+        logger.info(f"Land count validation: {land_count} lands (target: {target_lands})")
+
+        if land_count < target_lands:
+            # Need to add more lands - use basics
+            lands_needed = target_lands - land_count
+
+            # Map colors to basic lands
+            basic_map = {"W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest"}
+            basics_to_add = [basic_map[c] for c in colors if c in basic_map]
+
+            if basics_to_add:
+                # Distribute evenly among colors
+                per_basic = lands_needed // len(basics_to_add)
+                remainder = lands_needed % len(basics_to_add)
+
+                for i, basic in enumerate(basics_to_add):
+                    qty = per_basic + (1 if i < remainder else 0)
+                    if qty > 0:
+                        # Check if this basic already exists
+                        existing = next((e for e in land_entries if e.get("card_name", "").lower() == basic.lower()), None)
+                        if existing:
+                            existing["quantity"] = existing.get("quantity", 0) + qty
+                        else:
+                            land_entries.append({"card_name": basic, "quantity": qty})
+
+                logger.info(f"Added {lands_needed} basic lands to reach target of {target_lands}")
+
+            # May need to remove some nonland cards to make room
+            total_nonlands = sum(e.get("quantity", 1) for e in nonland_entries)
+            target_nonlands = 60 - target_lands
+
+            if total_nonlands > target_nonlands:
+                # Remove lowest-priority cards (from the end of the list)
+                cards_to_remove = total_nonlands - target_nonlands
+                while cards_to_remove > 0 and nonland_entries:
+                    last_entry = nonland_entries[-1]
+                    qty = last_entry.get("quantity", 1)
+                    if qty <= cards_to_remove:
+                        nonland_entries.pop()
+                        cards_to_remove -= qty
+                        logger.info(f"Removed {qty}x {last_entry.get('card_name')} to make room for lands")
+                    else:
+                        last_entry["quantity"] = qty - cards_to_remove
+                        logger.info(f"Reduced {last_entry.get('card_name')} by {cards_to_remove} to make room for lands")
+                        cards_to_remove = 0
+
+        elif land_count > target_lands + 2:
+            # Too many lands - remove some basics
+            lands_to_remove = land_count - target_lands
+            for entry in land_entries:
+                if lands_to_remove <= 0:
+                    break
+                card_name = entry.get("card_name", "").lower()
+                if card_name in ["plains", "island", "swamp", "mountain", "forest"]:
+                    qty = entry.get("quantity", 1)
+                    remove_qty = min(qty, lands_to_remove)
+                    entry["quantity"] = qty - remove_qty
+                    lands_to_remove -= remove_qty
+
+            # Remove entries with 0 quantity
+            land_entries = [e for e in land_entries if e.get("quantity", 0) > 0]
+
+        # Rebuild main deck
+        deck_data["main_deck"] = nonland_entries + land_entries
+
+    async def _get_cards_by_role(
+        self,
+        colors: List[str],
+        role_distribution: Dict[str, float],
+        archetype_category: str = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get cards grouped by their functional roles, filtered by color.
+        Returns dict mapping role -> list of cards that fulfill that role.
+        Cards must be colorless OR have colors that are a subset of deck colors.
+
+        PRIORITIZES cards that appear in SIMILAR tournament decklists
+        (matching by color and archetype category).
+        """
+        from sqlalchemy import text
+
+        # Build color filter - cards must be colorless or ONLY have colors in the deck
+        color_list = [c.upper() for c in colors]
+        color_placeholders = ", ".join([f"'{c}'" for c in color_list])
+
+        # Build archetype filter for tournament decks
+        # Match decks that have similar colors OR similar archetype keywords
+        color_keywords = []
+        for c in color_list:
+            color_map = {"R": "red", "W": "white", "U": "blue", "B": "black", "G": "green"}
+            if c in color_map:
+                color_keywords.append(color_map[c])
+
+        # Also match mono-X patterns
+        if len(color_list) == 1:
+            color_keywords.append(f"mono")
+
+        # Archetype category keywords for filtering similar decks
+        archetype_keywords = {
+            "aggro": ["aggro", "rdw", "red deck wins", "burn", "sligh", "weenie"],
+            "control": ["control"],
+            "midrange": ["midrange", "ramp", "value"],
+            "combo": ["combo", "storm", "reanimator"],
+        }
+        arch_filters = archetype_keywords.get(archetype_category, [])
+
+        # Build the archetype/color LIKE conditions
+        archetype_conditions = []
+        for kw in color_keywords + arch_filters:
+            archetype_conditions.append(f"LOWER(d.archetype) LIKE '%{kw}%'")
+
+        archetype_filter = " OR ".join(archetype_conditions) if archetype_conditions else "TRUE"
+
+        role_cards = {}
+
+        for role in role_distribution.keys():
+            # Skip land roles - handled separately
+            if role.startswith("land_"):
+                continue
+
+            # Query cards that have this role, match color requirements,
+            # and cross-reference with SIMILAR tournament decklists for priority
+            # Handle DFCs by matching on the front face name (before " // ")
+            query = text(f"""
+                WITH similar_deck_cards AS (
+                    -- Get cards from tournament decks with similar colors/archetype
+                    SELECT
+                        card_entry->>'card_name' as card_name,
+                        COUNT(DISTINCT d.id) as tournament_count
+                    FROM decklists d,
+                         jsonb_array_elements(d.main_deck) as card_entry
+                    WHERE {archetype_filter}
+                    GROUP BY card_entry->>'card_name'
+                ),
+                role_cards_deduped AS (
+                    -- Get unique cards with this role (dedupe by name)
+                    SELECT DISTINCT ON (c.name)
+                        c.name,
+                        -- Extract front face name for DFCs (before " // ")
+                        SPLIT_PART(c.name, ' // ', 1) as front_face_name,
+                        c.mana_cost,
+                        c.type_line,
+                        cr.efficiency,
+                        c.cmc,
+                        c.colors
+                    FROM cards c
+                    JOIN card_roles cr ON c.id = cr.card_id
+                    WHERE cr.role = :role
+                      AND c.is_standard_legal = true
+                    ORDER BY c.name, cr.efficiency DESC NULLS LAST
+                )
+                SELECT
+                    rc.name,
+                    rc.mana_cost,
+                    rc.type_line,
+                    rc.efficiency,
+                    rc.cmc,
+                    COALESCE(sdc.tournament_count, 0) as tournament_count
+                FROM role_cards_deduped rc
+                -- Match on front face name OR full name (handles DFCs)
+                LEFT JOIN similar_deck_cards sdc ON
+                    LOWER(sdc.card_name) = LOWER(rc.name) OR
+                    LOWER(sdc.card_name) = LOWER(rc.front_face_name)
+                WHERE rc.colors = ARRAY[]::varchar[]
+                   OR rc.colors <@ ARRAY[{color_placeholders}]::varchar[]
+                ORDER BY tournament_count DESC NULLS LAST, rc.efficiency DESC NULLS LAST
+                LIMIT 50
+            """)
+
+            result = await self.db.execute(query, {"role": role})
+            cards = result.all()
+
+            if cards:
+                # Sort by: tournament appearances (desc), then efficiency (desc), then name
+                sorted_cards = sorted(
+                    cards,
+                    key=lambda x: (-(x.tournament_count or 0), -(x.efficiency or 0), x.name)
+                )
+                role_cards[role] = [
+                    {
+                        "name": c.name,
+                        "mana_cost": c.mana_cost,
+                        "type_line": c.type_line,
+                        "efficiency": c.efficiency,
+                        "cmc": float(c.cmc) if c.cmc else 0,
+                        "tournament_count": c.tournament_count,
+                    }
+                    for c in sorted_cards[:20]  # Top 20 per role
+                ]
+
+        return role_cards
 
     async def _get_available_cards(self, colors: List[str]) -> List[Dict[str, Any]]:
         """Get available cards for the specified colors."""
@@ -1027,6 +1347,7 @@ Return modifications as JSON:
         from sqlalchemy import func
 
         colors_upper = [c.upper() for c in colors]
+        is_mono_color = len(colors_upper) == 1
         matching_cards = []
 
         # Query all cards that are in the tournament set
@@ -1047,13 +1368,41 @@ Return modifications as JSON:
             is_colorless = len(card_colors) == 0
             matches_colors = all(c in colors_upper for c in card_colors)
 
-            if is_land or is_colorless or matches_colors:
+            # For lands, be more selective
+            if is_land:
+                oracle = (card.oracle_text or "").lower()
+                name_lower = card.name.lower()
+
+                # For mono-color decks, exclude fetch lands and multi-color fixing
+                if is_mono_color:
+                    # Skip fetch lands (search for basic land)
+                    if "search" in oracle and "basic land" in oracle:
+                        continue
+                    # Skip lands that choose colors or produce any color
+                    if "any color" in oracle or "choose" in oracle:
+                        continue
+                    # Skip obvious multi-color lands
+                    if any(x in name_lower for x in ["passage", "gate", "plaza", "junction"]):
+                        continue
+
+                matching_cards.append(card.name)
+            elif is_colorless or matches_colors:
                 matching_cards.append(card.name)
 
         return matching_cards
 
     async def _get_all_tournament_cards(self) -> List[str]:
-        """Get all unique card names that appear in tournament decklists."""
+        """Get all unique card names that appear in tournament decklists. Uses cache."""
+        global _tournament_cards_cache
+
+        # Check cache
+        now = time.time()
+        if (_tournament_cards_cache["data"] is not None and
+            now - _tournament_cards_cache["timestamp"] < _tournament_cards_cache["ttl"]):
+            logger.debug("Using cached tournament cards")
+            return _tournament_cards_cache["data"]
+
+        # Fetch from database
         query = select(Decklist).join(Event).where(Event.format == "standard").limit(200)
         result = await self.db.execute(query)
         decklists = result.scalars().all()
@@ -1069,7 +1418,14 @@ Return modifications as JSON:
                 if card_name:
                     all_cards.add(card_name)
 
-        return list(all_cards)
+        cards_list = list(all_cards)
+
+        # Update cache
+        _tournament_cards_cache["data"] = cards_list
+        _tournament_cards_cache["timestamp"] = now
+        logger.info(f"Cached {len(cards_list)} tournament cards")
+
+        return cards_list
 
     async def _find_decks_with_cards(self, card_names: List[str]) -> List[Decklist]:
         """Find tournament decklists that contain the specified cards."""

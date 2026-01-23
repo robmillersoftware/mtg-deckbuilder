@@ -22,8 +22,23 @@ logger = logging.getLogger(__name__)
 # Tool definitions for Claude
 TOOLS = [
     {
+        "name": "generate_best_meta_deck",
+        "description": "Analyze the current metagame and build the best deck for favorable matchups. Use this when the user says things like 'Whatever is best', 'build me the best deck', 'analyze the meta and build something', or doesn't specify what deck they want. This tool autonomously picks the best option based on current tournament data.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "optimization_goal": {
+                    "type": "string",
+                    "enum": ["best_winrate", "beat_top_decks", "underplayed_strong", "balanced"],
+                    "description": "What to optimize for. 'best_winrate'=highest performing, 'beat_top_decks'=counter the meta, 'underplayed_strong'=good but under the radar, 'balanced'=solid all-around"
+                }
+            },
+            "required": []
+        }
+    },
+    {
         "name": "generate_deck",
-        "description": "Generate a new Magic: The Gathering deck based on user requirements. Use this when the user explicitly asks to BUILD, CREATE, or MAKE a deck. Do NOT use this for questions about strategy, matchups, or how to beat something.",
+        "description": "Generate a new Magic: The Gathering deck based on SPECIFIC user requirements (colors, archetype). Only use this when the user has specified what colors or archetype they want. If the user is vague or says 'whatever is best', use generate_best_meta_deck instead.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -151,14 +166,17 @@ Current deck in conversation:
 {deck_context}
 
 Your role:
-1. If the user EXPLICITLY asks to build/create/make a deck, use the generate_deck tool
-2. If the user asks to modify/change/adjust the current deck, use the modify_deck tool
-3. If the user asks about matchups, meta, how to beat something, or sideboard advice, use the get_matchup_info tool
-4. For general questions about MTG strategy, cards, or rules - just respond directly with helpful information
+1. If the user wants a deck but is VAGUE about specifics (says "whatever is best", "build me something good", "analyze meta and build", "surprise me", or doesn't specify colors/archetype) - use the generate_best_meta_deck tool IMMEDIATELY. Do NOT ask clarifying questions.
+2. If the user EXPLICITLY specifies colors AND/OR archetype (like "red aggro" or "blue-white control") - use the generate_deck tool
+3. If the user asks to modify/change/adjust the current deck - use the modify_deck tool
+4. If the user asks about matchups, meta, how to beat something, or sideboard advice - use the get_matchup_info tool
+5. For general questions about MTG strategy, cards, or rules - respond directly with helpful information
+
+CRITICAL: When a user says "Whatever is best" or similar vague responses, this is NOT a request for more questions - it means "YOU decide for me". Use generate_best_meta_deck immediately.
 
 IMPORTANT: Questions like "How do I beat X?" or "What's good against Y?" are strategy questions - do NOT generate a deck for these. Either use get_matchup_info if there's a current deck, or just provide strategy advice.
 
-Be concise and helpful. Focus on competitive Standard play."""
+Be decisive and action-oriented. Focus on competitive Standard play."""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
@@ -178,7 +196,11 @@ Be concise and helpful. Focus on competitive Standard play."""
 
                         print(f"[CHAT-SERVICE] Claude called tool: {tool_name} with input: {tool_input}")
 
-                        if tool_name == "generate_deck":
+                        if tool_name == "generate_best_meta_deck":
+                            return await self._handle_meta_deck_generation(
+                                tool_input, conversation, user_id
+                            )
+                        elif tool_name == "generate_deck":
                             return await self._handle_deck_generation(
                                 tool_input, conversation, user_id
                             )
@@ -229,6 +251,152 @@ Be concise and helpful. Focus on competitive Standard play."""
         self.db.add(conversation)
         await self.db.flush()
         return conversation
+
+    async def _handle_meta_deck_generation(
+        self,
+        tool_input: Dict[str, Any],
+        conversation: Conversation,
+        user_id: Optional[UUID],
+    ) -> ChatResponse:
+        """Handle autonomous meta-based deck generation."""
+        from app.models.meta import MetaSnapshot
+
+        optimization_goal = tool_input.get("optimization_goal", "balanced")
+
+        # Get current meta data
+        result = await self.db.execute(
+            select(MetaSnapshot)
+            .where(MetaSnapshot.format == "standard")
+            .order_by(MetaSnapshot.meta_percentage.desc())
+            .limit(10)
+        )
+        snapshots = result.scalars().all()
+
+        # Analyze meta and pick best deck to build
+        if not snapshots:
+            # No meta data - build a generally good deck
+            archetype = "midrange"
+            colors = ["R", "G"]
+            reasoning = "Building Gruul Midrange as a solid all-around choice."
+        else:
+            # Pick based on optimization goal
+            top_decks = [(s.archetype, float(s.meta_percentage or 0)) for s in snapshots]
+
+            if optimization_goal == "best_winrate":
+                # Build the top performing deck
+                best = snapshots[0]
+                archetype = self._classify_deck_type(best.archetype or "midrange")
+                colors = self._extract_colors_from_archetype(best.archetype or "")
+                reasoning = f"Building {best.archetype} - currently the #1 deck in the meta at {float(best.meta_percentage or 0):.1f}% of the field."
+
+            elif optimization_goal == "beat_top_decks":
+                # Find what beats the top decks
+                top_type = self._classify_deck_type(snapshots[0].archetype or "")
+                if top_type == "aggro":
+                    archetype = "midrange"
+                    colors = ["B", "G"]
+                    reasoning = f"The meta is aggro-heavy ({snapshots[0].archetype} at top). Building Golgari Midrange to prey on aggressive decks with removal and lifegain."
+                elif top_type == "control":
+                    archetype = "aggro"
+                    colors = ["R"]
+                    reasoning = f"The meta is control-heavy ({snapshots[0].archetype} at top). Building Mono-Red Aggro to go under them before they stabilize."
+                elif top_type == "midrange":
+                    archetype = "control"
+                    colors = ["W", "U"]
+                    reasoning = f"The meta is midrange-heavy ({snapshots[0].archetype} at top). Building Azorius Control to go over them with card advantage and sweepers."
+                else:
+                    archetype = "midrange"
+                    colors = ["R", "G"]
+                    reasoning = "Building Gruul Midrange as a flexible counter to the field."
+
+            elif optimization_goal == "underplayed_strong":
+                # Find a deck that's good but under-represented
+                for snap in snapshots[3:8]:  # Look at positions 4-8
+                    if snap.meta_percentage and float(snap.meta_percentage) > 3:
+                        archetype = self._classify_deck_type(snap.archetype or "midrange")
+                        colors = self._extract_colors_from_archetype(snap.archetype or "")
+                        reasoning = f"Building {snap.archetype} - solid performance but less expected at {float(snap.meta_percentage):.1f}% meta share."
+                        break
+                else:
+                    archetype = "tempo"
+                    colors = ["U", "R"]
+                    reasoning = "Building Izzet Tempo - a strong but underrepresented strategy."
+
+            else:  # balanced
+                # Pick something solid with good matchup spread
+                archetype = "midrange"
+                # Look for a midrange deck in the meta
+                for snap in snapshots[:5]:
+                    if "midrange" in (snap.archetype or "").lower():
+                        colors = self._extract_colors_from_archetype(snap.archetype or "")
+                        reasoning = f"Building {snap.archetype} - balanced matchups across the field."
+                        break
+                else:
+                    colors = ["B", "G"]
+                    reasoning = "Building Golgari Midrange - strong, flexible, and good against most of the field."
+
+        # Build the prompt
+        color_names = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+        color_str = "/".join(color_names.get(c, c) for c in colors)
+        prompt = f"Build a competitive {color_str} {archetype} deck optimized for the current Standard meta"
+
+        result = await self.deck_generator.generate(
+            prompt=prompt,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            include_sideboard=True,
+        )
+
+        meta_summary = "\n\n**Current Meta:**\n"
+        for snap in snapshots[:5]:
+            pct = f"{float(snap.meta_percentage):.1f}%" if snap.meta_percentage else "?"
+            meta_summary += f"- {snap.archetype}: {pct}\n"
+
+        return ChatResponse(
+            response=f"**{reasoning}**\n\n{result.strategy_summary or ''}{meta_summary}",
+            conversation_id=result.conversation_id,
+            deck={
+                "name": result.deck.name,
+                "main_deck": result.deck.main_deck,
+                "sideboard": result.deck.sideboard,
+                "archetype": result.deck.archetype,
+            },
+            suggestions=[
+                "Show matchup analysis",
+                "Build something to beat this",
+                "Make it more aggressive",
+            ],
+        )
+
+    def _extract_colors_from_archetype(self, archetype: str) -> List[str]:
+        """Extract likely colors from an archetype name."""
+        arch_lower = archetype.lower()
+
+        # Check for explicit color mentions
+        color_map = {
+            "white": "W", "azorius": "WU", "orzhov": "WB", "boros": "WR", "selesnya": "WG",
+            "blue": "U", "dimir": "UB", "izzet": "UR", "simic": "UG",
+            "black": "B", "rakdos": "BR", "golgari": "BG",
+            "red": "R", "gruul": "RG",
+            "green": "G",
+            "esper": "WUB", "grixis": "UBR", "jund": "BRG", "naya": "WRG", "bant": "WUG",
+            "abzan": "WBG", "jeskai": "WUR", "sultai": "UBG", "mardu": "WBR", "temur": "URG",
+            "mono-red": "R", "mono-white": "W", "mono-blue": "U", "mono-black": "B", "mono-green": "G",
+        }
+
+        for key, colors in color_map.items():
+            if key in arch_lower:
+                return list(colors)
+
+        # Default based on archetype type
+        if "aggro" in arch_lower or "burn" in arch_lower or "rdw" in arch_lower:
+            return ["R"]
+        elif "control" in arch_lower:
+            return ["W", "U"]
+        elif "ramp" in arch_lower:
+            return ["G"]
+
+        return ["R", "G"]  # Default to Gruul
 
     async def _handle_deck_generation(
         self,
