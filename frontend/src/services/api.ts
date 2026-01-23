@@ -201,6 +201,9 @@ export const decksApi = {
 
   toggleVisibility: (id: string, visibility: string) =>
     api.patch(`/decks/${id}`, { visibility }),
+
+  getSideboardMatrix: (id: string) =>
+    api.post(`/decks/${id}/sideboard-matrix`),
 };
 
 // Conversations API

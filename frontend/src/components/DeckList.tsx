@@ -7,6 +7,7 @@ interface DeckListProps {
   mainDeck: DeckEntry[];
   sideboard: DeckEntry[];
   title?: string;
+  cardExplanations?: Record<string, string>;
   onCardClick?: (cardName: string) => void;
   onQuantityChange?: (cardName: string, quantity: number, target: 'main' | 'sideboard') => void;
   editable?: boolean;
@@ -17,6 +18,7 @@ export function DeckList({
   mainDeck,
   sideboard,
   title,
+  cardExplanations,
   onCardClick,
   onQuantityChange,
   editable = false,
@@ -61,6 +63,7 @@ export function DeckList({
                     key={entry.card_name}
                     entry={entry}
                     target="main"
+                    explanation={cardExplanations?.[entry.card_name]}
                     onClick={onCardClick}
                     onQuantityChange={onQuantityChange}
                     editable={editable}
@@ -83,6 +86,7 @@ export function DeckList({
                   key={entry.card_name}
                   entry={entry}
                   target="sideboard"
+                  explanation={cardExplanations?.[entry.card_name]}
                   onClick={onCardClick}
                   onQuantityChange={onQuantityChange}
                   editable={editable}
@@ -107,12 +111,13 @@ export function DeckList({
 interface CardEntryProps {
   entry: DeckEntry;
   target: 'main' | 'sideboard';
+  explanation?: string;
   onClick?: (cardName: string) => void;
   onQuantityChange?: (cardName: string, quantity: number, target: 'main' | 'sideboard') => void;
   editable?: boolean;
 }
 
-function CardEntry({ entry, target, onClick, onQuantityChange, editable }: CardEntryProps) {
+function CardEntry({ entry, target, explanation, onClick, onQuantityChange, editable }: CardEntryProps) {
   const handleClick = () => {
     onClick?.(entry.card_name);
   };
@@ -141,7 +146,7 @@ function CardEntry({ entry, target, onClick, onQuantityChange, editable }: CardE
         <span className="text-gray-400 w-4 text-right text-sm">
           {entry.quantity}
         </span>
-        <CardTooltip cardName={entry.card_name}>
+        <CardTooltip cardName={entry.card_name} explanation={explanation}>
           <span className="text-white text-sm">{entry.card_name}</span>
         </CardTooltip>
       </div>

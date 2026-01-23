@@ -193,3 +193,35 @@ class DeckIterateResponse(BaseModel):
     deck: DeckResponse
     changes: List[ChangeLogEntry]
     summary: str
+
+
+class SideboardSwap(BaseModel):
+    """A single card swap for sideboarding."""
+    out: str
+    out_quantity: int
+    in_card: str = Field(..., alias="in")
+    in_quantity: int
+    reasoning: str
+
+    class Config:
+        populate_by_name = True
+
+
+class MatchupSideboardPlan(BaseModel):
+    """Sideboard plan for a specific matchup."""
+    matchup: str
+    matchup_description: str
+    cards_in: List[Dict[str, Any]]  # [{card_name, quantity, reasoning}]
+    cards_out: List[Dict[str, Any]]  # [{card_name, quantity, reasoning}]
+    strategy_notes: str
+    key_cards_to_find: List[str]
+    cards_to_play_around: List[str]
+
+
+class SideboardMatrixResponse(BaseModel):
+    """Complete sideboard guide for all meta matchups."""
+    deck_name: str
+    deck_archetype: Optional[str]
+    generated_at: datetime
+    matchups: List[MatchupSideboardPlan]
+    general_sideboard_notes: str

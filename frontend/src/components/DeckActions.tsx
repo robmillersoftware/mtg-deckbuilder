@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Deck } from '@/types';
 import { decksApi } from '@/services/api';
+import { SideboardMatrix } from './SideboardMatrix';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 
@@ -16,6 +17,7 @@ export function DeckActions({ deck, onSave, onExport, className }: DeckActionsPr
   const [isExporting, setIsExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState<'arena' | 'mtgo' | 'plain'>('arena');
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showSideboardMatrix, setShowSideboardMatrix] = useState(false);
 
   const handleSave = async () => {
     if (!deck.main_deck?.length) {
@@ -213,6 +215,28 @@ export function DeckActions({ deck, onSave, onExport, className }: DeckActionsPr
         >
           Share
         </button>
+      )}
+
+      <button
+        onClick={() => setShowSideboardMatrix(true)}
+        disabled={!deck.sideboard?.length}
+        className={clsx(
+          'px-4 py-2 rounded-lg font-medium transition-colors',
+          deck.sideboard?.length
+            ? 'bg-amber-600 hover:bg-amber-700 text-white'
+            : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+        )}
+        title={deck.sideboard?.length ? 'Generate sideboard guide for all matchups' : 'Add sideboard cards first'}
+      >
+        Sideboard Guide
+      </button>
+
+      {/* Sideboard Matrix Modal */}
+      {showSideboardMatrix && (
+        <SideboardMatrix
+          deck={deck}
+          onClose={() => setShowSideboardMatrix(false)}
+        />
       )}
 
       {/* Export Modal */}

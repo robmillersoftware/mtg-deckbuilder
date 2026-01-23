@@ -25,6 +25,7 @@ from app.schemas.deck import (
     DeckIterateResponse,
     DeckValidationReport,
     DeckExportFormat,
+    SideboardMatrixResponse,
 )
 from app.api.deps.auth import get_current_user_required, get_current_user
 from app.services.deck_service import DeckService
@@ -32,7 +33,9 @@ from app.services.deck_validator import DeckValidator
 from app.services.deck_exporter import DeckExporter
 from app.services.deck_importer import DeckImporter
 from app.services.deck_generator import DeckGenerator
+from app.services.ai_service import AIService
 from app.core.security import generate_share_token
+from app.models.meta import MetaSnapshot
 
 router = APIRouter()
 
@@ -395,3 +398,77 @@ async def iterate_deck(
         user_id=current_user.id if current_user else None,
     )
     return result
+
+
+@router.post("/{deck_id}/sideboard-matrix", response_model=SideboardMatrixResponse)
+async def generate_sideboard_matrix(
+    deck_id: UUID,
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a sideboard guide matrix for all current meta matchups."""
+    from datetime import datetime
+
+    # Fetch the deck
+    result = await db.execute(
+        select(Deck).where(
+            and_(
+                Deck.id == deck_id,
+                Deck.owner_id == current_user.id,
+            )
+        )
+    )
+    deck = result.scalar_one_or_none()
+
+    if deck is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Deck not found",
+        )
+
+    # Fetch current meta archetypes (top 10 by meta percentage)
+    meta_result = await db.execute(
+        select(MetaSnapshot)
+        .where(MetaSnapshot.format == "standard")
+        .order_by(MetaSnapshot.meta_percentage.desc())
+        .limit(10)
+    )
+    meta_archetypes = meta_result.scalars().all()
+
+    if not meta_archetypes:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No meta data available. Please wait for meta scrape to complete.",
+        )
+
+    # Prepare meta archetype data for AI
+    meta_archetype_data = [
+        {
+            "archetype": m.archetype,
+            "meta_percentage": float(m.meta_percentage) if m.meta_percentage else 0,
+            "key_cards": m.key_cards or [],
+        }
+        for m in meta_archetypes
+    ]
+
+    # Generate sideboard matrix using AI
+    ai_service = AIService(db)
+    matrix_data = await ai_service.generate_sideboard_matrix(
+        deck_data={
+            "name": deck.name,
+            "archetype": deck.archetype,
+            "main_deck": deck.main_deck,
+            "sideboard": deck.sideboard,
+            "strategy_summary": deck.strategy_summary,
+        },
+        archetype=deck.archetype or "Unknown",
+        meta_archetypes=meta_archetype_data,
+    )
+
+    return SideboardMatrixResponse(
+        deck_name=deck.name,
+        deck_archetype=deck.archetype,
+        generated_at=datetime.utcnow(),
+        matchups=matrix_data.get("matchups", []),
+        general_sideboard_notes=matrix_data.get("general_sideboard_notes", ""),
+    )

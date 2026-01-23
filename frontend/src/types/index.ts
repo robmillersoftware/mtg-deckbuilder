@@ -115,6 +115,31 @@ export interface ChangeLogEntry {
   reasoning: string;
 }
 
+// Sideboard Matrix types
+export interface SideboardCardChange {
+  card_name: string;
+  quantity: number;
+  reasoning: string;
+}
+
+export interface MatchupSideboardPlan {
+  matchup: string;
+  matchup_description: string;
+  cards_in: SideboardCardChange[];
+  cards_out: SideboardCardChange[];
+  strategy_notes: string;
+  key_cards_to_find: string[];
+  cards_to_play_around: string[];
+}
+
+export interface SideboardMatrixResponse {
+  deck_name: string;
+  deck_archetype?: string;
+  generated_at: string;
+  matchups: MatchupSideboardPlan[];
+  general_sideboard_notes: string;
+}
+
 // Conversation types
 export interface Message {
   role: 'user' | 'assistant' | 'system';

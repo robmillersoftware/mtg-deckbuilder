@@ -7,9 +7,10 @@ interface CardTooltipProps {
   cardName: string;
   children: React.ReactNode;
   className?: string;
+  explanation?: string;
 }
 
-export function CardTooltip({ cardName, children, className }: CardTooltipProps) {
+export function CardTooltip({ cardName, children, className, explanation }: CardTooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const triggerRef = useRef<HTMLSpanElement>(null);
@@ -76,7 +77,7 @@ export function CardTooltip({ cardName, children, className }: CardTooltipProps)
             className="fixed z-50 pointer-events-none"
             style={{ left: position.x, top: position.y }}
           >
-            <CardPreview card={card} isLoading={isLoading} />
+            <CardPreview card={card} isLoading={isLoading} explanation={explanation} />
           </div>,
           document.body
         )}
@@ -99,9 +100,10 @@ interface CardPreviewProps {
     price_usd?: number;
   };
   isLoading: boolean;
+  explanation?: string;
 }
 
-function CardPreview({ card, isLoading }: CardPreviewProps) {
+function CardPreview({ card, isLoading, explanation }: CardPreviewProps) {
   if (isLoading) {
     return (
       <div className="w-[250px] h-[350px] bg-gray-800 rounded-lg animate-pulse" />
@@ -144,6 +146,15 @@ function CardPreview({ card, isLoading }: CardPreviewProps) {
               {card.power}/{card.toughness}
             </p>
           )}
+        </div>
+      )}
+
+      {/* Context-aware explanation */}
+      {explanation && (
+        <div className="px-3 py-2 bg-primary-900/50 border-t border-primary-700">
+          <p className="text-xs text-primary-200 italic leading-relaxed">
+            {explanation}
+          </p>
         </div>
       )}
 

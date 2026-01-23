@@ -79,6 +79,7 @@ export function HomePage() {
               mainDeck={currentDeck.main_deck || []}
               sideboard={currentDeck.sideboard || []}
               title={currentDeck.name || 'Current Deck'}
+              cardExplanations={currentDeck.card_explanations}
               onQuantityChange={handleQuantityChange}
               editable
               className="flex-1 overflow-y-auto"

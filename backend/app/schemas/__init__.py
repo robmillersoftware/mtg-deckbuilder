@@ -33,6 +33,8 @@ from app.schemas.deck import (
     DeckIterateRequest,
     DeckValidationReport,
     DeckCardEntry,
+    SideboardMatrixResponse,
+    MatchupSideboardPlan,
 )
 from app.schemas.conversation import (
     ConversationResponse,
@@ -78,6 +80,8 @@ __all__ = [
     "DeckIterateRequest",
     "DeckValidationReport",
     "DeckCardEntry",
+    "SideboardMatrixResponse",
+    "MatchupSideboardPlan",
     "ConversationResponse",
     "ConversationListResponse",
     "MessageCreate",

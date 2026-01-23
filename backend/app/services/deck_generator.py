@@ -91,6 +91,20 @@ class DeckGenerator:
         # Run deck validation
         validation = await self.validator.validate(validated_main, validated_sideboard)
 
+        # Generate card explanations if requested
+        card_explanations = {}
+        if include_explanations:
+            card_explanations = await self.ai_service.generate_card_explanations(
+                deck_data={
+                    "name": deck_data.get("name", "Generated Deck"),
+                    "main_deck": validated_main,
+                    "sideboard": validated_sideboard,
+                },
+                archetype=parsed_request.get("archetype", ""),
+                strategy=deck_data.get("strategy_summary", parsed_request.get("strategy", "")),
+            )
+            logger.info(f"Generated {len(card_explanations)} card explanations")
+
         # Generate unique deck name if user is logged in
         deck_name = deck_data.get("name", "Generated Deck")
         if user_id:
@@ -105,6 +119,7 @@ class DeckGenerator:
             main_deck=validated_main,
             sideboard=validated_sideboard,
             strategy_summary=deck_data.get("strategy_summary", ""),
+            card_explanations=card_explanations if card_explanations else None,
             is_validated=validation.is_valid,
             validation_errors=[e.model_dump() for e in validation.errors] if validation.errors else None,
         )

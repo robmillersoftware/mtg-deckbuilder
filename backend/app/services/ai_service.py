@@ -540,6 +540,184 @@ Return JSON with EXACTLY 60 main deck cards and 15 sideboard cards:
 
         return await self._generate_fallback_deck(archetype, colors, strategy)
 
+    async def generate_sideboard_matrix(
+        self,
+        deck_data: Dict[str, Any],
+        archetype: str,
+        meta_archetypes: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Generate a complete sideboard guide matrix for all meta matchups.
+        """
+        if not settings.ANTHROPIC_API_KEY:
+            return {"matchups": [], "general_sideboard_notes": "AI service not configured"}
+
+        try:
+            import anthropic
+
+            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+            main_deck = deck_data.get("main_deck", [])
+            sideboard = deck_data.get("sideboard", [])
+
+            main_cards = [f"{e.get('quantity', 1)}x {e.get('card_name', '')}" for e in main_deck]
+            sideboard_cards = [f"{e.get('quantity', 1)}x {e.get('card_name', '')}" for e in sideboard]
+
+            # Format meta matchups with key cards
+            matchup_list = "\n".join([
+                f"- {m.get('archetype', 'Unknown')}: {m.get('meta_percentage', 0):.1f}% of meta. Key cards: {', '.join(m.get('key_cards', [])[:5]) or 'unknown'}"
+                for m in meta_archetypes[:8]  # Top 8 matchups
+            ])
+
+            system_prompt = f"""You are creating a comprehensive sideboard guide for a Magic: The Gathering deck.
+
+DECK: {deck_data.get('name', 'Unknown')} ({archetype})
+
+MAIN DECK ({sum(e.get('quantity', 0) for e in main_deck)} cards):
+{chr(10).join(main_cards)}
+
+SIDEBOARD ({sum(e.get('quantity', 0) for e in sideboard)} cards):
+{chr(10).join(sideboard_cards)}
+
+META MATCHUPS TO ADDRESS:
+{matchup_list}
+
+For EACH matchup, provide:
+1. What cards to bring IN from sideboard (with quantities and reasoning)
+2. What cards to take OUT from main deck (with quantities and reasoning)
+3. Brief strategy notes for the matchup
+4. Key cards to find/keep in opening hand
+5. Opponent's key cards to play around
+
+IMPORTANT: Cards in must equal cards out for each matchup!
+
+Return JSON:
+{{
+    "matchups": [
+        {{
+            "matchup": "Archetype Name",
+            "matchup_description": "Brief description of the matchup",
+            "cards_in": [
+                {{"card_name": "Card", "quantity": 2, "reasoning": "Why bring this in"}}
+            ],
+            "cards_out": [
+                {{"card_name": "Card", "quantity": 2, "reasoning": "Why take this out"}}
+            ],
+            "strategy_notes": "How to approach this matchup post-board",
+            "key_cards_to_find": ["Card1", "Card2"],
+            "cards_to_play_around": ["Opponent's Card1", "Opponent's Card2"]
+        }}
+    ],
+    "general_sideboard_notes": "General advice about sideboarding with this deck"
+}}"""
+
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{"role": "user", "content": f"Generate sideboard plans for all {len(meta_archetypes[:8])} matchups."}],
+            )
+
+            if not response.content:
+                return {"matchups": [], "general_sideboard_notes": "Failed to generate"}
+
+            content = response.content[0].text
+
+            if "{" in content:
+                json_start = content.index("{")
+                json_end = content.rindex("}") + 1
+                result = json.loads(content[json_start:json_end])
+                logger.info(f"Generated sideboard matrix with {len(result.get('matchups', []))} matchups")
+                return result
+
+        except Exception as e:
+            logger.error(f"Failed to generate sideboard matrix: {e}")
+
+        return {"matchups": [], "general_sideboard_notes": "Error generating sideboard guide"}
+
+    async def generate_card_explanations(
+        self,
+        deck_data: Dict[str, Any],
+        archetype: str,
+        strategy: str,
+    ) -> Dict[str, str]:
+        """
+        Generate context-aware explanations for each card in the deck.
+        Explains WHY each card is in THIS specific deck.
+        """
+        if not settings.ANTHROPIC_API_KEY:
+            return {}
+
+        try:
+            import anthropic
+
+            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+            # Collect unique card names from main deck and sideboard
+            main_deck = deck_data.get("main_deck", [])
+            sideboard = deck_data.get("sideboard", [])
+
+            main_cards = [f"{e.get('quantity', 1)}x {e.get('card_name', '')}" for e in main_deck]
+            sideboard_cards = [f"{e.get('quantity', 1)}x {e.get('card_name', '')}" for e in sideboard]
+
+            all_card_names = list(set(
+                [e.get("card_name", "") for e in main_deck] +
+                [e.get("card_name", "") for e in sideboard]
+            ))
+
+            if not all_card_names:
+                return {}
+
+            system_prompt = f"""You are explaining card choices in a Magic: The Gathering deck.
+
+DECK: {deck_data.get('name', 'Unknown')}
+ARCHETYPE: {archetype}
+STRATEGY: {strategy}
+
+MAIN DECK:
+{chr(10).join(main_cards)}
+
+SIDEBOARD:
+{chr(10).join(sideboard_cards)}
+
+For each card, explain in 1-2 sentences:
+1. Its specific role in THIS deck (not generic card description)
+2. What matchups it's important against
+3. When you might sideboard it out (for main deck cards) or in (for sideboard cards)
+
+Return JSON mapping card names to explanations:
+{{
+    "Card Name": "This is your primary removal spell, crucial against creature-based decks. Side out against control where creatures are sparse.",
+    ...
+}}
+
+Be specific to this deck's strategy. Don't just describe what the card does - explain why it's HERE."""
+
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{"role": "user", "content": f"Generate explanations for all {len(all_card_names)} cards."}],
+            )
+
+            if not response.content:
+                return {}
+
+            content = response.content[0].text
+
+            # Extract JSON
+            if "{" in content:
+                json_start = content.index("{")
+                json_end = content.rindex("}") + 1
+                explanations = json.loads(content[json_start:json_end])
+                logger.info(f"Generated explanations for {len(explanations)} cards")
+                return explanations
+
+        except Exception as e:
+            logger.error(f"Failed to generate card explanations: {e}")
+
+        return {}
+
     async def iterate_deck(
         self,
         current_deck: Dict[str, Any],
