@@ -58,9 +58,13 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Connect to Redis
+    # Connect to Redis (mask credentials in log)
     redis_url = settings.REDIS_URL
-    logger.info(f"Connecting to Redis at {redis_url}")
+    # Parse URL to log host without credentials
+    from urllib.parse import urlparse
+    parsed = urlparse(redis_url)
+    safe_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 6379}/{parsed.path.lstrip('/')}"
+    logger.info(f"Connecting to Redis at {safe_url}")
     redis_conn = Redis.from_url(redis_url)
 
     # Test connection
