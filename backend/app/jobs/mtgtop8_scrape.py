@@ -513,10 +513,18 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
                                 )
 
                                 # Create decklist record
+                                # For cEDH, the archetype is the commander name
+                                commander = None
+                                if event_data["format"] == "cedh":
+                                    # Store commander as a list (supports partner commanders)
+                                    # The archetype field from mtgtop8 contains the commander name
+                                    commander = [deck_data["archetype"]]
+
                                 decklist = Decklist(
                                     event_id=event.id,
                                     mtgtop8_deck_id=deck_data["mtgtop8_deck_id"],
                                     archetype=deck_data["archetype"],
+                                    commander=commander,
                                     placement=deck_data["placement"],
                                     main_deck=cards["main_deck"],
                                     sideboard=cards["sideboard"],
