@@ -28,7 +28,14 @@ logger = logging.getLogger(__name__)
 
 MTGTOP8_BASE_URL = "https://www.mtgtop8.com"
 STANDARD_FORMAT_ID = "ST"
+CEDH_FORMAT_ID = "cEDH"
 REQUEST_DELAY = 1.0  # Be nice to the server
+
+# Mapping of internal format names to mtgtop8 format IDs
+FORMAT_CONFIG = {
+    "standard": {"mtgtop8_id": "ST", "name": "Standard"},
+    "cedh": {"mtgtop8_id": "cEDH", "name": "cEDH"},
+}
 
 
 async def fetch_page(client: httpx.AsyncClient, url: str) -> str:
@@ -39,12 +46,17 @@ async def fetch_page(client: httpx.AsyncClient, url: str) -> str:
     return response.text
 
 
-async def scrape_recent_events(client: httpx.AsyncClient, days: int = 14) -> List[Dict[str, Any]]:
-    """Scrape recent Standard events from mtgtop8."""
+async def scrape_recent_events(
+    client: httpx.AsyncClient,
+    format_id: str = STANDARD_FORMAT_ID,
+    format_name: str = "standard",
+    days: int = 14,
+) -> List[Dict[str, Any]]:
+    """Scrape recent events from mtgtop8 for a specific format."""
     events = []
 
-    # Scrape the Standard events page
-    url = f"{MTGTOP8_BASE_URL}/format?f={STANDARD_FORMAT_ID}"
+    # Scrape the format events page
+    url = f"{MTGTOP8_BASE_URL}/format?f={format_id}"
     html = await fetch_page(client, url)
     soup = BeautifulSoup(html, "html.parser")
 
@@ -89,7 +101,7 @@ async def scrape_recent_events(client: httpx.AsyncClient, days: int = 14) -> Lis
                     "mtgtop8_id": event_id,
                     "name": event_name,
                     "date": event_date,
-                    "format": "standard",
+                    "format": format_name,
                     "url": f"{MTGTOP8_BASE_URL}/event?e={event_id}",
                 })
 
@@ -97,7 +109,7 @@ async def scrape_recent_events(client: httpx.AsyncClient, days: int = 14) -> Lis
             logger.warning(f"Error parsing event link: {e}")
             continue
 
-    logger.info(f"Found {len(events)} recent events")
+    logger.info(f"Found {len(events)} recent {format_name} events")
     return events
 
 
@@ -400,16 +412,24 @@ async def update_cooccurrence_data(
     return len(records)
 
 
-async def scrape_mtgtop8() -> Dict[str, Any]:
+async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Main scrape function - downloads tournament data and updates meta snapshots.
+
+    Args:
+        formats: List of format names to scrape (e.g., ["standard", "cedh"]).
+                 If None, scrapes all configured formats.
 
     Returns:
         Dict with scrape statistics
     """
+    if formats is None:
+        formats = list(FORMAT_CONFIG.keys())
+
     start_time = datetime.utcnow()
     stats = {
         "started_at": start_time.isoformat(),
+        "formats_scraped": formats,
         "events_scraped": 0,
         "decklists_scraped": 0,
         "archetypes_updated": 0,
@@ -425,9 +445,24 @@ async def scrape_mtgtop8() -> Dict[str, Any]:
                     "User-Agent": "Spellbook-MTG-Deckbuilder/1.0 (Educational Project)"
                 },
             ) as client:
-                # Scrape recent events
-                events = await scrape_recent_events(client, days=14)
-                stats["events_scraped"] = len(events)
+                # Scrape recent events for each format
+                all_events = []
+                for format_name in formats:
+                    if format_name not in FORMAT_CONFIG:
+                        logger.warning(f"Unknown format: {format_name}, skipping")
+                        continue
+
+                    config = FORMAT_CONFIG[format_name]
+                    events = await scrape_recent_events(
+                        client,
+                        format_id=config["mtgtop8_id"],
+                        format_name=format_name,
+                        days=14,
+                    )
+                    all_events.extend(events)
+
+                stats["events_scraped"] = len(all_events)
+                events = all_events
 
                 for event_data in events:
                     try:
@@ -501,13 +536,18 @@ async def scrape_mtgtop8() -> Dict[str, Any]:
                         stats["errors"].append(f"Event error: {e}")
                         await db.rollback()  # Rollback to recover from error
 
-            # Calculate and update meta percentages
-            archetypes = await calculate_meta_percentages(db)
-            stats["archetypes_updated"] = await update_meta_snapshots(db, archetypes)
+            # Calculate and update meta percentages for each format
+            total_archetypes = 0
+            total_cooccurrences = 0
+            for format_name in formats:
+                archetypes = await calculate_meta_percentages(db, format=format_name)
+                total_archetypes += await update_meta_snapshots(db, archetypes, format=format_name)
 
-            # Calculate and update co-occurrence
-            cooccurrence = await calculate_cooccurrence(db)
-            stats["cooccurrences_updated"] = await update_cooccurrence_data(db, cooccurrence)
+                cooccurrence = await calculate_cooccurrence(db, format=format_name)
+                total_cooccurrences += await update_cooccurrence_data(db, cooccurrence, format=format_name)
+
+            stats["archetypes_updated"] = total_archetypes
+            stats["cooccurrences_updated"] = total_cooccurrences
 
         except Exception as e:
             logger.error(f"mtgtop8 scrape failed: {e}")

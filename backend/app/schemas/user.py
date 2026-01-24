@@ -61,7 +61,7 @@ class PasswordResetConfirm(BaseModel):
 
 class PreferencesUpdate(BaseModel):
     language: Optional[str] = Field(None, pattern="^(en|es|fr|de|pt|ja)$")
-    default_format: Optional[str] = Field(None, pattern="^(standard|historic|modern|legacy)$")
+    default_format: Optional[str] = Field(None, pattern="^(standard|historic|modern|legacy|cedh)$")
 
 
 class PreferencesResponse(BaseModel):

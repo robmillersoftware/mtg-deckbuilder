@@ -11,6 +11,25 @@ from app.services.embedding_service import get_embedding_service
 
 logger = logging.getLogger(__name__)
 
+# Map internal format names to Scryfall legality keys
+FORMAT_LEGALITY_MAP = {
+    "standard": "standard",
+    "historic": "historic",
+    "modern": "modern",
+    "legacy": "legacy",
+    "cedh": "commander",  # cEDH uses Commander legality
+}
+
+
+def get_format_legality_condition(format_name: str):
+    """
+    Get the SQLAlchemy condition for checking card legality in a format.
+    Returns a condition that checks the legalities JSONB field.
+    """
+    legality_key = FORMAT_LEGALITY_MAP.get(format_name, "standard")
+    # Check if legalities->>key = 'legal'
+    return Card.legalities[legality_key].astext == "legal"
+
 
 class CardService:
     """Service for card-related operations including search and semantic lookup."""
@@ -23,10 +42,17 @@ class CardService:
         result = await self.db.execute(select(Card).where(Card.id == card_id))
         return result.scalar_one_or_none()
 
-    async def get_by_name(self, name: str, standard_only: bool = True) -> Optional[Card]:
+    async def get_by_name(
+        self,
+        name: str,
+        standard_only: bool = True,
+        format: Optional[str] = None,
+    ) -> Optional[Card]:
         """Get a card by exact name (case-insensitive). Returns first match if multiple printings exist."""
         query = select(Card).where(func.lower(Card.name) == name.lower())
-        if standard_only:
+        if format and format in FORMAT_LEGALITY_MAP:
+            query = query.where(get_format_legality_condition(format))
+        elif standard_only:
             query = query.where(Card.is_standard_legal == True)
         query = query.limit(1)
         result = await self.db.execute(query)
@@ -85,6 +111,7 @@ class CardService:
         card_type: Optional[str] = None,
         keywords: Optional[List[str]] = None,
         standard_only: bool = True,
+        format: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
     ) -> List[Card]:
@@ -92,7 +119,9 @@ class CardService:
 
         conditions = []
 
-        if standard_only:
+        if format and format in FORMAT_LEGALITY_MAP:
+            conditions.append(get_format_legality_condition(format))
+        elif standard_only:
             conditions.append(Card.is_standard_legal == True)
 
         if q:
@@ -150,6 +179,7 @@ class CardService:
         query: str,
         limit: int = 10,
         standard_only: bool = True,
+        format: Optional[str] = None,
         colors: Optional[List[str]] = None,
     ) -> List[Card]:
         """
@@ -161,7 +191,7 @@ class CardService:
 
         if query_embedding is None:
             logger.info("No embedding available, falling back to text search")
-            return await self.search(q=query, standard_only=standard_only, limit=limit, colors=colors)
+            return await self.search(q=query, standard_only=standard_only, format=format, limit=limit, colors=colors)
 
         try:
             # Build the vector search query using cosine distance (<=>)
@@ -169,7 +199,10 @@ class CardService:
             embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
             conditions = ["embedding IS NOT NULL"]
-            if standard_only:
+            if format and format in FORMAT_LEGALITY_MAP:
+                legality_key = FORMAT_LEGALITY_MAP[format]
+                conditions.append(f"legalities->>'{legality_key}' = 'legal'")
+            elif standard_only:
                 conditions.append("is_standard_legal = true")
             if colors:
                 for color in colors:
@@ -223,6 +256,7 @@ class CardService:
         min_results: int = 3,
         max_results: int = 10,
         use_semantic: bool = True,
+        format: Optional[str] = None,
     ) -> List[Card]:
         """
         Get candidate cards for a specific role based on constraints.
@@ -230,6 +264,7 @@ class CardService:
         Used by the AI to select cards for deck building.
         """
         constraints = constraints or {}
+        format = format or constraints.get("format", "standard")
 
         # If we have a description, try semantic search first
         if description and use_semantic:
@@ -237,7 +272,7 @@ class CardService:
             semantic_results = await self.semantic_search(
                 query=f"{role}: {description}",
                 limit=max_results * 2,
-                standard_only=True,
+                format=format,
                 colors=colors if colors else None,
             )
 
@@ -259,7 +294,10 @@ class CardService:
                     return filtered[:max_results]
 
         # Fall back to database query
-        query = select(Card).where(Card.is_standard_legal == True)
+        if format and format in FORMAT_LEGALITY_MAP:
+            query = select(Card).where(get_format_legality_condition(format))
+        else:
+            query = select(Card).where(Card.is_standard_legal == True)
         conditions = []
 
         # Apply color constraints
@@ -313,7 +351,10 @@ class CardService:
         # Ensure we have at least min_results
         if len(candidates) < min_results:
             # Relax constraints and try again
-            fallback_query = select(Card).where(Card.is_standard_legal == True)
+            if format and format in FORMAT_LEGALITY_MAP:
+                fallback_query = select(Card).where(get_format_legality_condition(format))
+            else:
+                fallback_query = select(Card).where(Card.is_standard_legal == True)
 
             if "type" in constraints:
                 fallback_query = fallback_query.where(

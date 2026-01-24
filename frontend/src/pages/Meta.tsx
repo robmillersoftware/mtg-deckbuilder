@@ -1,23 +1,42 @@
 import { useEffect, useState } from 'react';
-import { metaApi } from '@/services/api';
+import { metaApi, usersApi } from '@/services/api';
 import { MetaArchetype } from '@/types';
 import { CardTooltip } from '@/components/CardTooltip';
 import clsx from 'clsx';
+
+const FORMAT_DISPLAY_NAMES: Record<string, string> = {
+  standard: 'Standard',
+  historic: 'Historic',
+  modern: 'Modern',
+  legacy: 'Legacy',
+  cedh: 'cEDH',
+};
 
 export function MetaPage() {
   const [archetypes, setArchetypes] = useState<MetaArchetype[]>([]);
   const [selectedArchetype, setSelectedArchetype] = useState<MetaArchetype | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [format, setFormat] = useState<string>('standard');
 
   useEffect(() => {
-    loadMeta();
+    loadPreferencesAndMeta();
   }, []);
 
-  const loadMeta = async () => {
+  const loadPreferencesAndMeta = async () => {
     setIsLoading(true);
     try {
-      const response = await metaApi.getDashboard('standard');
+      // Try to get user's preferred format
+      let userFormat = 'standard';
+      try {
+        const prefsResponse = await usersApi.getPreferences();
+        userFormat = prefsResponse.data.default_format || 'standard';
+      } catch {
+        // User not logged in or preferences unavailable, use default
+      }
+      setFormat(userFormat);
+
+      const response = await metaApi.getDashboard(userFormat);
       setArchetypes(response.data.archetypes || []);
       setLastUpdated(response.data.last_updated || null);
     } catch (error) {
@@ -38,7 +57,7 @@ export function MetaPage() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Standard Metagame</h1>
+        <h1 className="text-2xl font-bold text-white">{FORMAT_DISPLAY_NAMES[format] || format} Metagame</h1>
         <p className="text-gray-400 mt-1">
           Current competitive meta breakdown based on tournament results
         </p>

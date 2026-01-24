@@ -108,6 +108,7 @@ export function SettingsPage() {
             <option value="historic">Historic</option>
             <option value="modern">Modern</option>
             <option value="legacy">Legacy</option>
+            <option value="cedh">cEDH</option>
           </select>
         </div>
       </div>
