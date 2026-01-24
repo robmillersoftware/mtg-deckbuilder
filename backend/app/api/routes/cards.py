@@ -17,7 +17,7 @@ from app.schemas.card import (
     CardSelectionResponse,
     SemanticSearchRequest,
 )
-from app.services.card_service import CardService
+from app.services.card_service import CardService, FORMAT_LEGALITY_MAP
 
 router = APIRouter()
 
@@ -30,7 +30,8 @@ async def search_cards(
     cmc_max: Optional[int] = None,
     type: Optional[str] = None,
     rarity: Optional[str] = None,
-    standard_only: bool = True,
+    format: Optional[str] = Query("standard", description="Format to filter by (standard, historic, modern, legacy, cedh)"),
+    standard_only: bool = Query(True, description="Deprecated: use format parameter instead"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -39,11 +40,16 @@ async def search_cards(
     Search cards with various filters.
     Response time target: < 500ms
     """
+    from app.services.card_service import get_format_legality_condition
+
     query = select(Card)
     conditions = []
 
-    # Standard-legal filter
-    if standard_only:
+    # Format-based legality filter
+    if format and format in FORMAT_LEGALITY_MAP:
+        conditions.append(get_format_legality_condition(format))
+    elif standard_only:
+        # Backwards compatibility
         conditions.append(Card.is_standard_legal == True)
 
     # Text search (name or oracle text)
@@ -161,7 +167,7 @@ async def semantic_search_cards(
     cards = await card_service.semantic_search(
         query=request.query,
         limit=request.limit,
-        standard_only=True,
+        format=request.format or 'standard',
     )
     return cards
 
@@ -176,6 +182,8 @@ async def get_candidate_cards(
     Returns 3-10 cards matching the criteria.
     """
     card_service = CardService(db)
+    # Get format from constraints if provided
+    format = (request.constraints or {}).get("format", "standard")
     candidates = await card_service.get_candidates(
         role=request.role,
         description=request.description,
@@ -183,6 +191,7 @@ async def get_candidate_cards(
         exclude_cards=request.exclude_cards,
         min_results=request.min_results,
         max_results=request.max_results,
+        format=format,
     )
 
     return CardCandidateResponse(
@@ -192,6 +201,16 @@ async def get_candidate_cards(
     )
 
 
+def is_card_legal_in_format(card: Card, format: str) -> bool:
+    """Check if a card is legal in the specified format."""
+    if format == "standard":
+        return card.is_standard_legal
+    if card.legalities is None:
+        return False
+    legality_key = FORMAT_LEGALITY_MAP.get(format, "standard")
+    return card.legalities.get(legality_key) == "legal"
+
+
 @router.post("/ai/select-card", response_model=CardSelectionResponse)
 async def select_card(
     request: CardSelectionRequest,
@@ -199,7 +218,7 @@ async def select_card(
 ):
     """
     Validate and confirm card selection from candidates.
-    Verifies the card exists, is standard-legal, and quantity is valid.
+    Verifies the card exists, is legal in the specified format, and quantity is valid.
     """
     result = await db.execute(select(Card).where(Card.id == request.selection))
     card = result.scalar_one_or_none()
@@ -210,17 +229,26 @@ async def select_card(
             detail="Selected card not found in database",
         )
 
-    if not card.is_standard_legal:
+    # Check format legality
+    format = getattr(request, 'format', 'standard') or 'standard'
+    if not is_card_legal_in_format(card, format):
+        format_name = format.upper() if format != "cedh" else "cEDH"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Card '{card.name}' is not Standard-legal",
+            detail=f"Card '{card.name}' is not legal in {format_name}",
         )
 
-    # Check quantity (max 4, except basic lands)
-    if request.quantity > 4 and not card.is_basic_land():
+    # Check quantity (max 4 for most formats, max 1 for singleton formats like cEDH)
+    max_copies = 1 if format == "cedh" else 4
+    if request.quantity > max_copies and not card.is_basic_land():
+        if format == "cedh":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"cEDH is a singleton format - maximum 1 copy allowed for non-basic-land cards",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Maximum 4 copies allowed for non-basic-land cards",
+            detail=f"Maximum {max_copies} copies allowed for non-basic-land cards",
         )
 
     return CardSelectionResponse(
@@ -234,18 +262,23 @@ async def select_card(
 @router.get("/suggestions/{partial_name}", response_model=List[CardResponse])
 async def get_card_suggestions(
     partial_name: str,
+    format: Optional[str] = Query("standard", description="Format to filter by"),
     limit: int = Query(5, ge=1, le=10),
     db: AsyncSession = Depends(get_db),
 ):
     """Get card suggestions for autocomplete based on partial name."""
+    from app.services.card_service import get_format_legality_condition
+
+    conditions = [func.lower(Card.name).like(f"%{partial_name.lower()}%")]
+
+    if format and format in FORMAT_LEGALITY_MAP:
+        conditions.append(get_format_legality_condition(format))
+    else:
+        conditions.append(Card.is_standard_legal == True)
+
     result = await db.execute(
         select(Card)
-        .where(
-            and_(
-                Card.is_standard_legal == True,
-                func.lower(Card.name).like(f"%{partial_name.lower()}%"),
-            )
-        )
+        .where(and_(*conditions))
         .order_by(Card.name)
         .limit(limit)
     )

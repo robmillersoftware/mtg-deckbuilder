@@ -70,6 +70,7 @@ class CardSelectionRequest(BaseModel):
     selection: UUID = Field(..., description="Card ID from the candidate list")
     quantity: int = Field(..., ge=1, le=4)
     reasoning: str = Field(..., description="Explanation for the selection")
+    format: Optional[str] = Field("standard", description="Format for legality check")
 
 
 class CardSelectionResponse(BaseModel):
@@ -86,3 +87,4 @@ class SemanticSearchRequest(BaseModel):
 
     query: str = Field(..., min_length=3, description="Natural language description")
     limit: int = Field(10, ge=5, le=20)
+    format: Optional[str] = Field("standard", description="Format for legality filtering")
