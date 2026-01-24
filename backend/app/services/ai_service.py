@@ -188,6 +188,7 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
         include_sideboard: bool = True,
         specific_cards: List[str] = None,
         archetype_template: Dict[str, Any] = None,
+        format: str = "standard",
     ) -> Dict[str, Any]:
         """
         Generate a complete deck using AI with constrained card selection.
@@ -198,11 +199,12 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
             - avg_lands: average land count
             - avg_nonlands: average nonland count
             - role_distribution: {role: avg_count} targets
+        format: Game format (standard, historic, modern, legacy, cedh)
         """
         specific_cards = specific_cards or []
 
         if not settings.ANTHROPIC_API_KEY:
-            return await self._generate_fallback_deck(archetype, colors, strategy)
+            return await self._generate_fallback_deck(archetype, colors, strategy, format=format)
 
         try:
             import asyncio
@@ -2455,12 +2457,13 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
         archetype: str,
         colors: List[str],
         strategy: str,
+        format: str = "standard",
     ) -> Dict[str, Any]:
         """Generate a basic deck structure as fallback."""
         # Get available cards
         available = await self.card_service.search(
             colors=colors,
-            standard_only=True,
+            format=format,
             limit=100,
         )
 

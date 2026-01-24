@@ -372,6 +372,11 @@ async def generate_deck(
     db: AsyncSession = Depends(get_db),
 ):
     """Generate a deck using AI based on natural language prompt."""
+    # Get user's preferred format
+    format = "standard"
+    if current_user and current_user.preferences:
+        format = current_user.preferences.default_format or "standard"
+
     generator = DeckGenerator(db)
     result = await generator.generate(
         prompt=request.prompt,
@@ -379,6 +384,7 @@ async def generate_deck(
         conversation_id=request.conversation_id,
         include_sideboard=request.include_sideboard,
         include_explanations=request.include_explanations,
+        format=format,
     )
     return result
 
@@ -390,12 +396,18 @@ async def iterate_deck(
     db: AsyncSession = Depends(get_db),
 ):
     """Modify an existing deck based on natural language instructions."""
+    # Get user's preferred format
+    format = "standard"
+    if current_user and current_user.preferences:
+        format = current_user.preferences.default_format or "standard"
+
     generator = DeckGenerator(db)
     result = await generator.iterate(
         modification=request.modification,
         conversation_id=request.conversation_id,
         deck_id=request.deck_id,
         user_id=current_user.id if current_user else None,
+        format=format,
     )
     return result
 

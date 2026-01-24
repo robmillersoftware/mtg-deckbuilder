@@ -44,6 +44,7 @@ class DeckGenerator:
         user_id: Optional[UUID] = None,
         conversation_id: Optional[UUID] = None,
         include_sideboard: bool = True,
+        format: str = "standard",
     ) -> DeckGenerateResponse:
         """
         Generate a deck based on natural language prompt.
@@ -53,6 +54,7 @@ class DeckGenerator:
             user_id: Optional user ID for saving conversation
             conversation_id: Optional existing conversation to continue
             include_sideboard: Whether to generate sideboard
+            format: Game format (standard, historic, modern, legacy, cedh)
 
         Returns:
             DeckGenerateResponse with complete deck and strategy
@@ -67,11 +69,12 @@ class DeckGenerator:
         parsed_request = await self.ai_service.parse_deck_request(prompt)
 
         # Get meta data for context
-        meta_data = await self._get_meta_context()
+        meta_data = await self._get_meta_context(format=format)
 
         # Get archetype template for role distribution guidance
         archetype_template = await self._get_archetype_template(
-            parsed_request.get("archetype", "")
+            parsed_request.get("archetype", ""),
+            format=format,
         )
         if archetype_template:
             logger.info(
@@ -88,17 +91,18 @@ class DeckGenerator:
             include_sideboard=include_sideboard,
             specific_cards=parsed_request.get("specific_cards", []),
             archetype_template=archetype_template,
+            format=format,
         )
 
         # Validate all cards exist and are legal
         main_deck = deck_data.get("main_deck", [])
         sideboard = deck_data.get("sideboard", [])
 
-        validated_main = await self._validate_and_fix_cards(main_deck)
-        validated_sideboard = await self._validate_and_fix_cards(sideboard)
+        validated_main = await self._validate_and_fix_cards(main_deck, format=format)
+        validated_sideboard = await self._validate_and_fix_cards(sideboard, format=format)
 
         # Run deck validation
-        validation = await self.validator.validate(validated_main, validated_sideboard)
+        validation = await self.validator.validate(validated_main, validated_sideboard, format=format)
 
         # Generate unique deck name if user is logged in
         deck_name = deck_data.get("name", "Generated Deck")
@@ -110,7 +114,7 @@ class DeckGenerator:
             id=uuid4(),
             owner_id=user_id,
             name=deck_name,
-            format="standard",
+            format=format,
             archetype=parsed_request.get("archetype"),
             main_deck=validated_main,
             sideboard=validated_sideboard,
@@ -125,6 +129,7 @@ class DeckGenerator:
             "archetype": deck.archetype,
             "main_deck": deck.main_deck,
             "sideboard": deck.sideboard,
+            "format": format,
         }
 
         # Generate response message
@@ -190,6 +195,7 @@ class DeckGenerator:
         conversation_id: Optional[UUID] = None,
         deck_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
+        format: str = "standard",
     ) -> DeckIterateResponse:
         """
         Modify an existing deck based on natural language instructions.
@@ -199,12 +205,14 @@ class DeckGenerator:
             conversation_id: Conversation with current deck context
             deck_id: Alternatively, specify deck ID directly
             user_id: Optional user ID
+            format: Game format (standard, historic, modern, legacy, cedh)
 
         Returns:
             DeckIterateResponse with updated deck and change log
         """
         # Get current deck
         current_deck = None
+        deck_format = format  # Use provided format as default
 
         if conversation_id:
             result = await self.db.execute(
@@ -213,6 +221,8 @@ class DeckGenerator:
             conversation = result.scalar_one_or_none()
             if conversation and conversation.current_deck:
                 current_deck = conversation.current_deck
+                # Use format from conversation if available
+                deck_format = current_deck.get("format", format)
         elif deck_id:
             result = await self.db.execute(select(Deck).where(Deck.id == deck_id))
             deck = result.scalar_one_or_none()
@@ -222,7 +232,9 @@ class DeckGenerator:
                     "archetype": deck.archetype,
                     "main_deck": deck.main_deck,
                     "sideboard": deck.sideboard,
+                    "format": deck.format,
                 }
+                deck_format = deck.format or format
                 conversation = await self._get_or_create_conversation(None, user_id)
 
         if current_deck is None:
@@ -297,9 +309,9 @@ class DeckGenerator:
                     )
 
         # Validate the result
-        validated_main = await self._validate_and_fix_cards(new_main_deck)
-        validated_sideboard = await self._validate_and_fix_cards(new_sideboard)
-        validation = await self.validator.validate(validated_main, validated_sideboard)
+        validated_main = await self._validate_and_fix_cards(new_main_deck, format=deck_format)
+        validated_sideboard = await self._validate_and_fix_cards(new_sideboard, format=deck_format)
+        validation = await self.validator.validate(validated_main, validated_sideboard, format=deck_format)
 
         # Update conversation
         conversation.current_deck = {
@@ -307,6 +319,7 @@ class DeckGenerator:
             "archetype": current_deck.get("archetype"),
             "main_deck": validated_main,
             "sideboard": validated_sideboard,
+            "format": deck_format,
         }
 
         response_message = f"I've made the following changes:\n" + "\n".join(
@@ -322,7 +335,7 @@ class DeckGenerator:
             id=uuid4(),
             owner_id=user_id or uuid4(),
             name=current_deck.get("name", "Modified Deck"),
-            format="standard",
+            format=deck_format,
             archetype=current_deck.get("archetype"),
             main_deck=validated_main,
             sideboard=validated_sideboard,
@@ -403,11 +416,11 @@ class DeckGenerator:
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
         return f"{base_name} ({timestamp})"
 
-    async def _get_meta_context(self) -> Dict[str, Any]:
+    async def _get_meta_context(self, format: str = "standard") -> Dict[str, Any]:
         """Get current meta information for AI context."""
         result = await self.db.execute(
             select(MetaSnapshot)
-            .where(MetaSnapshot.format == "standard")
+            .where(MetaSnapshot.format == format)
             .order_by(MetaSnapshot.meta_percentage.desc())
             .limit(10)
         )
@@ -462,6 +475,7 @@ class DeckGenerator:
     async def _validate_and_fix_cards(
         self,
         card_list: List[Dict[str, Any]],
+        format: str = "standard",
     ) -> List[Dict[str, Any]]:
         """Validate cards exist and get their IDs. Includes card type data for frontend."""
         validated = []
@@ -470,7 +484,7 @@ class DeckGenerator:
             card_name = entry.get("card_name", "")
             quantity = entry.get("quantity", 1)
 
-            card = await self.card_service.get_by_name(card_name)
+            card = await self.card_service.get_by_name(card_name, format=format)
             if card:
                 validated.append({
                     "card_id": str(card.id),
