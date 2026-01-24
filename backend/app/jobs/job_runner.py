@@ -39,11 +39,13 @@ class JobRunner:
         job_func: Callable,
         max_retries: int = MAX_RETRIES,
         base_delay: int = BASE_RETRY_DELAY_SECONDS,
+        run_id: Optional[str] = None,
     ):
         self.job_name = job_name
         self.job_func = job_func
         self.max_retries = max_retries
         self.base_delay = base_delay
+        self.run_id = run_id
 
     async def run(self) -> Dict[str, Any]:
         """
@@ -52,7 +54,7 @@ class JobRunner:
         Returns:
             Dict containing job execution results and metadata
         """
-        run_id = str(uuid4())
+        run_id = self.run_id or str(uuid4())
         start_time = datetime.utcnow()
 
         result = {
@@ -275,40 +277,43 @@ class JobRunner:
 
 
 # Factory functions for creating wrapped job runners
-def create_scryfall_runner() -> JobRunner:
+def create_scryfall_runner(run_id: Optional[str] = None) -> JobRunner:
     """Create a job runner for Scryfall sync."""
     from app.jobs.scryfall_sync import sync_scryfall_cards
 
     return JobRunner(
         job_name="scryfall_sync",
         job_func=sync_scryfall_cards,
+        run_id=run_id,
     )
 
 
-def create_mtgtop8_runner() -> JobRunner:
+def create_mtgtop8_runner(run_id: Optional[str] = None) -> JobRunner:
     """Create a job runner for mtgtop8 scrape."""
     from app.jobs.mtgtop8_scrape import scrape_mtgtop8
 
     return JobRunner(
         job_name="mtgtop8_scrape",
         job_func=scrape_mtgtop8,
+        run_id=run_id,
     )
 
 
-async def run_job_with_retry(job_name: str) -> Dict[str, Any]:
+async def run_job_with_retry(job_name: str, run_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Run a job by name with full retry logic.
 
     Args:
         job_name: Name of the job ("scryfall_sync" or "mtgtop8_scrape")
+        run_id: Optional run ID to use (for tracking jobs triggered via API)
 
     Returns:
         Job execution results
     """
     if job_name == "scryfall_sync":
-        runner = create_scryfall_runner()
+        runner = create_scryfall_runner(run_id=run_id)
     elif job_name == "mtgtop8_scrape":
-        runner = create_mtgtop8_runner()
+        runner = create_mtgtop8_runner(run_id=run_id)
     else:
         raise ValueError(f"Unknown job: {job_name}")
 

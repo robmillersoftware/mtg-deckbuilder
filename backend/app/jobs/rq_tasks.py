@@ -10,6 +10,8 @@ import asyncio
 import logging
 from datetime import datetime
 
+from rq import get_current_job
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,16 +28,30 @@ def _run_async(coro):
         loop.close()
 
 
+def _get_run_id_from_job():
+    """Get the run_id from the current RQ job's metadata or job ID."""
+    job = get_current_job()
+    if job:
+        # First try to get from meta, then fall back to job.id
+        run_id = job.meta.get("run_id") if job.meta else None
+        if not run_id:
+            run_id = job.id
+        logger.info(f"[RQ] Using run_id: {run_id}")
+        return run_id
+    return None
+
+
 def run_scryfall_sync_task():
     """
     RQ task wrapper for Scryfall sync job.
     This runs in a separate worker process.
     """
-    logger.info(f"[RQ] Starting Scryfall sync task at {datetime.utcnow().isoformat()}")
+    run_id = _get_run_id_from_job()
+    logger.info(f"[RQ] Starting Scryfall sync task at {datetime.utcnow().isoformat()} (run_id={run_id})")
 
     from app.jobs.job_runner import run_job_with_retry
 
-    result = _run_async(run_job_with_retry("scryfall_sync"))
+    result = _run_async(run_job_with_retry("scryfall_sync", run_id=run_id))
 
     logger.info(f"[RQ] Scryfall sync completed: {result.get('final_status', 'unknown')}")
     return result
@@ -46,11 +62,12 @@ def run_mtgtop8_scrape_task():
     RQ task wrapper for mtgtop8 scrape job.
     This runs in a separate worker process.
     """
-    logger.info(f"[RQ] Starting mtgtop8 scrape task at {datetime.utcnow().isoformat()}")
+    run_id = _get_run_id_from_job()
+    logger.info(f"[RQ] Starting mtgtop8 scrape task at {datetime.utcnow().isoformat()} (run_id={run_id})")
 
     from app.jobs.job_runner import run_job_with_retry
 
-    result = _run_async(run_job_with_retry("mtgtop8_scrape"))
+    result = _run_async(run_job_with_retry("mtgtop8_scrape", run_id=run_id))
 
     logger.info(f"[RQ] mtgtop8 scrape completed: {result.get('final_status', 'unknown')}")
     return result
