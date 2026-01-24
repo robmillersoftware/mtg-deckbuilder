@@ -61,6 +61,31 @@ services:
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
+  # RQ Worker for background jobs
+  rq-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    container_name: spellbook-rq-worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://spellbook:spellbook@db:5432/spellbook
+      DATABASE_URL_SYNC: postgresql://spellbook:spellbook@db:5432/spellbook
+      REDIS_URL: redis://redis:6379/0
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      APP_URL: http://localhost:3000
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: python rq_worker.py --verbose
+    restart: unless-stopped
+
   # Frontend
   frontend:
     build:

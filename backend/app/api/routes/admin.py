@@ -2,8 +2,6 @@ from typing import Optional, List
 from datetime import datetime
 from uuid import UUID, uuid4
 import logging
-import asyncio
-import threading
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,30 +12,11 @@ from app.models.user import User
 from app.models.card import Card
 from app.models.job import JobRun, JobStatus
 from app.api.deps.auth import get_current_admin_user
+from app.core.queue import job_queue, get_queue_stats
+from app.jobs.rq_tasks import get_task_function
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def run_async_job_in_thread(job_name: str):
-    """Run an async job in a separate thread with its own event loop."""
-    def thread_target():
-        try:
-            logger.info(f"Thread starting for job: {job_name}")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                from app.jobs.scheduler import run_job_manually
-                result = loop.run_until_complete(run_job_manually(job_name))
-                logger.info(f"Job {job_name} completed: {result}")
-            finally:
-                loop.close()
-        except Exception as e:
-            logger.error(f"Job {job_name} failed in thread: {e}", exc_info=True)
-
-    thread = threading.Thread(target=thread_target, daemon=True)
-    thread.start()
-    logger.info(f"Started thread for job: {job_name}")
 
 
 @router.post("/jobs/{job_name}/run")
@@ -47,10 +26,11 @@ async def trigger_job(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Manually trigger a scheduled job.
+    Manually trigger a scheduled job via RQ (Redis Queue).
     Only accessible to admin users.
 
-    The job runs in the background with full retry logic and alerting.
+    The job runs in a separate RQ worker process, independent of the web server,
+    ensuring it persists beyond HTTP request completion.
     """
     valid_jobs = ["scryfall_sync", "mtgtop8_scrape"]
     if job_name not in valid_jobs:
@@ -59,7 +39,14 @@ async def trigger_job(
             detail=f"Invalid job name. Valid options: {valid_jobs}",
         )
 
-    from app.jobs.scheduler import run_job_manually
+    # Get the task function for this job
+    try:
+        task_func = get_task_function(job_name)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
 
     # Create initial job run record
     run_id = str(uuid4())
@@ -71,13 +58,27 @@ async def trigger_job(
     db.add(job_run)
     await db.commit()
 
-    # Run the job in a separate thread to ensure it executes
-    run_async_job_in_thread(job_name)
+    # Enqueue the job to RQ - this runs in a separate worker process
+    try:
+        rq_job = job_queue.enqueue(
+            task_func,
+            job_timeout=3600,  # 1 hour timeout
+            job_id=run_id,  # Use our run_id as RQ job ID for tracking
+            meta={"run_id": run_id, "job_name": job_name},
+        )
+        logger.info(f"Enqueued job {job_name} with RQ job ID: {rq_job.id}")
+    except Exception as e:
+        logger.error(f"Failed to enqueue job {job_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to enqueue job. Is Redis running? Error: {str(e)}",
+        )
 
     return {
         "run_id": run_id,
-        "status": "running",
-        "message": f"Job {job_name} has been started with retry logic enabled",
+        "rq_job_id": rq_job.id,
+        "status": "queued",
+        "message": f"Job {job_name} has been queued for execution by RQ worker",
     }
 
 
@@ -231,9 +232,10 @@ async def backfill_embeddings(
 ):
     """
     Backfill embeddings for cards that don't have them.
-    Runs in the background to avoid timeout.
+    Runs in RQ worker to avoid timeout.
     """
     from app.services.embedding_service import get_embedding_service
+    from app.jobs.rq_tasks import run_embeddings_backfill_task
 
     embedding_service = get_embedding_service()
     if not embedding_service.client:
@@ -242,64 +244,78 @@ async def backfill_embeddings(
             detail="OpenAI API key not configured. Set OPENAI_API_KEY environment variable.",
         )
 
-    def run_backfill_in_thread():
-        """Run backfill in a separate thread."""
-        async def backfill_task():
-            total_updated = 0
-            for batch_num in range(max_batches):
-                async with async_session_factory() as session:
-                    result = await session.execute(
-                        select(Card)
-                        .where(Card.embedding.is_(None))
-                        .where(Card.is_standard_legal == True)
-                        .limit(batch_size)
-                    )
-                    cards = list(result.scalars().all())
-
-                    if not cards:
-                        logger.info(f"Backfill complete. Total cards updated: {total_updated}")
-                        break
-
-                    texts = []
-                    for card in cards:
-                        text = embedding_service._build_card_text(
-                            name=card.name,
-                            type_line=card.type_line,
-                            oracle_text=card.oracle_text,
-                            keywords=card.keywords,
-                        )
-                        texts.append(text)
-
-                    embeddings = await embedding_service.get_embeddings_batch(texts, batch_size=batch_size)
-
-                    batch_updated = 0
-                    for card, embedding in zip(cards, embeddings):
-                        if embedding:
-                            card.embedding = embedding
-                            batch_updated += 1
-
-                    await session.commit()
-                    total_updated += batch_updated
-                    logger.info(f"Backfill batch {batch_num + 1}: updated {batch_updated} cards (total: {total_updated})")
-
-        try:
-            logger.info("Thread starting for embeddings backfill")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(backfill_task())
-            finally:
-                loop.close()
-        except Exception as e:
-            logger.error(f"Embeddings backfill failed in thread: {e}", exc_info=True)
-
-    thread = threading.Thread(target=run_backfill_in_thread, daemon=True)
-    thread.start()
-    logger.info("Started thread for embeddings backfill")
+    # Enqueue to RQ
+    try:
+        run_id = str(uuid4())
+        rq_job = job_queue.enqueue(
+            run_embeddings_backfill_task,
+            batch_size,
+            max_batches,
+            job_timeout=7200,  # 2 hour timeout for large backfills
+            job_id=run_id,
+            meta={"run_id": run_id, "job_name": "embeddings_backfill"},
+        )
+        logger.info(f"Enqueued embeddings backfill with RQ job ID: {rq_job.id}")
+    except Exception as e:
+        logger.error(f"Failed to enqueue embeddings backfill: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to enqueue job. Is Redis running? Error: {str(e)}",
+        )
 
     return {
-        "status": "started",
-        "message": f"Embedding backfill started. Processing up to {max_batches * batch_size} cards.",
+        "status": "queued",
+        "rq_job_id": rq_job.id,
+        "message": f"Embedding backfill queued. Processing up to {max_batches * batch_size} cards.",
         "batch_size": batch_size,
         "max_batches": max_batches,
     }
+
+
+@router.get("/queue/status")
+async def get_queue_status(
+    current_user: User = Depends(get_current_admin_user),
+):
+    """
+    Get RQ queue statistics.
+    Shows pending, failed, and finished jobs.
+    """
+    try:
+        stats = get_queue_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Failed to get queue stats: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to get queue stats. Is Redis running? Error: {str(e)}",
+        )
+
+
+@router.get("/queue/job/{job_id}")
+async def get_rq_job_status(
+    job_id: str,
+    current_user: User = Depends(get_current_admin_user),
+):
+    """
+    Get status of a specific RQ job.
+    """
+    from rq.job import Job
+    from app.core.queue import redis_conn
+
+    try:
+        job = Job.fetch(job_id, connection=redis_conn)
+        return {
+            "job_id": job.id,
+            "status": job.get_status(),
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+            "result": job.result if job.is_finished else None,
+            "exc_info": job.exc_info if job.is_failed else None,
+            "meta": job.meta,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job not found or error fetching: {str(e)}",
+        )
