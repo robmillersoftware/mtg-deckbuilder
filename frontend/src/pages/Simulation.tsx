@@ -21,6 +21,7 @@ export function SimulationPage() {
   const [runs, setRuns] = useState<SimulationRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<SimulationRun | null>(null);
   const [isLoadingRuns, setIsLoadingRuns] = useState(true);
+  const [runsError, setRunsError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoadingArchetypes, setIsLoadingArchetypes] = useState(false);
 
@@ -90,10 +91,14 @@ export function SimulationPage() {
 
   const loadRuns = async () => {
     try {
+      setRunsError(null);
       const response = await simulationApi.listRuns({ limit: 50 });
-      setRuns(response.data.items || []);
-    } catch (error) {
+      setRuns(response.data?.items || []);
+    } catch (error: any) {
       console.error('Failed to load simulation runs:', error);
+      const msg = error.response?.data?.detail || error.message || 'Failed to load simulations';
+      setRunsError(msg);
+      setRuns([]);
     } finally {
       setIsLoadingRuns(false);
     }
@@ -112,15 +117,17 @@ export function SimulationPage() {
     setIsLoadingArchetypes(true);
     try {
       const response = await simulationApi.getAvailableArchetypes(format);
-      setArchetypes(response.data);
-      if (response.data.length > 0 && !response.data.includes(selectedArchetype)) {
-        setSelectedArchetype(response.data[0]);
-      } else if (response.data.length === 0) {
+      const data = response.data || [];
+      setArchetypes(data);
+      if (data.length > 0 && !data.includes(selectedArchetype)) {
+        setSelectedArchetype(data[0]);
+      } else if (data.length === 0) {
         setSelectedArchetype('');
       }
     } catch (error) {
       console.error('Failed to load archetypes:', error);
       setArchetypes([]);
+      setSelectedArchetype('');
     } finally {
       setIsLoadingArchetypes(false);
     }
@@ -300,6 +307,16 @@ export function SimulationPage() {
 
             {isLoadingRuns ? (
               <p className="text-gray-400 text-sm">Loading...</p>
+            ) : runsError ? (
+              <div className="text-sm">
+                <p className="text-red-400 mb-2">{runsError}</p>
+                <button
+                  onClick={() => { setIsLoadingRuns(true); loadRuns(); }}
+                  className="text-indigo-400 hover:text-indigo-300"
+                >
+                  Retry
+                </button>
+              </div>
             ) : runs.length === 0 ? (
               <p className="text-gray-400 text-sm">No simulations yet</p>
             ) : (
