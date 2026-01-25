@@ -64,6 +64,9 @@ async def create_simulation_run(
     """
     Create a new simulation run that executes in the background.
 
+    For 2-player games, provide opponent_archetype.
+    For multiplayer (3-4 players), provide opponent_archetypes list and set num_players.
+
     Returns immediately with the simulation run ID. Poll GET /runs/{id}
     to check status and get results when complete.
     """
@@ -76,6 +79,8 @@ async def create_simulation_run(
             deck_id=request.deck_id,
             opponent_archetype=request.opponent_archetype,
             num_games=request.num_games,
+            opponent_archetypes=request.opponent_archetypes,
+            num_players=request.num_players,
         )
 
         # Queue background execution
@@ -242,6 +247,10 @@ def _run_to_response(sim_run) -> SimulationRunResponse:
         your_deck_name=sim_run.your_deck_name,
         opponent_deck_name=sim_run.opponent_deck_name,
         opponent_archetype=sim_run.opponent_archetype,
+        # Multiplayer fields
+        num_players=sim_run.num_players,
+        opponent_deck_names=sim_run.opponent_deck_names,
+        opponent_archetypes=sim_run.opponent_archetypes,
         format=sim_run.format,
         num_games=sim_run.num_games,
         include_sideboard_games=bool(sim_run.include_sideboard_games),
@@ -249,6 +258,9 @@ def _run_to_response(sim_run) -> SimulationRunResponse:
         current_game_turn=sim_run.current_game_turn,
         your_wins=sim_run.your_wins,
         opponent_wins=sim_run.opponent_wins,
+        # Multiplayer results
+        your_placement_avg=float(sim_run.your_placement_avg) if sim_run.your_placement_avg else None,
+        first_place_count=sim_run.first_place_count,
         win_rate=float(sim_run.win_rate) if sim_run.win_rate else None,
         average_game_length=float(sim_run.average_game_length) if sim_run.average_game_length else None,
         matchup_assessment=sim_run.matchup_assessment,
