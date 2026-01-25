@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.services.card_service import CardService
+from app.services.deck_validator import BASIC_LANDS
 from app.models.meta import Decklist, Event, CardCooccurrence
 
 logger = logging.getLogger(__name__)
@@ -476,18 +477,19 @@ Follow this composition - it's what winning decks actually use.
                     else:
                         role_sections.append(f"{label} (target: ~{int(target_count)} cards)")
 
+                total_deck_size = 99 if format == "cedh" else 60
                 role_distribution_text = f"""
 === ROLE-BASED DECK CONSTRUCTION (from {sample_size} winning {category.upper()} decks) ===
 
-*** LAND COUNT: EXACTLY {int(avg_lands)} LANDS ***
-This is NON-NEGOTIABLE. Tournament {category} decks run {int(avg_lands)} lands.
-You have {60 - int(avg_lands)} slots for non-land cards.
+*** LAND COUNT: APPROXIMATELY {int(avg_lands)} LANDS ***
+Tournament {category} decks run approximately {int(avg_lands)} lands.
+You have {total_deck_size - int(avg_lands)} slots for non-land cards.
 
 Fill these functional slots from the options listed:
 
 {chr(10).join(role_sections)}
 
-REMINDER: {int(avg_lands)} LANDS + {60 - int(avg_lands)} NON-LANDS = 60 CARDS TOTAL.
+REMINDER: ~{int(avg_lands)} LANDS + ~{total_deck_size - int(avg_lands)} NON-LANDS = {total_deck_size} CARDS TOTAL.
 """
                 logger.info(f"Using {category} role distribution from {sample_size} tournament decks")
 
@@ -501,11 +503,67 @@ REMINDER: {int(avg_lands)} LANDS + {60 - int(avg_lands)} NON-LANDS = 60 CARDS TO
             on_color_tournament = await self._filter_tournament_cards_by_color(tournament_card_names, colors)
             print(f"[AI-SERVICE] {len(on_color_tournament)} tournament cards match colors {colors}")
 
-            system_prompt = f"""You are Spellbook, an expert Magic: The Gathering deck builder for Standard format.
+            # Build format-specific rules
+            if format == "cedh":
+                target_lands = archetype_template.get('avg_lands', 30) if archetype_template else 30
+                format_header = f"""You are Spellbook, an expert Magic: The Gathering deck builder for cEDH (competitive Commander).
+
+YOU MUST BUILD A COMPLETE 99-CARD SINGLETON DECK (no sideboard).
+This is a Commander deck - every card except basic lands must be a 1-of.
+
+Colors: {', '.join(colors)}"""
+
+                format_rules = f"""DECK BUILDING RULES (cEDH / Commander):
+1. Main deck = EXACTLY 99 cards (the commander is separate)
+2. NO sideboard - Commander format does not use sideboards
+3. SINGLETON: Maximum 1 copy of each card (except basic lands)
+4. *** LANDS: approximately {int(target_lands)} LANDS ***
+5. ONLY use cards legal in Commander format
+6. Every card's color identity must fit within colors {colors}
+7. For {len(colors)}-color decks: {"Use mostly basic lands." if len(colors) == 1 else "Use appropriate dual lands, fetch lands, and color fixing."}
+8. Include staple cEDH cards: fast mana (Mana Crypt, Sol Ring, Mana Vault, etc.), efficient interaction, and win conditions
+9. EVERY card must have a clear purpose"""
+
+                format_json = """Return JSON with reasoning for key cards:
+{{
+    "name": "Deck Name",
+    "strategy_summary": "2-3 sentence strategy description",
+    "main_deck": [
+        {{"card_name": "Card Name", "quantity": 1, "reason": "Why this card"}}
+    ],
+    "sideboard": []
+}}"""
+            else:
+                target_lands = archetype_template.get('avg_lands', composition.get('avg_lands', 24)) if archetype_template else composition.get('avg_lands', 24)
+                format_header = f"""You are Spellbook, an expert Magic: The Gathering deck builder for Standard format.
 
 YOU MUST BUILD A COMPLETE 60-CARD DECK + 15-CARD SIDEBOARD.
 
-Colors: {', '.join(colors)}
+Colors: {', '.join(colors)}"""
+
+                format_rules = f"""DECK BUILDING RULES:
+1. Main deck = EXACTLY 60 cards
+2. Sideboard = EXACTLY 15 cards
+3. *** LANDS: EXACTLY {target_lands} LANDS *** (this is what tournament decks use - do NOT use fewer!)
+4. Max 4 copies of non-basic cards
+5. ONLY use cards from the PROVEN tournament lists above - these are what actually win
+6. Every non-land card must match colors {colors}
+7. For {len(colors)}-color decks: {"Use mostly basic lands. Fetch lands and fixing are unnecessary." if len(colors) == 1 else "Use appropriate dual lands for fixing."}
+8. EVERY card must have a clear purpose - if you can't explain why it's in the deck, don't include it"""
+
+                format_json = """Return JSON with reasoning for key cards:
+{{
+    "name": "Deck Name",
+    "strategy_summary": "2-3 sentence strategy description",
+    "main_deck": [
+        {{"card_name": "Card Name", "quantity": 4, "reason": "Why this card"}}
+    ],
+    "sideboard": [
+        {{"card_name": "Card Name", "quantity": 3, "reason": "What matchups"}}
+    ]
+}}"""
+
+            system_prompt = f"""{format_header}
 {specific_cards_text}
 {decklist_examples_text}
 {meta_cards_text}
@@ -521,29 +579,11 @@ TOURNAMENT-PLAYED CARDS IN YOUR COLORS (USE THESE):
 MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
 {land_recommendations}
 
-DECK BUILDING RULES:
-1. Main deck = EXACTLY 60 cards
-2. Sideboard = EXACTLY 15 cards
-3. *** LANDS: EXACTLY {archetype_template.get('avg_lands', composition.get('avg_lands', 24)) if archetype_template else composition.get('avg_lands', 24)} LANDS *** (this is what tournament decks use - do NOT use fewer!)
-4. Max 4 copies of non-basic cards
-5. ONLY use cards from the PROVEN tournament lists above - these are what actually win
-6. Every non-land card must match colors {colors}
-7. For {len(colors)}-color decks: {"Use mostly basic lands. Fetch lands and fixing are unnecessary." if len(colors) == 1 else "Use appropriate dual lands for fixing."}
-8. EVERY card must have a clear purpose - if you can't explain why it's in the deck, don't include it
+{format_rules}
 
 USER REQUEST: {archetype} deck
 
-Return JSON with reasoning for key cards:
-{{
-    "name": "Deck Name",
-    "strategy_summary": "2-3 sentence strategy description",
-    "main_deck": [
-        {{"card_name": "Card Name", "quantity": 4, "reason": "Why this card"}}
-    ],
-    "sideboard": [
-        {{"card_name": "Card Name", "quantity": 3, "reason": "What matchups"}}
-    ]
-}}"""
+{format_json}"""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
@@ -579,11 +619,16 @@ Return JSON with reasoning for key cards:
                         if card_name.lower() in valid_name or valid_name in card_name.lower():
                             # Get the proper name from database
                             from app.models.card import Card
+                            from app.services.card_service import FORMAT_LEGALITY_MAP, get_format_legality_condition
                             from sqlalchemy import func
                             query = select(Card.name).where(
                                 func.lower(Card.name).like(f"%{card_name.lower()}%"),
-                                Card.is_standard_legal == True
-                            ).limit(1)
+                            )
+                            if format in FORMAT_LEGALITY_MAP:
+                                query = query.where(get_format_legality_condition(format))
+                            else:
+                                query = query.where(Card.is_standard_legal == True)
+                            query = query.limit(1)
                             result = await self.db.execute(query)
                             proper_name = result.scalar_one_or_none()
                             if proper_name:
@@ -622,8 +667,8 @@ Return JSON with reasoning for key cards:
                 # Filter out cards that don't match the deck's colors
                 deck_data = await self._filter_by_color(deck_data, colors)
 
-                # Fix card counts to ensure 60/15
-                deck_data = await self._fix_deck_counts(deck_data, colors, available_cards)
+                # Fix card counts to match format requirements
+                deck_data = await self._fix_deck_counts(deck_data, colors, available_cards, format=format)
 
                 # Validate total counts
                 main_count = sum(e.get("quantity", 0) for e in deck_data.get("main_deck", []))
@@ -639,7 +684,7 @@ Return JSON with reasoning for key cards:
         except Exception as e:
             logger.error(f"AI deck generation error: {e}", exc_info=True)
 
-        return await self._generate_fallback_deck(archetype, colors, strategy)
+        return await self._generate_fallback_deck(archetype, colors, strategy, format=format)
 
     async def generate_sideboard_matrix(
         self,
@@ -2273,21 +2318,53 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
         deck_data: Dict[str, Any],
         colors: List[str],
         available_cards: List[Dict[str, Any]],
+        format: str = "standard",
     ) -> Dict[str, Any]:
-        """Fix deck to have exactly 60 main deck and 15 sideboard cards with proper land count."""
+        """Fix deck to match format requirements (60 main + 15 side for standard, 99 main + 0 side for cEDH)."""
         from app.models.card import Card
+        from app.services.deck_validator import FORMAT_RULES
         from sqlalchemy import func
+
+        rules = FORMAT_RULES.get(format, FORMAT_RULES["standard"])
+        target_main = rules["main_deck_size"]
+        target_side = rules["sideboard_size"]
+        max_copies = rules["max_copies"]
 
         main_deck = deck_data.get("main_deck", [])
         sideboard = deck_data.get("sideboard", [])
+
+        # For cEDH, clear the sideboard since Commander doesn't use one
+        if format == "cedh":
+            sideboard = []
+            deck_data["sideboard"] = []
+
+        # Enforce singleton for cEDH
+        if max_copies == 1:
+            seen = set()
+            deduped = []
+            for entry in main_deck:
+                card_name = entry.get("card_name", "")
+                if card_name in BASIC_LANDS:
+                    deduped.append(entry)
+                elif card_name not in seen:
+                    seen.add(card_name)
+                    entry["quantity"] = 1
+                    deduped.append(entry)
+                else:
+                    print(f"[AI-SERVICE] Removed duplicate in singleton deck: {card_name}")
+            main_deck = deduped
+            deck_data["main_deck"] = main_deck
 
         # Get basic land for the colors
         basic_land_map = {"W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest"}
         primary_basic = basic_land_map.get(colors[0].upper() if colors else "R", "Mountain")
 
-        # First, ensure we have enough lands (minimum 20 for aggro, 22 for others)
+        # First, ensure we have enough lands
         archetype = deck_data.get("archetype", "").lower()
-        min_lands = 20 if archetype in ["aggro", "burn", "red deck wins"] else 22
+        if format == "cedh":
+            min_lands = 28  # cEDH runs fewer lands due to fast mana
+        else:
+            min_lands = 20 if archetype in ["aggro", "burn", "red deck wins"] else 22
 
         # Count current lands by querying card types
         all_card_names = [entry.get("card_name", "") for entry in main_deck]
@@ -2358,10 +2435,10 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
         main_count = sum(e.get("quantity", 0) for e in main_deck)
         side_count = sum(e.get("quantity", 0) for e in sideboard)
 
-        # Fix main deck
-        if main_count < 60:
-            deficit = 60 - main_count
-            print(f"[AI-SERVICE] Deck has {main_count} cards, need {deficit} more")
+        # Fix main deck to target size
+        if main_count < target_main:
+            deficit = target_main - main_count
+            print(f"[AI-SERVICE] Deck has {main_count} cards, need {deficit} more (target: {target_main})")
 
             # First, try to add more non-land cards from available cards
             existing_cards = {entry.get("card_name", "").lower() for entry in main_deck}
@@ -2379,8 +2456,8 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
             for card in available_nonlands:
                 if deficit <= 0:
                     break
-                # Add 2-4 copies depending on how many we need
-                qty_to_add = min(4, deficit)
+                # Singleton for cEDH, up to 4 for other formats
+                qty_to_add = min(max_copies, deficit)
                 main_deck.append({"card_name": card["name"], "quantity": qty_to_add})
                 deficit -= qty_to_add
                 cards_added += qty_to_add
@@ -2399,9 +2476,9 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
                     main_deck.append({"card_name": primary_basic, "quantity": deficit})
                 print(f"[AI-SERVICE] Added {deficit} {primary_basic} as filler (last resort)")
 
-        elif main_count > 60:
+        elif main_count > target_main:
             # Remove cards from the end (typically less important)
-            excess = main_count - 60
+            excess = main_count - target_main
             while excess > 0 and main_deck:
                 last_entry = main_deck[-1]
                 qty = last_entry.get("quantity", 1)
@@ -2411,42 +2488,43 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
                     print(f"[AI-SERVICE] Removed {qty}x {last_entry.get('card_name')} to reduce main deck")
                 else:
                     last_entry["quantity"] -= excess
-                    print(f"[AI-SERVICE] Reduced {last_entry.get('card_name')} by {excess} to reach 60")
+                    print(f"[AI-SERVICE] Reduced {last_entry.get('card_name')} by {excess} to reach {target_main}")
                     excess = 0
 
-        # Fix sideboard
-        if side_count < 15:
-            # Add basic lands or duplicate existing sideboard cards
-            deficit = 15 - side_count
-            if sideboard:
-                # Try to add more copies of existing sideboard cards
-                for entry in sideboard:
-                    current_qty = entry.get("quantity", 0)
-                    can_add = 4 - current_qty  # Max 4 copies
-                    if can_add > 0:
-                        add = min(can_add, deficit)
-                        entry["quantity"] = current_qty + add
-                        deficit -= add
-                        if deficit <= 0:
-                            break
-            if deficit > 0:
-                # Add basic land as filler
-                sideboard.append({"card_name": primary_basic, "quantity": deficit})
-            print(f"[AI-SERVICE] Fixed sideboard to 15 cards")
+        # Fix sideboard to target size
+        if target_side > 0:
+            if side_count < target_side:
+                # Add basic lands or duplicate existing sideboard cards
+                deficit = target_side - side_count
+                if sideboard:
+                    # Try to add more copies of existing sideboard cards
+                    for entry in sideboard:
+                        current_qty = entry.get("quantity", 0)
+                        can_add = max_copies - current_qty
+                        if can_add > 0:
+                            add = min(can_add, deficit)
+                            entry["quantity"] = current_qty + add
+                            deficit -= add
+                            if deficit <= 0:
+                                break
+                if deficit > 0:
+                    # Add basic land as filler
+                    sideboard.append({"card_name": primary_basic, "quantity": deficit})
+                print(f"[AI-SERVICE] Fixed sideboard to {target_side} cards")
 
-        elif side_count > 15:
-            # Remove cards from sideboard
-            excess = side_count - 15
-            while excess > 0 and sideboard:
-                last_entry = sideboard[-1]
-                qty = last_entry.get("quantity", 1)
-                if qty <= excess:
-                    excess -= qty
-                    sideboard.pop()
-                else:
-                    last_entry["quantity"] -= excess
-                    excess = 0
-            print(f"[AI-SERVICE] Trimmed sideboard to 15 cards")
+            elif side_count > target_side:
+                # Remove cards from sideboard
+                excess = side_count - target_side
+                while excess > 0 and sideboard:
+                    last_entry = sideboard[-1]
+                    qty = last_entry.get("quantity", 1)
+                    if qty <= excess:
+                        excess -= qty
+                        sideboard.pop()
+                    else:
+                        last_entry["quantity"] -= excess
+                        excess = 0
+                print(f"[AI-SERVICE] Trimmed sideboard to {target_side} cards")
 
         deck_data["main_deck"] = main_deck
         deck_data["sideboard"] = sideboard
