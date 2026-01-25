@@ -42,6 +42,10 @@ export function SimulationPage() {
     loadArchetypes(selectedFormat);
   }, [selectedFormat]);
 
+  // Helper to check if format is Commander-related
+  const isCommanderFormat = (format: string) =>
+    ['commander', 'edh', 'cedh', 'duel', 'duel commander'].includes(format.toLowerCase());
+
   // Update format when deck selection changes
   useEffect(() => {
     if (selectedDeckId) {
@@ -49,7 +53,7 @@ export function SimulationPage() {
       if (deck?.format) {
         setSelectedFormat(deck.format);
         // Reset to 2 players for non-Commander formats
-        if (deck.format !== 'commander' && deck.format !== 'edh') {
+        if (!isCommanderFormat(deck.format)) {
           setNumPlayers(2);
         }
       }
@@ -271,7 +275,7 @@ export function SimulationPage() {
               </div>
 
               {/* Player count - show for Commander formats */}
-              {(selectedFormat === 'commander' || selectedFormat === 'edh') && (
+              {isCommanderFormat(selectedFormat) && (
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-1">Players</label>
                   <select
