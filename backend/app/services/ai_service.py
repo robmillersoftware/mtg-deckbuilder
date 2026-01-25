@@ -674,16 +674,31 @@ Commander: {commander_name or 'Not specified'}
 Colors: {', '.join(colors)}"""
 
                 format_rules = f"""DECK BUILDING RULES (cEDH / Commander):
+
+*** CRITICAL: YOU MUST OUTPUT EXACTLY 99 CARDS. NOT 80, NOT 90, EXACTLY 99. ***
+Count your cards before outputting. If you have fewer than 99, add more staples.
+
 1. Main deck = EXACTLY 99 cards (the commander is separate, not counted)
 2. NO sideboard - Commander format does not use sideboards
 3. SINGLETON: Maximum 1 copy of each card (except basic lands)
-4. *** LANDS: approximately {int(target_lands)} LANDS ***
+4. LANDS: approximately {int(target_lands)} lands (~30 for 4-color)
 5. ONLY use cards legal in Commander format (NOT BANNED)
 6. Every card's color identity must fit within colors {colors}
 7. Include ALL applicable cEDH staples listed above (free counters, tutors, fast mana)
 8. Include a clear win condition (usually Thassa's Oracle + Demonic Consultation/Tainted Pact)
 9. If running Tainted Pact: NO duplicate card names (use 1 of each basic, or snow + regular)
-10. BANNED CARDS (DO NOT USE): Mana Crypt, Jeweled Lotus, Flash, Paradox Engine, etc."""
+10. BANNED CARDS (DO NOT USE): Mana Crypt, Jeweled Lotus, Flash, Paradox Engine
+
+CARD COUNT CHECKLIST (must add up to 99):
+- ~30 lands
+- ~10 mana rocks/dorks
+- ~10 counterspells/interaction
+- ~10 tutors
+- ~10 card draw
+- ~5 win condition pieces
+- ~5 removal
+- ~19 flex slots (more interaction, value, protection)
+= 99 TOTAL"""
 
                 format_json = """Return JSON with reasoning for key cards:
 {{
@@ -2665,40 +2680,59 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
             deficit = target_main - main_count
             print(f"[AI-SERVICE] Deck has {main_count} cards, need {deficit} more (target: {target_main})")
 
-            # First, try to add more non-land cards from available cards
+            # First, try to add more non-land cards
             existing_cards = {entry.get("card_name", "").lower() for entry in main_deck}
 
-            # Get non-land available cards that aren't already in the deck
-            available_nonlands = [
-                c for c in available_cards
-                if c.get("name", "").lower() not in existing_cards
-                and not (c.get("type_line") or "").lower().startswith("land")
-                and "land" not in (c.get("type_line") or "").lower().split(" — ")[0].lower()
-            ]
-
-            # For cEDH, prioritize adding staples instead of random cards
+            # For cEDH, add missing staples first (these are critical cards that should always be in the deck)
             if format == "cedh":
                 from app.services.cedh_knowledge import CEDH_STAPLES
-                staple_names = set()
-                for category in CEDH_STAPLES.values():
-                    staple_names.update(card.lower() for card in category.get("cards", []))
 
-                # Sort: cEDH staples first, then others
-                available_nonlands.sort(
-                    key=lambda c: (0 if c.get("name", "").lower() in staple_names else 1, c.get("name", ""))
-                )
+                # Build prioritized list of staples to add
+                staples_to_add = []
+                for category in ["free_counterspells", "tutors", "fast_mana", "efficient_counterspells", "card_advantage", "interaction"]:
+                    if category in CEDH_STAPLES:
+                        for card_name in CEDH_STAPLES[category].get("cards", []):
+                            if card_name.lower() not in existing_cards:
+                                staples_to_add.append(card_name)
 
-            # Add cards from available pool (prefer staples for cEDH)
-            cards_added = 0
-            for card in available_nonlands:
-                if deficit <= 0:
-                    break
-                # Singleton for cEDH, up to 4 for other formats
-                qty_to_add = min(max_copies, deficit)
-                main_deck.append({"card_name": card["name"], "quantity": qty_to_add})
-                deficit -= qty_to_add
-                cards_added += qty_to_add
-                print(f"[AI-SERVICE] Added {qty_to_add}x {card['name']} to fill deck")
+                # Add staples until we have enough cards
+                for card_name in staples_to_add:
+                    if deficit <= 0:
+                        break
+                    # Validate card exists and is legal
+                    from app.models.card import Card
+                    from app.services.card_service import get_format_legality_condition
+                    from sqlalchemy import func
+
+                    query = select(Card.name).where(
+                        func.lower(Card.name) == card_name.lower(),
+                        get_format_legality_condition(format)
+                    ).limit(1)
+                    result = await self.db.execute(query)
+                    valid_name = result.scalar_one_or_none()
+
+                    if valid_name and valid_name.lower() not in existing_cards:
+                        main_deck.append({"card_name": valid_name, "quantity": 1})
+                        existing_cards.add(valid_name.lower())
+                        deficit -= 1
+                        print(f"[AI-SERVICE] Added missing cEDH staple: {valid_name}")
+
+            # If still short, add from available cards (non-cEDH formats or if staples exhausted)
+            if deficit > 0:
+                available_nonlands = [
+                    c for c in available_cards
+                    if c.get("name", "").lower() not in existing_cards
+                    and not (c.get("type_line") or "").lower().startswith("land")
+                    and "land" not in (c.get("type_line") or "").lower().split(" — ")[0].lower()
+                ]
+
+                for card in available_nonlands:
+                    if deficit <= 0:
+                        break
+                    qty_to_add = min(max_copies, deficit)
+                    main_deck.append({"card_name": card["name"], "quantity": qty_to_add})
+                    deficit -= qty_to_add
+                    print(f"[AI-SERVICE] Added {qty_to_add}x {card['name']} to fill deck")
 
             # If still short, add basic lands as last resort
             if deficit > 0:
