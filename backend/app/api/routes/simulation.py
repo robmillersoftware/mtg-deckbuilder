@@ -19,6 +19,7 @@ from app.schemas.simulation import (
     SimulationRunResponse,
     SimulationRunListResponse,
     GameResult,
+    DeckRecommendation,
 )
 
 router = APIRouter()
@@ -270,6 +271,7 @@ def _run_to_response(sim_run) -> SimulationRunResponse:
         sideboard_guide=sim_run.sideboard_guide,
         strategic_advice=sim_run.strategic_advice,
         mulligan_advice=sim_run.mulligan_advice,
+        deck_recommendations=[DeckRecommendation(**r) for r in sim_run.deck_recommendations] if sim_run.deck_recommendations else None,
         error_message=sim_run.error_message,
         created_at=sim_run.created_at,
         started_at=sim_run.started_at,

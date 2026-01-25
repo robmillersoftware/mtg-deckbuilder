@@ -4,6 +4,15 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class DeckRecommendation(BaseModel):
+    """A specific recommendation for improving the deck."""
+    category: str  # "add_cards", "remove_cards", "adjust_quantities", "sideboard", "strategy"
+    priority: str  # "high", "medium", "low"
+    suggestion: str  # The actual recommendation text
+    cards_mentioned: List[str] = []  # Specific cards referenced
+    reasoning: str  # Why this change would help
+
+
 class DeckInput(BaseModel):
     """Deck input for simulation - either a deck ID or raw decklist."""
     deck_id: Optional[UUID] = None
@@ -76,6 +85,9 @@ class MatchupAnalysisResult(BaseModel):
     strategic_advice: List[str]
     mulligan_advice: str
 
+    # Deck improvement recommendations
+    deck_recommendations: Optional[List[DeckRecommendation]] = None
+
     # Individual game summaries
     games: List[GameResult]
 
@@ -133,6 +145,7 @@ class SimulationRunResponse(BaseModel):
     sideboard_guide: Optional[Dict[str, List[str]]] = None
     strategic_advice: Optional[List[str]] = None
     mulligan_advice: Optional[str] = None
+    deck_recommendations: Optional[List[DeckRecommendation]] = None
 
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None

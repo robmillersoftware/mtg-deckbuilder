@@ -320,6 +320,7 @@ class GameSimulator:
             sideboard_guide=analysis.get("sideboard_guide", {"in": [], "out": []}),
             strategic_advice=analysis.get("strategic_advice", []),
             mulligan_advice=analysis.get("mulligan_advice", "Keep hands with a good curve and interaction."),
+            deck_recommendations=analysis.get("deck_recommendations", []),
             games=games,
         )
 
@@ -817,6 +818,7 @@ Return the complete game as JSON."""
                 "sideboard_guide": {"in": [], "out": []},
                 "strategic_advice": ["Configure API key for detailed analysis"],
                 "mulligan_advice": "Keep balanced hands with lands and spells.",
+                "deck_recommendations": [],
             }
 
         import anthropic
@@ -825,39 +827,71 @@ Return the complete game as JSON."""
         # Summarize game results
         game_summaries = []
         for g in games:
+            result_str = 'Won' if g.winner == 'you' else 'Lost'
+            key_cards = ', '.join(g.your_key_cards[:3]) if g.your_key_cards else 'none'
+            opp_cards = ', '.join(g.opponent_key_cards[:3]) if g.opponent_key_cards else 'none'
             game_summaries.append(
-                f"Game {g.game_number}: {'Won' if g.winner == 'you' else 'Lost'} "
-                f"in {g.turns} turns. Key cards: {', '.join(g.your_key_cards[:3])}"
+                f"Game {g.game_number}: {result_str} in {g.turns} turns. "
+                f"Your key cards: {key_cards}. Opponent's key cards: {opp_cards}."
             )
 
-        prompt = f"""Analyze this Magic: The Gathering matchup and provide strategic advice.
+        # Get full decklist for better recommendations
+        main_deck_cards = [e.get('card_name', '') for e in your_deck.get('main_deck', [])]
+        sideboard_cards = [e.get('card_name', '') for e in your_deck.get('sideboard', [])]
+
+        prompt = f"""Analyze this Magic: The Gathering matchup and provide strategic advice AND deck improvement recommendations.
 
 YOUR DECK: {your_deck.get('name')}
-Main cards: {', '.join(e.get('card_name', '') for e in your_deck.get('main_deck', [])[:15])}
-Sideboard: {', '.join(e.get('card_name', '') for e in your_deck.get('sideboard', [])[:10])}
+Full main deck: {', '.join(main_deck_cards)}
+Sideboard: {', '.join(sideboard_cards) if sideboard_cards else 'None'}
 
 OPPONENT DECK: {opponent_deck.get('name')}
-Main cards: {', '.join(e.get('card_name', '') for e in opponent_deck.get('main_deck', [])[:15])}
+Main cards: {', '.join(e.get('card_name', '') for e in opponent_deck.get('main_deck', [])[:20])}
 
 SIMULATION RESULTS ({len(games)} games, {win_rate:.0%} win rate):
 {chr(10).join(game_summaries)}
 
-Provide:
-1. Sideboard guide (which cards to bring in and take out)
-2. 3-5 strategic tips for this matchup
+Based on the simulation results, provide:
+1. Sideboard guide (which cards to bring in and take out for this matchup)
+2. 3-5 strategic tips for playing this matchup
 3. Mulligan advice (what hands to keep/ship)
+4. **Deck improvement recommendations** - specific suggestions for cards to add, remove, or adjust quantities to improve this matchup. Consider:
+   - Cards that consistently underperformed
+   - Types of effects the deck lacks (removal, card draw, threats, etc.)
+   - Cards the opponent played that were hard to answer
+   - Mana curve or color issues observed
 
 Return as JSON:
 {{
     "sideboard_guide": {{"in": ["card1", "card2"], "out": ["card3", "card4"]}},
     "strategic_advice": ["tip1", "tip2", "tip3"],
-    "mulligan_advice": "Keep hands that..."
-}}"""
+    "mulligan_advice": "Keep hands that...",
+    "deck_recommendations": [
+        {{
+            "category": "add_cards",
+            "priority": "high",
+            "suggestion": "Add 2-3 more removal spells to handle early threats",
+            "cards_mentioned": ["Fatal Push", "Go for the Throat"],
+            "reasoning": "Opponent's early creatures went unanswered in multiple games"
+        }},
+        {{
+            "category": "remove_cards",
+            "priority": "medium",
+            "suggestion": "Consider cutting slow cards that don't impact this matchup",
+            "cards_mentioned": ["Card Name"],
+            "reasoning": "This card was too slow against the aggressive opponent"
+        }}
+    ]
+}}
+
+Categories for recommendations: "add_cards", "remove_cards", "adjust_quantities", "sideboard", "strategy"
+Priorities: "high", "medium", "low"
+Provide 2-4 specific, actionable recommendations."""
 
         try:
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=1024,
+                max_tokens=2048,  # Increased for recommendations
                 messages=[{"role": "user", "content": prompt}],
             )
 
@@ -882,6 +916,7 @@ Return as JSON:
             return {
                 "sideboard_guide": {"in": [], "out": []},
                 "strategic_advice": ["Analysis generation failed"],
+                "deck_recommendations": [],
                 "mulligan_advice": "Keep balanced hands.",
             }
 
@@ -1120,6 +1155,12 @@ Return as JSON:
             sim_run.sideboard_guide = match_result.sideboard_guide
             sim_run.strategic_advice = match_result.strategic_advice
             sim_run.mulligan_advice = match_result.mulligan_advice
+            # Store deck recommendations (convert to dicts if they're Pydantic models)
+            if match_result.deck_recommendations:
+                sim_run.deck_recommendations = [
+                    r.model_dump() if hasattr(r, 'model_dump') else r
+                    for r in match_result.deck_recommendations
+                ]
             sim_run.games_completed = sim_run.num_games
 
             await self.db.commit()
