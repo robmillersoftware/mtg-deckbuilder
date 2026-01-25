@@ -596,6 +596,7 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
                     from app.models.card import Card
                     from app.services.card_service import FORMAT_LEGALITY_MAP, get_format_legality_condition
                     from sqlalchemy import func
+                    from rapidfuzz import fuzz
 
                     # Direct database lookup for exact name match with format legality
                     query = select(Card.name).where(
@@ -611,19 +612,32 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
                     if db_name:
                         return db_name
 
-                    # Try fuzzy/partial match in database as fallback
+                    # Try fuzzy match with high similarity threshold
+                    # Only match if the card name starts similarly (first few chars)
+                    first_chars = card_name[:3].lower() if len(card_name) >= 3 else card_name.lower()
                     query = select(Card.name).where(
-                        func.lower(Card.name).like(f"%{card_name.lower()}%"),
+                        func.lower(Card.name).like(f"{first_chars}%"),
                     )
                     if format in FORMAT_LEGALITY_MAP:
                         query = query.where(get_format_legality_condition(format))
                     else:
                         query = query.where(Card.is_standard_legal == True)
-                    query = query.limit(1)
+                    query = query.limit(50)  # Get candidates for fuzzy matching
                     result = await self.db.execute(query)
-                    fuzzy_name = result.scalar_one_or_none()
-                    if fuzzy_name:
-                        return fuzzy_name
+                    candidates = result.scalars().all()
+
+                    # Find best fuzzy match with high threshold
+                    best_match = None
+                    best_score = 0
+                    for candidate in candidates:
+                        score = fuzz.ratio(card_name.lower(), candidate.lower())
+                        if score > best_score and score >= 85:  # Require 85%+ similarity
+                            best_score = score
+                            best_match = candidate
+
+                    if best_match:
+                        logger.debug(f"Fuzzy matched '{card_name}' to '{best_match}' (score: {best_score})")
+                        return best_match
 
                     return None
 

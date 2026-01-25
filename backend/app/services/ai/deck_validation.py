@@ -51,9 +51,10 @@ class DeckValidationMixin:
                     elif all(c in colors_upper for c in card_color_identity):
                         filtered.append(entry)
                     else:
-                        logger.debug(f" Removed off-color card: {card_name} (color_identity: {card_color_identity})")
+                        logger.debug(f"Removed off-color card: {card_name} (color_identity: {card_color_identity})")
                 else:
-                    filtered.append(entry)
+                    # Card not found in database - this is a hallucinated card, remove it
+                    logger.debug(f"Removed unknown card (not in database): {card_name}")
 
             return filtered
 
