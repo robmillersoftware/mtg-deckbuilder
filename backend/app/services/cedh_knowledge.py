@@ -112,6 +112,16 @@ CARDS_TO_AVOID = {
             "Cute synergy pieces without standalone value",
         ],
     },
+    "commander_only_creatures": {
+        "description": "Creatures designed to be commanders, not 99 includes",
+        "examples_to_avoid": [
+            "Creatures whose value comes from being in the command zone",
+            "Creatures that need to be cast multiple times to be good",
+            "Partner commanders (unless you're running that partner pair)",
+            "Mana-intensive commanders that aren't your actual commander",
+        ],
+        "note": "The commander you're building should NOT be in the 99 - it's separate",
+    },
 }
 
 # Primary win conditions in cEDH
@@ -474,6 +484,7 @@ cEDH games typically end on turns 3-5. Every card must be:
 3. **Part of the gameplan** - Advances your win or stops opponents
 
 ### What to AVOID (These are TRAPS that seem good but lose games)
+- **The commander itself in the 99** - The commander is SEPARATE, do NOT include it as a card in the deck
 - **Slow planeswalkers** (4+ mana that don't immediately win) - Too slow, easily killed
 - **"Value over time" cards** - Games don't last long enough
 - **Pillow fort / defensive cards** - Don't advance your win condition
@@ -481,6 +492,7 @@ cEDH games typically end on turns 3-5. Every card must be:
 - **Casual "fun" cards** - This is competitive, not kitchen table
 - **Most equipment and auras** - Too slow, 2-for-1 risk
 - **Cards that need to untap** - You may not get another turn
+- **Other legendary creatures designed to be commanders** - Unless they have specific utility
 
 ### Win Conditions (REQUIRED - every deck needs these)
 Include a primary combo win condition and ideally a backup. Common combos:
@@ -507,11 +519,20 @@ Include a primary combo win condition and ideally a backup. Common combos:
 - If running Tainted Pact: NO duplicate card names (use snow + regular basics)
 - Fast decks with many mana dorks can run fewer lands; slower decks need more
 
-### Anti-Synergy Awareness
-- If your commander costs 4+ mana, DON'T run artifact hate that shuts off your own mana rocks
-- If your deck uses graveyard, DON'T run symmetrical graveyard hate
-- If your deck tutors, DON'T run anti-tutor effects
-- High-CMC commanders need fast mana, not stax that stops it
+### CRITICAL: Anti-Synergy Awareness (READ THIS CAREFULLY)
+**If your commander costs 4+ mana, you NEED artifact mana to cast it. DO NOT include:**
+- Collector Ouphe (turns off ALL your mana rocks)
+- Null Rod (turns off ALL your mana rocks)
+- Stony Silence (turns off ALL your mana rocks)
+- Karn, the Great Creator (turns off ALL your mana rocks)
+
+**Other anti-synergies to avoid:**
+- If your deck uses graveyard: DON'T run Rest in Peace, Leyline of the Void, Dauthi Voidwalker
+- If your deck tutors: DON'T run Opposition Agent, Aven Mindcensor, Leonin Arbiter
+- If your deck casts many spells: DON'T run Rule of Law, Deafening Silence
+
+**Ask yourself: "Does this hate piece hurt ME more than my opponents?"**
+A 7-mana commander CANNOT afford to turn off its own mana acceleration.
 
 ### Final Checklist (VERIFY BEFORE OUTPUTTING)
 - [ ] Exactly 99 cards (not 98, not 100)

@@ -649,8 +649,9 @@ USER REQUEST: {archetype} deck
 
                 # Fix mana base - cEDH needs special handling for fetches/duals
                 if format == "cedh":
-                    # Store target_lands in deck_data for use in _fix_deck_counts
+                    # Store target_lands and commander in deck_data for use in _fix_deck_counts
                     deck_data["target_lands"] = target_lands
+                    deck_data["commander"] = commander_name
                     await self._ensure_cedh_mana_base(deck_data, colors)
                 else:
                     target_lands = int(archetype_template.get('avg_lands', 24)) if archetype_template else 24
@@ -1188,6 +1189,48 @@ Return modifications as JSON:
         if format == "cedh":
             sideboard = []
             deck_data["sideboard"] = []
+
+        # For cEDH, remove the commander from the main deck if present
+        # The commander is separate and not counted in the 99 cards
+        if format == "cedh":
+            commander_name = deck_data.get("commander")
+            if commander_name:
+                original_count = len(main_deck)
+                main_deck = [
+                    entry for entry in main_deck
+                    if entry.get("card_name", "").lower() != commander_name.lower()
+                ]
+                if len(main_deck) < original_count:
+                    print(f"[AI-SERVICE] Removed commander '{commander_name}' from main deck (it's separate)")
+                deck_data["main_deck"] = main_deck
+
+        # For cEDH, check for anti-synergies with expensive commanders
+        # Commanders costing 4+ mana need artifact mana - don't include artifact hate
+        if format == "cedh":
+            commander_name = deck_data.get("commander")
+            if commander_name:
+                # Look up commander's mana value
+                commander_query = select(Card.cmc).where(
+                    func.lower(Card.name) == commander_name.lower()
+                )
+                result = await self.db.execute(commander_query)
+                commander_cmc = result.scalar_one_or_none()
+
+                if commander_cmc and commander_cmc >= 4:
+                    # Remove artifact hate cards that would prevent casting the commander
+                    artifact_hate_cards = {
+                        "collector ouphe", "null rod", "stony silence",
+                        "karn, the great creator", "kataki, war's wage"
+                    }
+                    original_count = len(main_deck)
+                    main_deck = [
+                        entry for entry in main_deck
+                        if entry.get("card_name", "").lower() not in artifact_hate_cards
+                    ]
+                    removed_count = original_count - len(main_deck)
+                    if removed_count > 0:
+                        print(f"[AI-SERVICE] Removed {removed_count} artifact hate cards (anti-synergy with {commander_cmc}-mana commander)")
+                    deck_data["main_deck"] = main_deck
 
         # Enforce singleton for cEDH
         if max_copies == 1:
