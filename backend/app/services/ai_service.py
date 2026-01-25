@@ -654,35 +654,41 @@ USER REQUEST: {archetype} deck
                 json_end = content.rindex("}") + 1
                 deck_data = json.loads(content[json_start:json_end])
 
-                # Build set of valid card names (case-insensitive)
-                valid_card_names = {c["name"].lower() for c in available_cards}
-                # Also add the on-color tournament cards
-                valid_card_names.update(n.lower() for n in on_color_tournament)
-
-                # Helper to find card with fuzzy matching
+                # Helper to validate card exists with proper format legality
+                # Direct database lookup - no pre-fetching needed
                 async def find_valid_card(card_name: str) -> Optional[str]:
-                    # Exact match
-                    if card_name.lower() in valid_card_names:
-                        return card_name
-                    # Partial match (e.g., "Tezzeret" matches "Tezzeret, Cruel Captain")
-                    for valid_name in valid_card_names:
-                        if card_name.lower() in valid_name or valid_name in card_name.lower():
-                            # Get the proper name from database
-                            from app.models.card import Card
-                            from app.services.card_service import FORMAT_LEGALITY_MAP, get_format_legality_condition
-                            from sqlalchemy import func
-                            query = select(Card.name).where(
-                                func.lower(Card.name).like(f"%{card_name.lower()}%"),
-                            )
-                            if format in FORMAT_LEGALITY_MAP:
-                                query = query.where(get_format_legality_condition(format))
-                            else:
-                                query = query.where(Card.is_standard_legal == True)
-                            query = query.limit(1)
-                            result = await self.db.execute(query)
-                            proper_name = result.scalar_one_or_none()
-                            if proper_name:
-                                return proper_name
+                    from app.models.card import Card
+                    from app.services.card_service import FORMAT_LEGALITY_MAP, get_format_legality_condition
+                    from sqlalchemy import func
+
+                    # Direct database lookup for exact name match with format legality
+                    query = select(Card.name).where(
+                        func.lower(Card.name) == card_name.lower(),
+                    )
+                    if format in FORMAT_LEGALITY_MAP:
+                        query = query.where(get_format_legality_condition(format))
+                    else:
+                        query = query.where(Card.is_standard_legal == True)
+                    query = query.limit(1)
+                    result = await self.db.execute(query)
+                    db_name = result.scalar_one_or_none()
+                    if db_name:
+                        return db_name
+
+                    # Try fuzzy/partial match in database as fallback
+                    query = select(Card.name).where(
+                        func.lower(Card.name).like(f"%{card_name.lower()}%"),
+                    )
+                    if format in FORMAT_LEGALITY_MAP:
+                        query = query.where(get_format_legality_condition(format))
+                    else:
+                        query = query.where(Card.is_standard_legal == True)
+                    query = query.limit(1)
+                    result = await self.db.execute(query)
+                    fuzzy_name = result.scalar_one_or_none()
+                    if fuzzy_name:
+                        return fuzzy_name
+
                     return None
 
                 # Filter main deck to only valid cards
