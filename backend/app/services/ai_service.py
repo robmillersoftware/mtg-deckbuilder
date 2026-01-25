@@ -412,13 +412,28 @@ REMINDER: ~{int(avg_lands)} LANDS + ~{total_deck_size - int(avg_lands)} NON-LAND
             if format == "cedh":
                 from app.services.cedh_knowledge import get_cedh_system_prompt, CEDH_STAPLES
 
-                target_lands = archetype_template.get('avg_lands', 30) if archetype_template else 30
+                # Use actual tournament data for land count when available
+                # Priority: archetype_template > composition from meta > reasonable default
+                if archetype_template and archetype_template.get('avg_lands'):
+                    target_lands = int(archetype_template['avg_lands'])
+                    print(f"[AI-SERVICE] Using archetype template land count: {target_lands}")
+                elif composition.get('sample_size', 0) > 0:
+                    target_lands = composition.get('avg_lands', 29)
+                    print(f"[AI-SERVICE] Using tournament meta land count: {target_lands} (from {composition['sample_size']} decks)")
+                else:
+                    # Fallback only when no tournament data available
+                    target_lands = 29
+                    print(f"[AI-SERVICE] No tournament data, using default land count: {target_lands}")
 
                 # Get commander name from specific_cards if available
                 commander_name = specific_cards[0] if specific_cards else None
 
-                # Get comprehensive cEDH knowledge
-                cedh_knowledge = get_cedh_system_prompt(commander=commander_name, colors=colors)
+                # Get comprehensive cEDH knowledge (now with strategy awareness)
+                cedh_knowledge = get_cedh_system_prompt(
+                    commander=commander_name,
+                    colors=colors,
+                    strategy=strategy
+                )
 
                 format_header = f"""You are Spellbook, an expert cEDH (competitive Commander) deck builder.
 
@@ -436,23 +451,24 @@ Count your cards before outputting. If you have fewer than 99, add more staples.
 1. Main deck = EXACTLY 99 cards (the commander is separate, not counted)
 2. NO sideboard - Commander format does not use sideboards
 3. SINGLETON: Maximum 1 copy of each card (except basic lands)
-4. LANDS: approximately {int(target_lands)} lands (~30 for 4-color)
+4. LANDS: approximately {int(target_lands)} lands (based on tournament data)
 5. ONLY use cards legal in Commander format (NOT BANNED)
 6. Every card's color identity must fit within colors {colors}
 7. Include ALL applicable cEDH staples listed above (free counters, tutors, fast mana)
 8. Include a clear win condition (usually Thassa's Oracle + Demonic Consultation/Tainted Pact)
 9. If running Tainted Pact: NO duplicate card names (use 1 of each basic, or snow + regular)
 10. BANNED CARDS (DO NOT USE): Mana Crypt, Jeweled Lotus, Flash, Paradox Engine
+11. DO NOT include casual/"fun" cards - every card must be competitively viable
 
 CARD COUNT CHECKLIST (must add up to 99):
-- ~30 lands
-- ~10 mana rocks/dorks
-- ~10 counterspells/interaction
+- ~{target_lands} lands (fetches, duals, shocks, rainbow lands)
+- ~12 mana rocks/dorks
+- ~12 counterspells (free counters + cheap counters)
 - ~10 tutors
-- ~10 card draw
-- ~5 win condition pieces
-- ~5 removal
-- ~19 flex slots (more interaction, value, protection)
+- ~8 card draw engines
+- ~6 win condition pieces
+- ~6 removal/interaction
+- ~{99 - target_lands - 54} flex slots (hatebears, protection)
 = 99 TOTAL"""
 
                 format_json = """Return JSON with reasoning for key cards:
@@ -633,6 +649,8 @@ USER REQUEST: {archetype} deck
 
                 # Fix mana base - cEDH needs special handling for fetches/duals
                 if format == "cedh":
+                    # Store target_lands in deck_data for use in _fix_deck_counts
+                    deck_data["target_lands"] = target_lands
                     await self._ensure_cedh_mana_base(deck_data, colors)
                 else:
                     target_lands = int(archetype_template.get('avg_lands', 24)) if archetype_template else 24
@@ -1195,7 +1213,11 @@ Return modifications as JSON:
         # First, ensure we have enough lands
         archetype = deck_data.get("archetype", "").lower()
         if format == "cedh":
-            min_lands = 28  # cEDH runs fewer lands due to fast mana
+            # Use target_lands from deck_data if available (set during generation from tournament data)
+            # Otherwise use a reasonable minimum that doesn't over-constrain
+            min_lands = deck_data.get("target_lands", 28)
+            # Ensure minimum sanity check - cEDH rarely goes below 27
+            min_lands = max(min_lands - 2, 27)  # Allow some variance below target
         else:
             min_lands = 20 if archetype in ["aggro", "burn", "red deck wins"] else 22
 

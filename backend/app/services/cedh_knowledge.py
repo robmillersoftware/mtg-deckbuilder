@@ -7,6 +7,113 @@ including common win conditions, staples, and commander-specific packages.
 
 from typing import Dict, List, Any
 
+# =============================================================================
+# COMPETITIVE VIABILITY GUIDANCE
+# =============================================================================
+
+# Strategies that are NOT competitive in cEDH and should be avoided/redirected
+NON_VIABLE_STRATEGIES = {
+    "superfriends": {
+        "reason": "Planeswalkers are too slow and vulnerable. Games end turns 3-5, not turn 10+.",
+        "redirect_to": "stax_control",
+        "note": "If running a planeswalker commander, build around efficient combos, not loyalty abilities.",
+    },
+    "battlecruiser": {
+        "reason": "Big splashy spells and creatures are too slow. cEDH is about efficiency.",
+        "redirect_to": "combo",
+    },
+    "tribal": {
+        "reason": "Most tribal synergies are too slow and weak. Exceptions exist for hatebear-heavy builds.",
+        "redirect_to": "midrange",
+    },
+    "voltron": {
+        "reason": "Commander damage is too slow and easily disrupted. 21 damage takes too long.",
+        "redirect_to": "combo",
+    },
+    "landfall": {
+        "reason": "Land-based value engines are too slow for cEDH.",
+        "redirect_to": "combo",
+    },
+    "group_hug": {
+        "reason": "Giving opponents resources accelerates their wins, not yours.",
+        "redirect_to": "stax",
+    },
+    "mill": {
+        "reason": "Milling opponents is too slow. Self-mill for combo wins is fine.",
+        "redirect_to": "combo",
+    },
+}
+
+# Viable cEDH archetypes with descriptions
+CEDH_ARCHETYPES = {
+    "turbo": {
+        "description": "Race to combo win as fast as possible, typically turns 2-4",
+        "characteristics": ["Minimal interaction", "Maximum speed", "All-in on combo"],
+        "land_count": "28-30",
+        "ideal_for": "Fast combo commanders with built-in card advantage",
+    },
+    "midrange": {
+        "description": "Balanced approach with good interaction and multiple combo lines",
+        "characteristics": ["Moderate interaction", "Value engines", "Flexible gameplan"],
+        "land_count": "30-32",
+        "ideal_for": "4+ color commanders, value-oriented commanders",
+    },
+    "stax": {
+        "description": "Slow the game down with hate pieces while assembling your win",
+        "characteristics": ["Heavy disruption", "Tax effects", "Resource denial"],
+        "land_count": "30-32",
+        "ideal_for": "Commanders that break parity on stax pieces",
+    },
+    "control": {
+        "description": "Heavy interaction to stop opponents, win through attrition",
+        "characteristics": ["Counter-heavy", "Removal-heavy", "Patience"],
+        "land_count": "32-34",
+        "ideal_for": "Blue-heavy commanders with card advantage",
+    },
+}
+
+# Card categories to AVOID in cEDH (these are "trap" cards that seem good but aren't)
+CARDS_TO_AVOID = {
+    "slow_planeswalkers": {
+        "description": "Planeswalkers costing 4+ mana that don't immediately win or provide massive value",
+        "examples_to_avoid": [
+            "Most 5+ mana planeswalkers",
+            "Planeswalkers that need to tick up to be useful",
+            "Planeswalkers without game-winning ultimates",
+        ],
+        "exceptions": [
+            "Teferi, Time Raveler (3 mana, immediate value, stops interaction)",
+            "Narset, Parter of Veils (3 mana, shuts down opponents)",
+            "Oko, Thief of Crowns (3 mana, immediate threat neutralization)",
+        ],
+    },
+    "casual_value_engines": {
+        "description": "Cards that generate value over many turns",
+        "examples_to_avoid": [
+            "Most equipment (too slow to equip)",
+            "Most auras (2-for-1 risk)",
+            "Cards that need to survive a turn cycle",
+            "Pillow fort cards (don't advance your win)",
+        ],
+    },
+    "overcosted_interaction": {
+        "description": "Removal or counterspells costing 3+ mana",
+        "examples_to_avoid": [
+            "Most 4+ mana counterspells",
+            "Most 3+ mana targeted removal",
+            "Board wipes without additional value",
+        ],
+    },
+    "win_more_cards": {
+        "description": "Cards that are only good when you're already winning",
+        "examples_to_avoid": [
+            "Cards that double effects (usually too slow)",
+            "Cards that need other cards to function",
+            "Cute synergy pieces without standalone value",
+        ],
+    },
+}
+
 # Primary win conditions in cEDH
 WIN_CONDITIONS = {
     "thoracle": {
@@ -326,10 +433,31 @@ This severely constrains mana base construction but enables a 2-card win conditi
 """
 
 
-def get_cedh_system_prompt(commander: str = None, colors: List[str] = None) -> str:
+def get_cedh_system_prompt(commander: str = None, colors: List[str] = None, strategy: str = None) -> str:
     """Generate a cEDH-specific system prompt for deck building."""
-    prompt = """You are building a competitive cEDH (Competitive Elder Dragon Highlander) deck.
 
+    # Check if the requested strategy is non-viable and needs redirection
+    strategy_warning = ""
+    if strategy:
+        strategy_lower = strategy.lower()
+        for non_viable, info in NON_VIABLE_STRATEGIES.items():
+            if non_viable in strategy_lower:
+                strategy_warning = f"""
+*** STRATEGY WARNING ***
+"{strategy}" is NOT a competitive cEDH strategy.
+Reason: {info['reason']}
+{info.get('note', '')}
+Instead, build a competitive {info['redirect_to']} deck that can actually win in cEDH.
+"""
+                break
+
+    # Note: Actual land count should be derived from tournament data
+    # These are only fallback guidelines if no tournament data is available
+    # Many cEDH decks run 28-30 lands regardless of color count
+    num_colors = len(colors) if colors else 1
+
+    prompt = f"""You are building a competitive cEDH (Competitive Elder Dragon Highlander) deck.
+{strategy_warning}
 ## cEDH Format Rules
 - Exactly 100 cards (99 + commander)
 - Singleton: only 1 copy of each card except basic lands
@@ -339,36 +467,59 @@ def get_cedh_system_prompt(commander: str = None, colors: List[str] = None) -> s
 
 ## cEDH Deck Building Principles
 
-### Win Conditions
-Include a primary combo win condition and ideally a backup. Common combos include Thassa's Oracle lines, Food Chain loops, Underworld Breach combos, or commander-specific wins.
+### CRITICAL: What Makes cEDH Different from Casual Commander
+cEDH games typically end on turns 3-5. Every card must be:
+1. **Efficient** - Low mana cost relative to impact
+2. **Immediately impactful** - No waiting for value over time
+3. **Part of the gameplan** - Advances your win or stops opponents
 
-### Card Roles (fill these categories based on your colors)
-- **Fast Mana**: Mana-positive rocks, rituals, and mana dorks to accelerate your gameplan
-- **Tutors**: Search effects to find combo pieces consistently
-- **Card Advantage**: Efficient draw and selection to maintain resources
-- **Free/Cheap Counterspells**: Protection for your combos and disruption for opponents
-- **Interaction**: Efficient removal for creatures, artifacts, and enchantments
-- **Hatebears/Stax**: Creatures that disrupt opponents (e.g., prevent tutoring, tax spells, stop combos)
-- **Utility Creatures**: Value creatures that provide card advantage or protect your strategy
+### What to AVOID (These are TRAPS that seem good but lose games)
+- **Slow planeswalkers** (4+ mana that don't immediately win) - Too slow, easily killed
+- **"Value over time" cards** - Games don't last long enough
+- **Pillow fort / defensive cards** - Don't advance your win condition
+- **Synergy-dependent cards** - Must be good on their own
+- **Casual "fun" cards** - This is competitive, not kitchen table
+- **Most equipment and auras** - Too slow, 2-for-1 risk
+- **Cards that need to untap** - You may not get another turn
 
-### Mana Base
-- Run all on-color fetch lands and dual lands (original duals or shocks)
-- Include rainbow lands for fixing
-- Keep basic land count very low (1-3 total)
-- If running Tainted Pact, ensure no duplicate card names
+### Win Conditions (REQUIRED - every deck needs these)
+Include a primary combo win condition and ideally a backup. Common combos:
+- Thassa's Oracle + Demonic Consultation/Tainted Pact (most common)
+- Underworld Breach loops
+- Food Chain (if running eligible creatures)
+- Commander-specific combos
+
+### Card Roles (fill ALL these categories based on your colors)
+- **Fast Mana (10-15 cards)**: Mana rocks, rituals, and 1-mana dorks
+- **Tutors (8-12 cards)**: Search effects to find combo pieces
+- **Card Advantage (8-12 cards)**: Efficient draw (Rhystic Study, Mystic Remora, etc.)
+- **Free/Cheap Counterspells (10-15 cards)**: Free counters + 1-2 mana counters
+- **Interaction (5-8 cards)**: 1-2 mana targeted removal
+- **Hatebears (3-6 cards)**: Creatures that disrupt opponents
+- **Combo Pieces (5-8 cards)**: Your win condition and enablers
+
+### Mana Base (typically 28-31 lands depending on deck speed and mana dork count)
+- ALL on-color fetch lands (crucial for deck thinning and color fixing)
+- ALL on-color original dual lands and shock lands
+- Rainbow lands for 3+ color decks (Command Tower, City of Brass, Mana Confluence)
+- Ancient Tomb (colorless but 2 mana)
+- Very few basic lands (1-3 total) - only for fetch targets
+- If running Tainted Pact: NO duplicate card names (use snow + regular basics)
+- Fast decks with many mana dorks can run fewer lands; slower decks need more
 
 ### Anti-Synergy Awareness
-Consider how your hate pieces interact with your own gameplan:
-- If your deck relies heavily on artifact mana (especially for casting an expensive commander), avoid symmetrical artifact hate
-- If your deck uses the graveyard, avoid symmetrical graveyard hate
-- If your deck needs to tutor, avoid cards that prevent searching libraries
-- High-CMC commanders that need fast mana should NOT run cards that shut off their own acceleration
+- If your commander costs 4+ mana, DON'T run artifact hate that shuts off your own mana rocks
+- If your deck uses graveyard, DON'T run symmetrical graveyard hate
+- If your deck tutors, DON'T run anti-tutor effects
+- High-CMC commanders need fast mana, not stax that stops it
 
-### General Guidelines
-- Keep mana curve extremely low (average CMC under 2.0 ideally)
-- Prioritize efficiency - every card should have high impact for its cost
-- Balance between proactive (advancing your plan) and reactive (stopping opponents)
-- Consider your commander's mana cost when choosing acceleration and hate pieces
+### Final Checklist (VERIFY BEFORE OUTPUTTING)
+- [ ] Exactly 99 cards (not 98, not 100)
+- [ ] Appropriate land count (use tournament data if provided)
+- [ ] Clear win condition present
+- [ ] No cards over 4 mana without exceptional reason
+- [ ] Every card has a purpose (if you can't explain it, cut it)
+- [ ] No "cute" synergies that don't win the game
 
 """
     return prompt
