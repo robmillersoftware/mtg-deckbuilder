@@ -1209,10 +1209,10 @@ Return modifications as JSON:
         if format == "cedh":
             commander_name = deck_data.get("commander")
             if commander_name:
-                # Look up commander's mana value
+                # Look up commander's mana value (limit 1 since multiple printings exist)
                 commander_query = select(Card.cmc).where(
                     func.lower(Card.name) == commander_name.lower()
-                )
+                ).limit(1)
                 result = await self.db.execute(commander_query)
                 commander_cmc = result.scalar_one_or_none()
 
