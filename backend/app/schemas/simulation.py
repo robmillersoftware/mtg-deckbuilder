@@ -33,14 +33,18 @@ class GameAction(BaseModel):
 class GameResult(BaseModel):
     """Result of a single simulated game."""
     game_number: int
-    winner: str  # "you" or "opponent"
+    winner: str  # "you" or "opponent" (or "opponent_1", "opponent_2", "opponent_3" for multiplayer)
     turns: int
     your_life: int
-    opponent_life: int
-    win_condition: str  # "damage", "decked", "concede", etc.
+    opponent_life: int  # For 2-player games
+    # For multiplayer games (Commander), track all life totals
+    life_totals: Optional[Dict[str, int]] = None  # {"you": 40, "opponent_1": 35, ...}
+    elimination_order: Optional[List[str]] = None  # Order players were eliminated
+    win_condition: str  # "damage", "decked", "concede", "commander_damage", etc.
     key_moments: List[str]  # Important plays that swung the game
     your_key_cards: List[str]  # Cards that performed well
-    opponent_key_cards: List[str]
+    opponent_key_cards: List[str]  # For 2-player or combined opponents
+    opponent_key_cards_by_player: Optional[Dict[str, List[str]]] = None  # Per-opponent in multiplayer
     sideboard_in: Optional[List[str]] = None  # Cards you sided in (games 2-3)
     sideboard_out: Optional[List[str]] = None
 
@@ -48,10 +52,15 @@ class GameResult(BaseModel):
 class MatchupAnalysisResult(BaseModel):
     """Aggregated analysis from multiple game simulations."""
     your_deck_name: str
-    opponent_deck_name: str
+    opponent_deck_name: str  # For 2-player or combined description
+    opponent_deck_names: Optional[List[str]] = None  # For multiplayer
+    num_players: int = 2
     games_played: int
     your_wins: int
-    opponent_wins: int
+    opponent_wins: int  # For 2-player
+    # Multiplayer stats
+    first_place_count: Optional[int] = None  # Games where you finished 1st
+    your_placement_avg: Optional[float] = None  # Average finishing position
     win_rate: float
     average_game_length: float
 
@@ -83,10 +92,12 @@ class SimulationStatus(BaseModel):
 
 
 class QuickSimRequest(BaseModel):
-    """Quick simulation against a meta archetype."""
+    """Quick simulation against meta archetype(s)."""
     deck_id: UUID
-    opponent_archetype: str  # e.g., "Mono-Red Aggro", "Azorius Control"
+    opponent_archetype: Optional[str] = None  # e.g., "Mono-Red Aggro" (for 2-player)
+    opponent_archetypes: Optional[List[str]] = None  # For multiplayer (up to 3 opponents)
     num_games: int = Field(default=5, ge=1, le=10)
+    num_players: int = Field(default=2, ge=2, le=4)  # 2-4 players (4 for Commander)
 
 
 class SimulationRunResponse(BaseModel):
@@ -95,8 +106,12 @@ class SimulationRunResponse(BaseModel):
     status: str
     your_deck_id: Optional[UUID] = None
     your_deck_name: str
-    opponent_deck_name: str
-    opponent_archetype: Optional[str] = None
+    opponent_deck_name: str  # For 2-player or combined name
+    opponent_archetype: Optional[str] = None  # For 2-player
+    # Multiplayer support
+    num_players: int = 2
+    opponent_deck_names: Optional[List[str]] = None  # For multiplayer
+    opponent_archetypes: Optional[List[str]] = None  # For multiplayer
     format: str
     num_games: int
     include_sideboard_games: bool
@@ -105,7 +120,10 @@ class SimulationRunResponse(BaseModel):
 
     # Results (when completed)
     your_wins: Optional[int] = None
-    opponent_wins: Optional[int] = None
+    opponent_wins: Optional[int] = None  # For 2-player
+    # Multiplayer results
+    your_placement_avg: Optional[float] = None  # Average finishing position (1st = best)
+    first_place_count: Optional[int] = None  # How many games you won outright
     win_rate: Optional[float] = None
     average_game_length: Optional[float] = None
     matchup_assessment: Optional[str] = None

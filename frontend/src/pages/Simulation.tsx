@@ -16,11 +16,15 @@ export function SimulationPage() {
   const [archetypes, setArchetypes] = useState<string[]>([]);
   const [selectedArchetype, setSelectedArchetype] = useState<string>('');
   const [numGames, setNumGames] = useState<number>(5);
+  // Multiplayer support
+  const [numPlayers, setNumPlayers] = useState<number>(2);
+  const [selectedOpponents, setSelectedOpponents] = useState<string[]>(['', '', '']); // Up to 3 opponents
 
   // Simulation runs state
   const [runs, setRuns] = useState<SimulationRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<SimulationRun | null>(null);
   const [isLoadingRuns, setIsLoadingRuns] = useState(true);
+  const [runsError, setRunsError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoadingArchetypes, setIsLoadingArchetypes] = useState(false);
 
@@ -44,6 +48,10 @@ export function SimulationPage() {
       const deck = decks.find((d) => d.id === selectedDeckId);
       if (deck?.format) {
         setSelectedFormat(deck.format);
+        // Reset to 2 players for non-Commander formats
+        if (deck.format !== 'commander' && deck.format !== 'edh') {
+          setNumPlayers(2);
+        }
       }
     }
   }, [selectedDeckId, decks]);
@@ -90,10 +98,14 @@ export function SimulationPage() {
 
   const loadRuns = async () => {
     try {
+      setRunsError(null);
       const response = await simulationApi.listRuns({ limit: 50 });
-      setRuns(response.data.items || []);
-    } catch (error) {
+      setRuns(response.data?.items || []);
+    } catch (error: any) {
       console.error('Failed to load simulation runs:', error);
+      const msg = error.response?.data?.detail || error.message || 'Failed to load simulations';
+      setRunsError(msg);
+      setRuns([]);
     } finally {
       setIsLoadingRuns(false);
     }
@@ -112,15 +124,17 @@ export function SimulationPage() {
     setIsLoadingArchetypes(true);
     try {
       const response = await simulationApi.getAvailableArchetypes(format);
-      setArchetypes(response.data);
-      if (response.data.length > 0 && !response.data.includes(selectedArchetype)) {
-        setSelectedArchetype(response.data[0]);
-      } else if (response.data.length === 0) {
+      const data = response.data || [];
+      setArchetypes(data);
+      if (data.length > 0 && !data.includes(selectedArchetype)) {
+        setSelectedArchetype(data[0]);
+      } else if (data.length === 0) {
         setSelectedArchetype('');
       }
     } catch (error) {
       console.error('Failed to load archetypes:', error);
       setArchetypes([]);
+      setSelectedArchetype('');
     } finally {
       setIsLoadingArchetypes(false);
     }
@@ -131,19 +145,39 @@ export function SimulationPage() {
       toast.error('Please select a deck');
       return;
     }
-    if (!selectedArchetype) {
-      toast.error('Please select an opponent archetype');
-      return;
+
+    const isMultiplayer = numPlayers > 2;
+
+    if (isMultiplayer) {
+      // Validate we have enough opponents selected
+      const opponents = selectedOpponents.slice(0, numPlayers - 1).filter(Boolean);
+      if (opponents.length < numPlayers - 1) {
+        toast.error(`Please select ${numPlayers - 1} opponents for a ${numPlayers}-player game`);
+        return;
+      }
+    } else {
+      if (!selectedArchetype) {
+        toast.error('Please select an opponent archetype');
+        return;
+      }
     }
 
     setIsCreating(true);
 
     try {
-      const response = await simulationApi.createRun({
+      const requestData: any = {
         deck_id: selectedDeckId,
-        opponent_archetype: selectedArchetype,
         num_games: numGames,
-      });
+        num_players: numPlayers,
+      };
+
+      if (isMultiplayer) {
+        requestData.opponent_archetypes = selectedOpponents.slice(0, numPlayers - 1);
+      } else {
+        requestData.opponent_archetype = selectedArchetype;
+      }
+
+      const response = await simulationApi.createRun(requestData);
       toast.success('Simulation started!');
       setSelectedRun(response.data);
       setSearchParams({ run: response.data.id });
@@ -236,30 +270,83 @@ export function SimulationPage() {
                 </select>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Opponent ({selectedFormat})
-                </label>
-                <select
-                  value={selectedArchetype}
-                  onChange={(e) => setSelectedArchetype(e.target.value)}
-                  disabled={isLoadingArchetypes}
-                  className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-                >
-                  {isLoadingArchetypes ? (
-                    <option value="">Loading...</option>
-                  ) : archetypes.length === 0 ? (
-                    <option value="">No archetypes available</option>
-                  ) : (
-                    <>
-                      <option value="">Select archetype...</option>
-                      {archetypes.map((arch) => (
-                        <option key={arch} value={arch}>{arch}</option>
-                      ))}
-                    </>
-                  )}
-                </select>
-              </div>
+              {/* Player count - show for Commander formats */}
+              {(selectedFormat === 'commander' || selectedFormat === 'edh') && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">Players</label>
+                  <select
+                    value={numPlayers}
+                    onChange={(e) => setNumPlayers(parseInt(e.target.value))}
+                    className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value={2}>2 Players (1v1)</option>
+                    <option value={3}>3 Players</option>
+                    <option value={4}>4 Players (Full Pod)</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Opponent selection - varies based on player count */}
+              {numPlayers === 2 ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Opponent ({selectedFormat})
+                  </label>
+                  <select
+                    value={selectedArchetype}
+                    onChange={(e) => setSelectedArchetype(e.target.value)}
+                    disabled={isLoadingArchetypes}
+                    className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                  >
+                    {isLoadingArchetypes ? (
+                      <option value="">Loading...</option>
+                    ) : archetypes.length === 0 ? (
+                      <option value="">No archetypes available</option>
+                    ) : (
+                      <>
+                        <option value="">Select archetype...</option>
+                        {archetypes.map((arch) => (
+                          <option key={arch} value={arch}>{arch}</option>
+                        ))}
+                      </>
+                    )}
+                  </select>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <label className="block text-sm font-medium text-gray-300">
+                    Opponents ({numPlayers - 1} required)
+                  </label>
+                  {Array.from({ length: numPlayers - 1 }).map((_, idx) => (
+                    <div key={idx}>
+                      <label className="block text-xs text-gray-400 mb-1">Opponent {idx + 1}</label>
+                      <select
+                        value={selectedOpponents[idx] || ''}
+                        onChange={(e) => {
+                          const newOpponents = [...selectedOpponents];
+                          newOpponents[idx] = e.target.value;
+                          setSelectedOpponents(newOpponents);
+                        }}
+                        disabled={isLoadingArchetypes}
+                        className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                      >
+                        {isLoadingArchetypes ? (
+                          <option value="">Loading...</option>
+                        ) : archetypes.length === 0 ? (
+                          <option value="">No archetypes available</option>
+                        ) : (
+                          <>
+                            <option value="">Select archetype...</option>
+                            {archetypes.map((arch) => (
+                              <option key={arch} value={arch}>{arch}</option>
+                            ))}
+                          </>
+                        )}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">Games</label>
@@ -300,6 +387,16 @@ export function SimulationPage() {
 
             {isLoadingRuns ? (
               <p className="text-gray-400 text-sm">Loading...</p>
+            ) : runsError ? (
+              <div className="text-sm">
+                <p className="text-red-400 mb-2">{runsError}</p>
+                <button
+                  onClick={() => { setIsLoadingRuns(true); loadRuns(); }}
+                  className="text-indigo-400 hover:text-indigo-300"
+                >
+                  Retry
+                </button>
+              </div>
             ) : runs.length === 0 ? (
               <p className="text-gray-400 text-sm">No simulations yet</p>
             ) : (
@@ -322,7 +419,11 @@ export function SimulationPage() {
                       </span>
                     </div>
                     <div className="text-gray-400 text-xs">
-                      vs {run.opponent_archetype || run.opponent_deck_name}
+                      vs {(run.num_players ?? 2) > 2
+                        ? `${run.num_players - 1} opponents`
+                        : run.opponent_archetype || run.opponent_deck_name
+                      }
+                      {(run.num_players ?? 2) > 2 && <span className="ml-1 text-indigo-400">(Commander)</span>}
                     </div>
                     <div className="flex items-center justify-between mt-1">
                       <span className="text-gray-500 text-xs">{formatDate(run.created_at)}</span>
@@ -357,8 +458,15 @@ export function SimulationPage() {
                   {selectedRun.status === 'pending' ? 'Starting simulation...' : 'Simulating games...'}
                 </h3>
                 <p className="text-gray-400">
-                  {selectedRun.your_deck_name} vs {selectedRun.opponent_archetype}
+                  {selectedRun.your_deck_name} vs {
+                    (selectedRun.num_players ?? 2) > 2
+                      ? selectedRun.opponent_archetypes?.join(', ') || selectedRun.opponent_deck_name
+                      : selectedRun.opponent_archetype || selectedRun.opponent_deck_name
+                  }
                 </p>
+                {(selectedRun.num_players ?? 2) > 2 && (
+                  <p className="text-gray-500 text-sm mt-1">{selectedRun.num_players}-player Commander game</p>
+                )}
                 <p className="text-gray-500 mt-2">
                   {selectedRun.games_completed} / {selectedRun.num_games} games completed
                 </p>
@@ -384,9 +492,18 @@ export function SimulationPage() {
               {/* Summary */}
               <div className="bg-gray-800 rounded-lg p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-white">
-                    {selectedRun.your_deck_name} vs {selectedRun.opponent_archetype}
-                  </h2>
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">
+                      {selectedRun.your_deck_name} vs {
+                        (selectedRun.num_players ?? 2) > 2
+                          ? selectedRun.opponent_archetypes?.join(', ') || selectedRun.opponent_deck_name
+                          : selectedRun.opponent_archetype || selectedRun.opponent_deck_name
+                      }
+                    </h2>
+                    {(selectedRun.num_players ?? 2) > 2 && (
+                      <span className="text-sm text-gray-400">{selectedRun.num_players}-player Commander</span>
+                    )}
+                  </div>
                   <span className="text-xs text-gray-500">{formatDate(selectedRun.completed_at)}</span>
                 </div>
 
@@ -398,15 +515,27 @@ export function SimulationPage() {
                     </div>
                   </div>
                   <div className="bg-gray-700 rounded-lg p-4">
-                    <div className="text-sm text-gray-400">Record</div>
+                    <div className="text-sm text-gray-400">
+                      {(selectedRun.num_players ?? 2) > 2 ? '1st Place' : 'Record'}
+                    </div>
                     <div className="text-2xl font-bold text-white">
-                      {selectedRun.your_wins ?? 0}-{selectedRun.opponent_wins ?? 0}
+                      {(selectedRun.num_players ?? 2) > 2 ? (
+                        `${selectedRun.first_place_count ?? selectedRun.your_wins ?? 0}/${selectedRun.num_games}`
+                      ) : (
+                        `${selectedRun.your_wins ?? 0}-${selectedRun.opponent_wins ?? 0}`
+                      )}
                     </div>
                   </div>
                   <div className="bg-gray-700 rounded-lg p-4">
-                    <div className="text-sm text-gray-400">Assessment</div>
-                    <div className={`text-2xl font-bold capitalize ${getAssessmentColor(selectedRun.matchup_assessment)}`}>
-                      {selectedRun.matchup_assessment || '-'}
+                    <div className="text-sm text-gray-400">
+                      {(selectedRun.num_players ?? 2) > 2 ? 'Avg Place' : 'Assessment'}
+                    </div>
+                    <div className={`text-2xl font-bold ${(selectedRun.num_players ?? 2) > 2 ? 'text-white' : `capitalize ${getAssessmentColor(selectedRun.matchup_assessment)}`}`}>
+                      {(selectedRun.num_players ?? 2) > 2 ? (
+                        selectedRun.your_placement_avg?.toFixed(1) ?? '-'
+                      ) : (
+                        selectedRun.matchup_assessment || '-'
+                      )}
                     </div>
                   </div>
                   <div className="bg-gray-700 rounded-lg p-4">
@@ -540,16 +669,46 @@ export function SimulationPage() {
                         </button>
                         {expandedGame === game.game_number && (
                           <div className="px-4 py-3 border-t border-gray-600">
-                            <div className="grid grid-cols-2 gap-4 mb-4">
-                              <div>
-                                <span className="text-gray-400 text-sm">Your Life:</span>
-                                <span className="text-white ml-2">{game.your_life}</span>
+                            {/* Life totals - multiplayer vs 2-player */}
+                            {game.life_totals ? (
+                              <div className="mb-4">
+                                <h4 className="text-sm font-medium text-gray-400 mb-2">Final Life Totals</h4>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                  {Object.entries(game.life_totals).map(([player, life]) => (
+                                    <div key={player} className="bg-gray-600 rounded px-2 py-1">
+                                      <span className="text-gray-300 text-xs capitalize">{player.replace('_', ' ')}:</span>
+                                      <span className={`ml-1 text-sm font-medium ${(life as number) > 0 ? 'text-white' : 'text-red-400'}`}>
+                                        {life as number}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                              <div>
-                                <span className="text-gray-400 text-sm">Opponent Life:</span>
-                                <span className="text-white ml-2">{game.opponent_life}</span>
+                            ) : (
+                              <div className="grid grid-cols-2 gap-4 mb-4">
+                                <div>
+                                  <span className="text-gray-400 text-sm">Your Life:</span>
+                                  <span className="text-white ml-2">{game.your_life}</span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-400 text-sm">Opponent Life:</span>
+                                  <span className="text-white ml-2">{game.opponent_life}</span>
+                                </div>
                               </div>
-                            </div>
+                            )}
+                            {/* Elimination order for multiplayer */}
+                            {game.elimination_order && game.elimination_order.length > 0 && (
+                              <div className="mb-4">
+                                <h4 className="text-sm font-medium text-gray-400 mb-2">Elimination Order</h4>
+                                <div className="flex flex-wrap gap-2">
+                                  {game.elimination_order.map((player, i) => (
+                                    <span key={i} className="bg-gray-600 text-white text-xs px-2 py-1 rounded capitalize">
+                                      {i + 1}. {player.replace('_', ' ')}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                             {game.key_moments && game.key_moments.length > 0 && (
                               <div className="mb-4">
                                 <h4 className="text-sm font-medium text-gray-400 mb-2">Key Moments</h4>

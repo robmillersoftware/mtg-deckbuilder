@@ -39,9 +39,16 @@ class SimulationRun(Base):
     your_deck_name = Column(String(255), nullable=False)
     your_deck_snapshot = Column(JSONB, nullable=True)  # Snapshot of deck at simulation time
 
+    # Single opponent (2-player) - kept for backward compatibility
     opponent_deck_name = Column(String(255), nullable=False)
     opponent_archetype = Column(String(255), nullable=True)
     opponent_deck_snapshot = Column(JSONB, nullable=True)  # Snapshot of opponent deck
+
+    # Multiplayer support (3-4 players)
+    num_players = Column(Integer, nullable=False, default=2)  # 2-4 players
+    opponent_deck_names = Column(JSONB, nullable=True)  # ["Deck 1", "Deck 2", "Deck 3"]
+    opponent_archetypes = Column(JSONB, nullable=True)  # ["Archetype 1", "Archetype 2", ...]
+    opponent_deck_snapshots = Column(JSONB, nullable=True)  # [snapshot1, snapshot2, ...]
 
     format = Column(String(50), nullable=False, default="standard")
     num_games = Column(Integer, nullable=False, default=5)
@@ -52,8 +59,11 @@ class SimulationRun(Base):
     current_game_turn = Column(Integer, nullable=True)
 
     # Results (populated when completed)
-    your_wins = Column(Integer, nullable=True)
-    opponent_wins = Column(Integer, nullable=True)
+    your_wins = Column(Integer, nullable=True)  # 2-player wins or 1st place finishes
+    opponent_wins = Column(Integer, nullable=True)  # 2-player only
+    # Multiplayer results
+    first_place_count = Column(Integer, nullable=True)  # How many times you finished 1st
+    your_placement_avg = Column(Numeric(3, 2), nullable=True)  # Average finishing position
     win_rate = Column(Numeric(5, 4), nullable=True)
     average_game_length = Column(Numeric(5, 2), nullable=True)
     matchup_assessment = Column(String(20), nullable=True)  # favored, even, unfavored
@@ -92,6 +102,10 @@ class SimulationRun(Base):
             "your_deck_name": self.your_deck_name,
             "opponent_deck_name": self.opponent_deck_name,
             "opponent_archetype": self.opponent_archetype,
+            # Multiplayer fields
+            "num_players": self.num_players,
+            "opponent_deck_names": self.opponent_deck_names,
+            "opponent_archetypes": self.opponent_archetypes,
             "format": self.format,
             "num_games": self.num_games,
             "include_sideboard_games": bool(self.include_sideboard_games),
@@ -99,6 +113,9 @@ class SimulationRun(Base):
             "current_game_turn": self.current_game_turn,
             "your_wins": self.your_wins,
             "opponent_wins": self.opponent_wins,
+            # Multiplayer results
+            "first_place_count": self.first_place_count,
+            "your_placement_avg": float(self.your_placement_avg) if self.your_placement_avg else None,
             "win_rate": float(self.win_rate) if self.win_rate else None,
             "average_game_length": float(self.average_game_length) if self.average_game_length else None,
             "matchup_assessment": self.matchup_assessment,

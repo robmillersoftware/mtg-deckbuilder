@@ -211,14 +211,18 @@ export interface RegisterRequest {
 // Simulation types
 export interface GameResult {
   game_number: number;
-  winner: 'you' | 'opponent';
+  winner: string; // 'you', 'opponent', or 'opponent_1', 'opponent_2', etc. for multiplayer
   turns: number;
   your_life: number;
   opponent_life: number;
+  // Multiplayer support
+  life_totals?: Record<string, number>; // {"you": 40, "opponent_1": 35, ...}
+  elimination_order?: string[]; // Order players were eliminated
   win_condition: string;
   key_moments: string[];
   your_key_cards: string[];
   opponent_key_cards: string[];
+  opponent_key_cards_by_player?: Record<string, string[]>; // Per-opponent in multiplayer
   sideboard_in?: string[];
   sideboard_out?: string[];
 }
@@ -253,6 +257,10 @@ export interface SimulationRun {
   your_deck_name: string;
   opponent_deck_name: string;
   opponent_archetype?: string;
+  // Multiplayer support
+  num_players?: number;
+  opponent_deck_names?: string[];
+  opponent_archetypes?: string[];
   format: string;
   num_games: number;
   include_sideboard_games: boolean;
@@ -262,6 +270,9 @@ export interface SimulationRun {
   // Results (when completed)
   your_wins?: number;
   opponent_wins?: number;
+  // Multiplayer results
+  first_place_count?: number;
+  your_placement_avg?: number;
   win_rate?: number;
   average_game_length?: number;
   matchup_assessment?: 'favored' | 'even' | 'unfavored';
