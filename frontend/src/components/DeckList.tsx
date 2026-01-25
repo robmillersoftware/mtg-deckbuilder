@@ -7,6 +7,8 @@ import clsx from 'clsx';
 interface DeckListProps {
   mainDeck: DeckEntry[];
   sideboard: DeckEntry[];
+  commander?: DeckEntry;
+  format?: string;
   title?: string;
   cardExplanations?: Record<string, string>;
   onCardClick?: (cardName: string) => void;
@@ -19,6 +21,8 @@ interface DeckListProps {
 export function DeckList({
   mainDeck,
   sideboard,
+  commander,
+  format,
   title,
   cardExplanations,
   onCardClick,
@@ -27,6 +31,8 @@ export function DeckList({
   editable = false,
   className,
 }: DeckListProps) {
+  // Check if this is a commander format
+  const isCommanderFormat = format === 'commander' || format === 'cedh';
   // Group cards by type
   const groupedMain = useMemo(() => groupCardsByType(mainDeck), [mainDeck]);
 
@@ -63,6 +69,24 @@ export function DeckList({
             <CardSearch onAddCard={onAddCard} existingCards={existingCards} />
           </div>
         )}
+        {/* Commander - shown for commander/cEDH formats */}
+        {isCommanderFormat && commander && (
+          <div className="pb-3 border-b border-gray-700">
+            <h3 className="text-sm font-medium text-purple-400 mb-2">
+              Commander
+            </h3>
+            <div className="space-y-0.5">
+              <CardEntry
+                entry={{ ...commander, quantity: 1 }}
+                target="main"
+                explanation={cardExplanations?.[commander.card_name]}
+                onClick={onCardClick}
+                editable={false}
+              />
+            </div>
+          </div>
+        )}
+
         {/* Main Deck */}
         <div>
           <h3 className="text-sm font-medium text-gray-400 mb-2">
@@ -117,8 +141,17 @@ export function DeckList({
       {/* Stats */}
       <div className="px-4 py-3 border-t border-gray-700 text-xs text-gray-500">
         <div className="flex justify-between">
-          <span>Main: {mainCount} cards</span>
-          <span>Sideboard: {sideboardCount} cards</span>
+          {isCommanderFormat && commander ? (
+            <>
+              <span>Commander: 1</span>
+              <span>Main: {mainCount} cards</span>
+            </>
+          ) : (
+            <>
+              <span>Main: {mainCount} cards</span>
+              <span>Sideboard: {sideboardCount} cards</span>
+            </>
+          )}
         </div>
       </div>
     </div>

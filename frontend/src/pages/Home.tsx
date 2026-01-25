@@ -82,6 +82,8 @@ export function HomePage() {
             <DeckList
               mainDeck={currentDeck.main_deck || []}
               sideboard={currentDeck.sideboard || []}
+              commander={currentDeck.commander}
+              format={currentDeck.format}
               title={currentDeck.name || 'Current Deck'}
               cardExplanations={currentDeck.card_explanations}
               onQuantityChange={handleQuantityChange}

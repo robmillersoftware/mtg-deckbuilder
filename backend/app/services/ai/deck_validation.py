@@ -75,6 +75,11 @@ class DeckValidationMixin:
         for entry in deck_data.get("sideboard", []):
             all_card_names.add(entry.get("card_name", ""))
 
+        # Include commander name if it exists (may be a string at this point)
+        commander_name = deck_data.get("commander")
+        if commander_name and isinstance(commander_name, str):
+            all_card_names.add(commander_name)
+
         if not all_card_names:
             return deck_data
 
@@ -105,6 +110,15 @@ class DeckValidationMixin:
             card_data = card_map.get(card_name.lower(), {})
             if card_data:
                 entry["card"] = card_data
+
+        # Convert commander from string to DeckEntry format and enrich it
+        if commander_name and isinstance(commander_name, str):
+            commander_card_data = card_map.get(commander_name.lower(), {})
+            deck_data["commander"] = {
+                "card_name": commander_name,
+                "quantity": 1,
+                "card": commander_card_data if commander_card_data else None,
+            }
 
         return deck_data
 

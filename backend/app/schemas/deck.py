@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any
 from uuid import UUID
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DeckVisibility(str, Enum):
@@ -45,7 +45,7 @@ class DeckResponse(BaseModel):
     description: Optional[str]
     format: str
     archetype: Optional[str]
-    commander: Optional[str] = None  # Commander card name for cEDH/Commander decks
+    commander: Optional[Dict[str, Any]] = None  # Commander entry for cEDH/Commander decks
     main_deck: List[Dict[str, Any]]
     sideboard: List[Dict[str, Any]]
     strategy_summary: Optional[str]
@@ -57,6 +57,21 @@ class DeckResponse(BaseModel):
     validation_errors: Optional[List[Dict[str, Any]]]
     created_at: datetime
     updated_at: datetime
+
+    @field_validator('commander', mode='before')
+    @classmethod
+    def convert_commander_to_entry(cls, v):
+        """Convert commander string to DeckEntry format if needed."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            # Convert string to DeckEntry dict format
+            return {
+                "card_name": v,
+                "quantity": 1,
+                "card": None,
+            }
+        return v
 
     class Config:
         from_attributes = True

@@ -154,6 +154,8 @@ export function SharedDeckViewPage() {
         <DeckList
           mainDeck={deck.main_deck}
           sideboard={deck.sideboard}
+          commander={deck.commander}
+          format={deck.format}
           title="Deck List"
         />
 

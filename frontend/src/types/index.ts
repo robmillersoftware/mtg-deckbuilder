@@ -73,6 +73,7 @@ export interface Deck {
   description?: string;
   format: string;
   archetype?: string;
+  commander?: DeckEntry; // For Commander/cEDH formats
   main_deck: DeckEntry[];
   sideboard: DeckEntry[];
   strategy_summary?: string;
