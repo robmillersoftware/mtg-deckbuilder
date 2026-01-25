@@ -366,7 +366,9 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
                             print(f"[AI-SERVICE] Overriding colors from {colors} to {template_colors} based on tournament decks")
                             colors = template_colors
                     template_cards = self._extract_cards_from_decks(template_decks)
-                else:
+                elif format != "cedh":
+                    # Theme detection only for 60-card formats, not cEDH
+                    # cEDH builds around commander + combos, not casual themes
                     detected_themes = await self._detect_card_themes(specific_cards)
                     print(f"[AI-SERVICE] Detected themes: {detected_themes}")
                     if detected_themes:
@@ -858,12 +860,15 @@ USER REQUEST: {archetype} deck
                 deck_data["main_deck"] = filtered_main
                 deck_data["sideboard"] = filtered_sideboard
 
-                # Validate and fix land count
-                target_lands = int(archetype_template.get('avg_lands', 24)) if archetype_template else 24
-                await self._fix_land_count(deck_data, target_lands, colors)
-
                 # Filter out cards that don't match the deck's colors
                 deck_data = await self._filter_by_color(deck_data, colors)
+
+                # Fix mana base - cEDH needs special handling for fetches/duals
+                if format == "cedh":
+                    await self._ensure_cedh_mana_base(deck_data, colors)
+                else:
+                    target_lands = int(archetype_template.get('avg_lands', 24)) if archetype_template else 24
+                    await self._fix_land_count(deck_data, target_lands, colors)
 
                 # Fix card counts to match format requirements
                 deck_data = await self._fix_deck_counts(deck_data, colors, available_cards, format=format)
@@ -1220,6 +1225,130 @@ Return modifications as JSON:
 
         # Rebuild main deck
         deck_data["main_deck"] = nonland_entries + land_entries
+
+    async def _ensure_cedh_mana_base(
+        self,
+        deck_data: Dict[str, Any],
+        colors: List[str],
+    ) -> None:
+        """
+        Ensure cEDH deck has proper mana base with fetches, duals, shocks.
+        Removes bad lands and ensures all on-color premium lands are included.
+        Modifies deck_data in place.
+        """
+        from app.services.cedh_knowledge import get_cedh_lands_for_colors
+        from app.models.card import Card
+        from sqlalchemy import func
+
+        main_deck = deck_data.get("main_deck", [])
+        optimal_lands = get_cedh_lands_for_colors(colors)
+
+        # Bad lands to remove from cEDH decks
+        bad_lands = {
+            "evolving wilds", "terramorphic expanse", "fabled passage",
+            "gateway plaza", "rupture spire", "transguild promenade",
+            "opulent palace", "arcane sanctum", "crumbling necropolis",
+            "jungle shrine", "savage lands", "seaside citadel",
+            "sandsteppe citadel", "frontier bivouac", "mystic monastery",
+            "nomad outpost", "hedge maze", "soulstone sanctuary",
+            "demolition field", "fountainport", "meticulous archive",
+        }
+
+        # Collect all required lands
+        required_lands = set()
+        for category in ["fetch_lands", "original_duals", "shock_lands", "rainbow_lands", "utility_lands"]:
+            for land in optimal_lands.get(category, []):
+                required_lands.add(land.lower())
+
+        # Separate lands from non-lands
+        land_entries = []
+        nonland_entries = []
+        existing_lands = set()
+
+        for entry in main_deck:
+            card_name = entry.get("card_name", "")
+            card_name_lower = card_name.lower()
+
+            # Check if it's a land
+            query = select(Card.type_line).where(
+                func.lower(Card.name) == card_name_lower
+            ).limit(1)
+            result = await self.db.execute(query)
+            type_line = result.scalar_one_or_none()
+
+            is_land = type_line and "land" in type_line.lower()
+            is_basic = card_name_lower in ["plains", "island", "swamp", "mountain", "forest",
+                                           "snow-covered plains", "snow-covered island",
+                                           "snow-covered swamp", "snow-covered mountain",
+                                           "snow-covered forest"]
+
+            if is_land:
+                # Remove bad lands
+                if card_name_lower in bad_lands:
+                    print(f"[AI-SERVICE] Removing bad land: {card_name}")
+                    continue
+
+                # Limit basics to 1 each (for Tainted Pact compatibility)
+                if is_basic:
+                    if card_name_lower in existing_lands:
+                        print(f"[AI-SERVICE] Removing duplicate basic: {card_name}")
+                        continue
+                    entry["quantity"] = 1  # Force to 1 copy
+
+                existing_lands.add(card_name_lower)
+                land_entries.append(entry)
+            else:
+                nonland_entries.append(entry)
+
+        # Add missing required lands (priority: fetches > duals > rainbow > utility > shocks)
+        for category in ["fetch_lands", "original_duals", "rainbow_lands", "utility_lands", "shock_lands"]:
+            for land in optimal_lands.get(category, []):
+                if land.lower() not in existing_lands:
+                    # Verify the land exists in database
+                    query = select(Card.name).where(
+                        func.lower(Card.name) == land.lower()
+                    ).limit(1)
+                    result = await self.db.execute(query)
+                    valid_name = result.scalar_one_or_none()
+
+                    if valid_name:
+                        land_entries.append({"card_name": valid_name, "quantity": 1})
+                        existing_lands.add(land.lower())
+                        print(f"[AI-SERVICE] Added cEDH land: {valid_name}")
+
+        # Target ~28-30 lands for cEDH
+        target_lands = 29
+        current_land_count = len(land_entries)
+
+        # If we have too few lands, add 1 of each on-color basic
+        if current_land_count < target_lands - 2:
+            basic_map = {"W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest"}
+            for color in colors:
+                if color.upper() in basic_map:
+                    basic = basic_map[color.upper()]
+                    if basic.lower() not in existing_lands:
+                        land_entries.append({"card_name": basic, "quantity": 1})
+                        existing_lands.add(basic.lower())
+                        print(f"[AI-SERVICE] Added basic land: {basic}")
+
+        # If we have too many lands, remove basics first
+        current_land_count = len(land_entries)
+        if current_land_count > target_lands:
+            excess = current_land_count - target_lands
+            filtered_lands = []
+            for entry in land_entries:
+                card_name_lower = entry.get("card_name", "").lower()
+                is_basic = card_name_lower in ["plains", "island", "swamp", "mountain", "forest"]
+                if is_basic and excess > 0:
+                    excess -= 1
+                    print(f"[AI-SERVICE] Removed excess basic: {entry.get('card_name')}")
+                    continue
+                filtered_lands.append(entry)
+            land_entries = filtered_lands
+
+        # Rebuild main deck
+        deck_data["main_deck"] = nonland_entries + land_entries
+        print(f"[AI-SERVICE] cEDH mana base: {len(land_entries)} lands")
 
     async def _get_cards_by_role(
         self,

@@ -292,40 +292,113 @@ COMMANDER_PACKAGES = {
     },
 }
 
-# Mana base guidelines for cEDH
-MANA_BASE_GUIDELINES = {
-    "fetch_lands": {
-        "description": "Run all on-color fetch lands for mana fixing and deck thinning",
-        "examples": [
-            "Polluted Delta", "Flooded Strand", "Bloodstained Mire",
-            "Wooded Foothills", "Windswept Heath", "Marsh Flats",
-            "Scalding Tarn", "Verdant Catacombs", "Arid Mesa", "Misty Rainforest",
-        ],
-    },
-    "original_duals": {
-        "description": "Original dual lands are optimal but not required",
-        "examples": ["Underground Sea", "Tropical Island", "Bayou", "Tundra"],
-    },
-    "shock_lands": {
-        "description": "Budget-friendly alternatives to original duals",
-        "examples": ["Watery Grave", "Breeding Pool", "Overgrown Tomb"],
-    },
-    "rainbow_lands": {
-        "description": "Lands that produce any color - essential for 3+ color decks",
-        "examples": [
-            "Command Tower", "City of Brass", "Mana Confluence",
-            "Exotic Orchard", "Forbidden Orchard", "Reflecting Pool",
-            "Gemstone Caverns",
-        ],
-    },
-    "utility_lands": {
-        "description": "Lands with additional utility",
-        "examples": [
-            "Ancient Tomb", "Urza's Saga",
-        ],
-    },
-    "basic_count": "Run 1-3 basics total, mainly for Path to Exile/Assassin's Trophy",
+# Complete fetch land data with color pairs
+FETCH_LANDS = {
+    "Polluted Delta": ["U", "B"],
+    "Flooded Strand": ["W", "U"],
+    "Bloodstained Mire": ["B", "R"],
+    "Wooded Foothills": ["R", "G"],
+    "Windswept Heath": ["W", "G"],
+    "Marsh Flats": ["W", "B"],
+    "Scalding Tarn": ["U", "R"],
+    "Verdant Catacombs": ["B", "G"],
+    "Arid Mesa": ["W", "R"],
+    "Misty Rainforest": ["U", "G"],
+    "Prismatic Vista": [],  # Fetches any basic, always include
 }
+
+# Original dual lands with color pairs
+ORIGINAL_DUALS = {
+    "Underground Sea": ["U", "B"],
+    "Tropical Island": ["U", "G"],
+    "Volcanic Island": ["U", "R"],
+    "Tundra": ["W", "U"],
+    "Bayou": ["B", "G"],
+    "Badlands": ["B", "R"],
+    "Savannah": ["W", "G"],
+    "Scrubland": ["W", "B"],
+    "Taiga": ["R", "G"],
+    "Plateau": ["W", "R"],
+}
+
+# Shock lands with color pairs
+SHOCK_LANDS = {
+    "Watery Grave": ["U", "B"],
+    "Breeding Pool": ["U", "G"],
+    "Steam Vents": ["U", "R"],
+    "Hallowed Fountain": ["W", "U"],
+    "Overgrown Tomb": ["B", "G"],
+    "Blood Crypt": ["B", "R"],
+    "Temple Garden": ["W", "G"],
+    "Godless Shrine": ["W", "B"],
+    "Stomping Ground": ["R", "G"],
+    "Sacred Foundry": ["W", "R"],
+}
+
+# Rainbow and utility lands (always include for 3+ colors)
+RAINBOW_LANDS = [
+    "Command Tower",
+    "City of Brass",
+    "Mana Confluence",
+    "Exotic Orchard",
+    "Forbidden Orchard",
+    "Reflecting Pool",
+    "Gemstone Caverns",
+]
+
+UTILITY_LANDS = [
+    "Ancient Tomb",
+    "Boseiju, Who Endures",
+    "Otawara, Soaring City",
+    "Urza's Saga",
+]
+
+
+def get_cedh_lands_for_colors(colors: List[str]) -> Dict[str, List[str]]:
+    """Get the optimal cEDH mana base for a given color identity."""
+    colors_upper = {c.upper() for c in colors}
+
+    result = {
+        "fetch_lands": [],
+        "original_duals": [],
+        "shock_lands": [],
+        "rainbow_lands": [],
+        "utility_lands": [],
+    }
+
+    # Get all on-color fetch lands
+    for land, land_colors in FETCH_LANDS.items():
+        if not land_colors or all(c in colors_upper for c in land_colors):
+            result["fetch_lands"].append(land)
+
+    # Get all on-color original duals
+    for land, land_colors in ORIGINAL_DUALS.items():
+        if all(c in colors_upper for c in land_colors):
+            result["original_duals"].append(land)
+
+    # Get all on-color shock lands
+    for land, land_colors in SHOCK_LANDS.items():
+        if all(c in colors_upper for c in land_colors):
+            result["shock_lands"].append(land)
+
+    # Rainbow lands for 3+ colors
+    if len(colors_upper) >= 3:
+        result["rainbow_lands"] = RAINBOW_LANDS.copy()
+    elif len(colors_upper) >= 2:
+        result["rainbow_lands"] = ["Command Tower", "City of Brass", "Mana Confluence"]
+
+    # Utility lands (filter by color for channel lands)
+    for land in UTILITY_LANDS:
+        if land == "Ancient Tomb":
+            result["utility_lands"].append(land)
+        elif land == "Boseiju, Who Endures" and "G" in colors_upper:
+            result["utility_lands"].append(land)
+        elif land == "Otawara, Soaring City" and "U" in colors_upper:
+            result["utility_lands"].append(land)
+        elif land == "Urza's Saga":
+            result["utility_lands"].append(land)
+
+    return result
 
 # Tainted Pact constraint
 TAINTED_PACT_CONSTRAINT = """
