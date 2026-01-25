@@ -40,6 +40,7 @@ class MessageCreate(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     conversation_id: Optional[UUID] = None
+    format: Optional[str] = Field(default="standard", description="Game format (standard, historic, modern, legacy, cedh)")
 
 
 class ChatResponse(BaseModel):

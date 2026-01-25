@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useConversationStore } from '@/store/conversation';
 import { useDeckStore } from '@/store/deck';
+import { usePreferencesStore } from '@/store/preferences';
 import { conversationsApi } from '@/services/api';
 import { Message, ChatResponse } from '@/types';
 import toast from 'react-hot-toast';
@@ -31,9 +32,13 @@ export function useChat() {
     addMessage(userMessage);
 
     try {
+      // Get the current format from preferences store
+      const format = usePreferencesStore.getState().defaultFormat;
+
       const response = await conversationsApi.sendMessage(
         content,
-        currentConversation?.id
+        currentConversation?.id,
+        format
       );
 
       const data: ChatResponse = response.data;

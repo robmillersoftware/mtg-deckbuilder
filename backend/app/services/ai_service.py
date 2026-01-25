@@ -137,7 +137,7 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
             "focus": "speed" if archetype == "aggro" else "value",
         }
 
-    async def _extract_card_names_from_prompt(self, prompt: str) -> List[str]:
+    async def _extract_card_names_from_prompt(self, prompt: str, format: str = "standard") -> List[str]:
         """Extract card names mentioned in the prompt by checking against database."""
         from app.models.card import Card
         from sqlalchemy import func
@@ -153,7 +153,7 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
         # Try to find multi-word card names (e.g., "Lightning Bolt", "Tezzeret, Cruel Captain")
         for i in range(len(words)):
             # Single word
-            if words[i][0:1].isupper() or words[i].lower() in ["tezzeret", "jace", "liliana", "chandra", "nissa", "garruk", "ajani", "nicol", "bolas"]:
+            if words[i][0:1].isupper() or words[i].lower() in ["tezzeret", "jace", "liliana", "chandra", "nissa", "garruk", "ajani", "nicol", "bolas", "atraxa"]:
                 potential_names.append(words[i].strip(",.!?"))
             # Two words
             if i < len(words) - 1:
@@ -163,15 +163,22 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
             if i < len(words) - 2:
                 three_word = f"{words[i]} {words[i+1]} {words[i+2]}".strip(",.!?")
                 potential_names.append(three_word)
+            # Four words (for cards like "Atraxa, Grand Unifier")
+            if i < len(words) - 3:
+                four_word = f"{words[i]} {words[i+1]} {words[i+2]} {words[i+3]}".strip(",.!?")
+                potential_names.append(four_word)
 
         # Check each potential name against the database
+        # For Commander/cEDH, check all cards; for other formats, check standard-legal
         for name in potential_names:
             if len(name) < 3:  # Skip very short strings
                 continue
             query = select(Card.name).where(
-                func.lower(Card.name).like(f"%{name.lower()}%"),
-                Card.is_standard_legal == True
-            ).limit(1)
+                func.lower(Card.name).like(f"%{name.lower()}%")
+            )
+            if format not in ["cedh", "commander", "legacy", "modern", "historic"]:
+                query = query.where(Card.is_standard_legal == True)
+            query = query.limit(1)
             result = await self.db.execute(query)
             card = result.scalar_one_or_none()
             if card and card not in specific_cards:
@@ -179,6 +186,34 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
                 logger.info(f"Extracted card name from prompt: {card}")
 
         return specific_cards
+
+    async def get_commander_color_identity(self, card_name: str) -> List[str]:
+        """Get a commander's color identity from the database."""
+        from app.models.card import Card
+        from sqlalchemy import func
+
+        query = select(Card).where(
+            func.lower(Card.name) == card_name.lower()
+        ).limit(1)
+        result = await self.db.execute(query)
+        card = result.scalar_one_or_none()
+
+        if not card:
+            # Try partial match
+            query = select(Card).where(
+                func.lower(Card.name).like(f"%{card_name.lower()}%")
+            ).limit(1)
+            result = await self.db.execute(query)
+            card = result.scalar_one_or_none()
+
+        if card and card.color_identity:
+            logger.info(f"Found color identity for {card.name}: {card.color_identity}")
+            return card.color_identity
+        elif card and card.colors:
+            logger.info(f"Using colors for {card.name}: {card.colors}")
+            return card.colors
+
+        return []
 
     async def generate_deck(
         self,

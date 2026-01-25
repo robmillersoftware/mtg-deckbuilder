@@ -116,6 +116,7 @@ async def chat(
         message=request.message,
         conversation_id=request.conversation_id,
         user_id=current_user.id if current_user else None,
+        format=request.format or "standard",
     )
     return response
 

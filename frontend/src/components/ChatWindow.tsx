@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useChat } from '@/hooks/useChat';
+import { usePreferencesStore } from '@/store/preferences';
 import { Message } from '@/types';
 import ReactMarkdown, { Components } from 'react-markdown';
 import clsx from 'clsx';
@@ -9,9 +10,19 @@ interface ChatWindowProps {
   className?: string;
 }
 
+// Format display names
+const FORMAT_NAMES: Record<string, string> = {
+  standard: 'Standard',
+  historic: 'Historic',
+  modern: 'Modern',
+  legacy: 'Legacy',
+  cedh: 'cEDH',
+};
+
 export function ChatWindow({ className }: ChatWindowProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { defaultFormat } = usePreferencesStore();
 
   const {
     messages,
@@ -42,7 +53,12 @@ export function ChatWindow({ className }: ChatWindowProps) {
     <div className={clsx('flex flex-col h-full bg-gray-900', className)}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-        <h2 className="text-lg font-semibold text-white">Chat</h2>
+        <div className="flex items-center space-x-3">
+          <h2 className="text-lg font-semibold text-white">Chat</h2>
+          <span className="px-2 py-0.5 text-xs font-medium rounded bg-primary-600/20 text-primary-400 border border-primary-600/30">
+            {FORMAT_NAMES[defaultFormat] || defaultFormat}
+          </span>
+        </div>
         <button
           onClick={startNewConversation}
           className="text-sm text-gray-400 hover:text-white transition-colors"

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { usersApi } from '@/services/api';
+import { usePreferencesStore } from '@/store/preferences';
 import toast from 'react-hot-toast';
 
 interface Preferences {
@@ -10,6 +11,7 @@ interface Preferences {
 
 export function SettingsPage() {
   const { user } = useAuth();
+  const { setPreferences: setStorePreferences } = usePreferencesStore();
   const [preferences, setPreferences] = useState<Preferences>({
     language: 'en',
     default_format: 'standard',
@@ -25,6 +27,8 @@ export function SettingsPage() {
     try {
       const response = await usersApi.getPreferences();
       setPreferences(response.data);
+      // Update global preferences store
+      setStorePreferences(response.data);
     } catch (error) {
       console.error('Failed to load preferences:', error);
     } finally {
@@ -35,6 +39,8 @@ export function SettingsPage() {
   const handleChange = async (key: keyof Preferences, value: string) => {
     const newPreferences = { ...preferences, [key]: value };
     setPreferences(newPreferences);
+    // Update global store immediately for responsive UI
+    setStorePreferences(newPreferences);
     setIsSaving(true);
 
     try {
@@ -45,6 +51,7 @@ export function SettingsPage() {
       toast.error('Failed to save preference');
       // Revert on error
       setPreferences(preferences);
+      setStorePreferences(preferences);
     } finally {
       setIsSaving(false);
     }

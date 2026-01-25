@@ -112,10 +112,14 @@ class ChatService:
         message: str,
         conversation_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
+        format: str = "standard",
     ) -> ChatResponse:
         """
         Process a user message using Claude with tools to determine the appropriate action.
         """
+        # Store format for use in handlers
+        self._current_format = format
+
         # Get or create conversation
         conversation = await self._get_or_create_conversation(conversation_id, user_id)
 
@@ -161,9 +165,25 @@ Current deck in conversation:
 - Sideboard ({sum(e.get('quantity', 1) for e in sideboard_list)} cards): {sideboard_cards_str}
 """
 
-            system_prompt = f"""You are Spellbook, an expert Magic: The Gathering deck building assistant for Standard format.
+            # Format-specific guidance
+            format_name = "cEDH" if format == "cedh" else format.capitalize()
+            format_guidance = ""
+            if format == "cedh":
+                format_guidance = """
+IMPORTANT - cEDH RULES:
+- cEDH decks have exactly 100 cards (99 + commander)
+- Singleton format: only 1 copy of each non-basic land card
+- Must specify a commander (legendary creature or planeswalker with "can be your commander")
+- Color identity: deck can only contain cards matching the commander's color identity
+- If user mentions a commander, use that card's color identity for the deck"""
+            elif format in ["modern", "legacy"]:
+                format_guidance = f"""
+Note: Building for {format_name} format - 60 card minimum, 4 copies max of any non-basic land card."""
+
+            system_prompt = f"""You are Spellbook, an expert Magic: The Gathering deck building assistant for {format_name} format.
 
 {deck_context}
+{format_guidance}
 
 Your role:
 1. If the user wants a deck but is VAGUE about specifics (says "whatever is best", "build me something good", "analyze meta and build", "surprise me", or doesn't specify colors/archetype) - use the generate_best_meta_deck tool IMMEDIATELY. Do NOT ask clarifying questions.
@@ -176,7 +196,7 @@ CRITICAL: When a user says "Whatever is best" or similar vague responses, this i
 
 IMPORTANT: Questions like "How do I beat X?" or "What's good against Y?" are strategy questions - do NOT generate a deck for these. Either use get_matchup_info if there's a current deck, or just provide strategy advice.
 
-Be decisive and action-oriented. Focus on competitive Standard play."""
+Be decisive and action-oriented. Focus on competitive {format_name} play."""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
@@ -262,11 +282,12 @@ Be decisive and action-oriented. Focus on competitive Standard play."""
         from app.models.meta import MetaSnapshot
 
         optimization_goal = tool_input.get("optimization_goal", "balanced")
+        format = getattr(self, "_current_format", "standard")
 
         # Get current meta data
         result = await self.db.execute(
             select(MetaSnapshot)
-            .where(MetaSnapshot.format == "standard")
+            .where(MetaSnapshot.format == format)
             .order_by(MetaSnapshot.meta_percentage.desc())
             .limit(10)
         )
@@ -338,13 +359,15 @@ Be decisive and action-oriented. Focus on competitive Standard play."""
         # Build the prompt
         color_names = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
         color_str = "/".join(color_names.get(c, c) for c in colors)
-        prompt = f"Build a competitive {color_str} {archetype} deck optimized for the current Standard meta"
+        format_display = "cEDH" if format == "cedh" else format.capitalize()
+        prompt = f"Build a competitive {color_str} {archetype} deck optimized for the current {format_display} meta"
 
         result = await self.deck_generator.generate(
             prompt=prompt,
             user_id=user_id,
             conversation_id=conversation.id,
-            include_sideboard=True,
+            include_sideboard=(format != "cedh"),  # cEDH doesn't use sideboard
+            format=format,
         )
 
         meta_summary = "\n\n**Current Meta:**\n"
@@ -409,6 +432,8 @@ Be decisive and action-oriented. Focus on competitive Standard play."""
         archetype = tool_input.get("archetype", "midrange")
         strategy = tool_input.get("strategy", "")
         specific_cards = tool_input.get("specific_cards", [])
+        format = getattr(self, "_current_format", "standard")
+        format_display = "cEDH" if format == "cedh" else format.capitalize()
 
         # Build a prompt from the parsed data
         prompt = f"Build a {' '.join(colors) if colors else ''} {archetype} deck"
@@ -421,11 +446,12 @@ Be decisive and action-oriented. Focus on competitive Standard play."""
             prompt=prompt,
             user_id=user_id,
             conversation_id=conversation.id,
-            include_sideboard=True,
+            include_sideboard=(format != "cedh"),  # cEDH doesn't use sideboard
+            format=format,
         )
 
         return ChatResponse(
-            response=f"I've built a {result.deck.archetype or 'Standard'} deck for you!\n\n"
+            response=f"I've built a {result.deck.archetype or format_display} deck for you!\n\n"
             + (result.strategy_summary or ""),
             conversation_id=result.conversation_id,
             deck={
@@ -435,7 +461,7 @@ Be decisive and action-oriented. Focus on competitive Standard play."""
                 "archetype": result.deck.archetype,
             },
             suggestions=[
-                "Explain the sideboard",
+                "Explain the sideboard" if format != "cedh" else "Explain key cards",
                 "Show matchups",
                 "Make it faster",
             ],

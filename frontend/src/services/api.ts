@@ -215,10 +215,11 @@ export const conversationsApi = {
 
   create: () => api.post('/conversations'),
 
-  sendMessage: (message: string, conversationId?: string) =>
+  sendMessage: (message: string, conversationId?: string, format?: string) =>
     api.post('/conversations/chat', {
       message,
       conversation_id: conversationId,
+      format: format || 'standard',
     }),
 
   explainCard: (cardName: string, conversationId?: string) =>

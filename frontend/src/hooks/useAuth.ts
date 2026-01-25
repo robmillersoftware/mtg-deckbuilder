@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { useAuthStore } from '@/store/auth';
+import { usePreferencesStore } from '@/store/preferences';
 import { authApi, usersApi } from '@/services/api';
 import toast from 'react-hot-toast';
 
@@ -14,14 +15,21 @@ export function useAuth() {
     setLoading,
   } = useAuthStore();
 
-  // Fetch user on mount if we have tokens
+  // Fetch user and preferences on mount if we have tokens
   useEffect(() => {
-    const fetchUser = async () => {
+    const fetchUserAndPreferences = async () => {
       if (isAuthenticated && !user) {
         setLoading(true);
         try {
           const response = await usersApi.getMe();
           setUser(response.data);
+          // Also load preferences
+          try {
+            const prefsResponse = await usersApi.getPreferences();
+            usePreferencesStore.getState().setPreferences(prefsResponse.data);
+          } catch (prefsError) {
+            console.error('Failed to load preferences:', prefsError);
+          }
         } catch (error) {
           console.error('Failed to fetch user:', error);
           storeLogout();
@@ -31,7 +39,7 @@ export function useAuth() {
       }
     };
 
-    fetchUser();
+    fetchUserAndPreferences();
   }, [isAuthenticated, user, setUser, storeLogout, setLoading]);
 
   const login = useCallback(async (email: string, password: string) => {
@@ -44,6 +52,14 @@ export function useAuth() {
       // Fetch user data
       const userResponse = await usersApi.getMe();
       setUser(userResponse.data);
+
+      // Load user preferences
+      try {
+        const prefsResponse = await usersApi.getPreferences();
+        usePreferencesStore.getState().setPreferences(prefsResponse.data);
+      } catch (prefsError) {
+        console.error('Failed to load preferences:', prefsError);
+      }
 
       toast.success('Welcome back!');
       return true;

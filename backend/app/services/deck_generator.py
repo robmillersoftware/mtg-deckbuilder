@@ -67,6 +67,17 @@ class DeckGenerator:
 
         # Parse the request to understand intent
         parsed_request = await self.ai_service.parse_deck_request(prompt)
+        colors = parsed_request.get("colors", [])
+        specific_cards = parsed_request.get("specific_cards", [])
+
+        # For cEDH/Commander: look up commander color identity from specific cards
+        if format == "cedh" and specific_cards:
+            for card_name in specific_cards:
+                commander_colors = await self.ai_service.get_commander_color_identity(card_name)
+                if commander_colors:
+                    logger.info(f"Using commander {card_name} color identity: {commander_colors}")
+                    colors = commander_colors
+                    break  # Use the first card's color identity (assume it's the commander)
 
         # Get meta data for context
         meta_data = await self._get_meta_context(format=format)
@@ -85,11 +96,11 @@ class DeckGenerator:
         # Generate the deck
         deck_data = await self.ai_service.generate_deck(
             archetype=parsed_request.get("archetype", ""),
-            colors=parsed_request.get("colors", []),
+            colors=colors,
             strategy=parsed_request.get("strategy", ""),
             meta_context=meta_data,
             include_sideboard=include_sideboard,
-            specific_cards=parsed_request.get("specific_cards", []),
+            specific_cards=specific_cards,
             archetype_template=archetype_template,
             format=format,
         )
