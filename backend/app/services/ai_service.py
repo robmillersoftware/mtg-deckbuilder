@@ -410,7 +410,7 @@ REMINDER: ~{int(avg_lands)} LANDS + ~{total_deck_size - int(avg_lands)} NON-LAND
 
             # Build format-specific rules
             if format == "cedh":
-                from app.services.cedh_knowledge import get_cedh_system_prompt, CEDH_STAPLES, COMMANDER_PACKAGES
+                from app.services.cedh_knowledge import get_cedh_system_prompt, CEDH_STAPLES
 
                 target_lands = archetype_template.get('avg_lands', 30) if archetype_template else 30
 
