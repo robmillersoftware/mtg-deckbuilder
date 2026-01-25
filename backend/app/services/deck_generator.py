@@ -133,6 +133,13 @@ class DeckGenerator:
         if user_id:
             deck_name = await self._get_unique_deck_name(user_id, deck_name)
 
+        # Determine commander for cEDH/Commander decks
+        commander_name = None
+        if format in ["cedh", "commander"] and specific_cards:
+            # The first specific card mentioned is typically the commander
+            commander_name = specific_cards[0]
+            logger.info(f"Setting commander for {format} deck: {commander_name}")
+
         # Create deck object (not saved to DB - user must explicitly save)
         deck = Deck(
             id=uuid4(),
@@ -140,6 +147,7 @@ class DeckGenerator:
             name=deck_name,
             format=format,
             archetype=parsed_request.get("archetype"),
+            commander=commander_name,
             main_deck=validated_main,
             sideboard=validated_sideboard,
             strategy_summary=deck_data.get("strategy_summary", ""),
@@ -151,6 +159,7 @@ class DeckGenerator:
         conversation.current_deck = {
             "name": deck.name,
             "archetype": deck.archetype,
+            "commander": commander_name,
             "main_deck": deck.main_deck,
             "sideboard": deck.sideboard,
             "format": format,
@@ -195,6 +204,7 @@ class DeckGenerator:
                 description=deck.description,
                 format=deck.format,
                 archetype=deck.archetype,
+                commander=deck.commander,
                 main_deck=deck.main_deck,
                 sideboard=deck.sideboard,
                 strategy_summary=deck.strategy_summary,
@@ -341,6 +351,7 @@ class DeckGenerator:
         conversation.current_deck = {
             "name": current_deck.get("name", "Modified Deck"),
             "archetype": current_deck.get("archetype"),
+            "commander": current_deck.get("commander"),
             "main_deck": validated_main,
             "sideboard": validated_sideboard,
             "format": deck_format,
@@ -361,6 +372,7 @@ class DeckGenerator:
             name=current_deck.get("name", "Modified Deck"),
             format=deck_format,
             archetype=current_deck.get("archetype"),
+            commander=current_deck.get("commander"),
             main_deck=validated_main,
             sideboard=validated_sideboard,
             is_validated=validation.is_valid,
@@ -374,6 +386,7 @@ class DeckGenerator:
                 description=deck.description,
                 format=deck.format,
                 archetype=deck.archetype,
+                commander=deck.commander,
                 main_deck=deck.main_deck,
                 sideboard=deck.sideboard,
                 strategy_summary=deck.strategy_summary,

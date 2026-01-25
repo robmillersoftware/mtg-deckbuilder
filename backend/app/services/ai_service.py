@@ -290,7 +290,7 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
 
             # Phase 2: Run independent queries in parallel
             parallel_tasks = {
-                'available_cards': self._get_available_cards(colors),
+                'available_cards': self._get_available_cards(colors, format),
                 'sideboard_patterns': self._get_sideboard_patterns(archetype, colors),
                 'composition': self._get_deck_composition_from_meta(archetype, colors),
                 'mana_base_data': self._get_mana_base_from_meta(archetype, colors),
@@ -338,10 +338,19 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
                 if missing_names:
                     from app.models.card import Card
                     from sqlalchemy import func
-                    missing_query = select(Card).where(
-                        func.lower(Card.name).in_([n.lower() for n in missing_names]),
-                        Card.is_standard_legal == True
-                    )
+                    from app.services.card_service import get_format_legality_condition
+
+                    use_format_legality = format in ["cedh", "commander", "legacy", "modern", "historic"]
+                    if use_format_legality:
+                        missing_query = select(Card).where(
+                            func.lower(Card.name).in_([n.lower() for n in missing_names]),
+                            get_format_legality_condition(format)
+                        )
+                    else:
+                        missing_query = select(Card).where(
+                            func.lower(Card.name).in_([n.lower() for n in missing_names]),
+                            Card.is_standard_legal == True
+                        )
                     missing_result = await self.db.execute(missing_query)
                     missing_cards_raw = missing_result.scalars().all()
                     seen = set()
@@ -1191,37 +1200,66 @@ Return modifications as JSON:
 
         return role_cards
 
-    async def _get_available_cards(self, colors: List[str]) -> List[Dict[str, Any]]:
-        """Get available cards for the specified colors."""
+    async def _get_available_cards(self, colors: List[str], format: str = "standard") -> List[Dict[str, Any]]:
+        """Get available cards for the specified colors and format."""
         all_cards = []
+
+        # Determine if we should use format-based legality or standard_only
+        # For cEDH/Commander, use format-based legality to get eternal cards
+        use_format_legality = format in ["cedh", "commander", "legacy", "modern", "historic"]
+
+        logger.info(f"Getting available cards for colors={colors}, format={format}, use_format_legality={use_format_legality}")
 
         # Get cards for each color separately (not requiring all colors)
         # Use high limits to ensure we get enough unique cards after deduplication
         for color in colors:
-            color_cards = await self.card_service.search(
-                colors=[color],
-                standard_only=True,
-                limit=500,  # Increased to get more cards
-            )
+            if use_format_legality:
+                color_cards = await self.card_service.search(
+                    colors=[color],
+                    standard_only=False,
+                    format=format,
+                    limit=500,
+                )
+            else:
+                color_cards = await self.card_service.search(
+                    colors=[color],
+                    standard_only=True,
+                    limit=500,
+                )
             all_cards.extend(color_cards)
             logger.info(f"Found {len(color_cards)} cards for color {color}")
 
         # Get lands separately - search for land type
-        # Need high limit to cover all unique Standard lands
-        lands = await self.card_service.search(
-            card_type="land",
-            standard_only=True,
-            limit=500,
-        )
+        if use_format_legality:
+            lands = await self.card_service.search(
+                card_type="land",
+                standard_only=False,
+                format=format,
+                limit=500,
+            )
+        else:
+            lands = await self.card_service.search(
+                card_type="land",
+                standard_only=True,
+                limit=500,
+            )
         all_cards.extend(lands)
         logger.info(f"Found {len(lands)} lands")
 
-        # Get colorless artifacts
-        colorless_artifacts = await self.card_service.search(
-            card_type="artifact",
-            standard_only=True,
-            limit=500,
-        )
+        # Get colorless artifacts (includes Sol Ring, Mana Crypt for eternal formats)
+        if use_format_legality:
+            colorless_artifacts = await self.card_service.search(
+                card_type="artifact",
+                standard_only=False,
+                format=format,
+                limit=500,
+            )
+        else:
+            colorless_artifacts = await self.card_service.search(
+                card_type="artifact",
+                standard_only=True,
+                limit=500,
+            )
         all_cards.extend(colorless_artifacts)
         logger.info(f"Found {len(colorless_artifacts)} artifacts")
 
@@ -1229,12 +1267,25 @@ Return modifications as JSON:
         # Search for cards with no colors (empty array)
         from sqlalchemy import select, func
         from app.models.card import Card
-        colorless_query = select(Card).where(
-            Card.is_standard_legal == True,
+        from app.services.card_service import get_format_legality_condition
+
+        base_conditions = [
             Card.colors == [],  # Empty colors array
             ~Card.type_line.ilike("%land%"),  # Exclude lands
             ~Card.type_line.ilike("%artifact%"),  # Exclude artifacts (already fetched)
-        ).order_by(Card.name).limit(5000)  # Fetch many to dedupe
+        ]
+
+        if use_format_legality:
+            colorless_query = select(Card).where(
+                get_format_legality_condition(format),
+                *base_conditions
+            ).order_by(Card.name).limit(5000)
+        else:
+            colorless_query = select(Card).where(
+                Card.is_standard_legal == True,
+                *base_conditions
+            ).order_by(Card.name).limit(5000)
+
         result = await self.db.execute(colorless_query)
         colorless_raw = result.scalars().all()
 

@@ -45,6 +45,7 @@ class DeckResponse(BaseModel):
     description: Optional[str]
     format: str
     archetype: Optional[str]
+    commander: Optional[str] = None  # Commander card name for cEDH/Commander decks
     main_deck: List[Dict[str, Any]]
     sideboard: List[Dict[str, Any]]
     strategy_summary: Optional[str]

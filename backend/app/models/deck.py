@@ -42,6 +42,7 @@ class Deck(Base):
     description = Column(Text, nullable=True)
     format = Column(String(50), default="standard")
     archetype = Column(String(100), nullable=True)
+    commander = Column(String(255), nullable=True)  # Commander card name for cEDH/Commander decks
 
     # Deck contents stored as JSON arrays of {card_id, card_name, quantity}
     main_deck = Column(JSONB, nullable=False, default=list)
