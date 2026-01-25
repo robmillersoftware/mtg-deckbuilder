@@ -107,26 +107,26 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
             template_cards = []
             detected_themes = []
             preserve_colors = format == "cedh"  # Commander color identity must be preserved
-            print(f"[AI-SERVICE] Specific cards from parse: {specific_cards}")
-            print(f"[AI-SERVICE] Format: {format}, preserve_colors: {preserve_colors}")
+            logger.debug(f"Specific cards from parse: {specific_cards}")
+            logger.debug(f"Format: {format}, preserve_colors: {preserve_colors}")
             if specific_cards:
                 template_decks = await self._find_decks_with_cards(specific_cards, format=format)
-                print(f"[AI-SERVICE] Found {len(template_decks)} tournament decks with specific cards")
+                logger.debug(f"Found {len(template_decks)} tournament decks with specific cards")
                 if template_decks:
                     if not preserve_colors:
                         template_colors = self._extract_colors_from_decks(template_decks)
                         if template_colors:
-                            print(f"[AI-SERVICE] Overriding colors from {colors} to {template_colors} based on tournament decks")
+                            logger.debug(f"Overriding colors from {colors} to {template_colors} based on tournament decks")
                             colors = template_colors
                     template_cards = self._extract_cards_from_decks(template_decks)
                 elif format != "cedh":
                     # Theme detection only for 60-card formats, not cEDH
                     # cEDH builds around commander + combos, not casual themes
                     detected_themes = await self._detect_card_themes(specific_cards)
-                    print(f"[AI-SERVICE] Detected themes: {detected_themes}")
+                    logger.debug(f"Detected themes: {detected_themes}")
                     if detected_themes:
                         template_cards = await self._get_tournament_synergy_cards(detected_themes, format=format)
-                        print(f"[AI-SERVICE] Found {len(template_cards)} tournament-played synergy cards")
+                        logger.debug(f"Found {len(template_cards)} tournament-played synergy cards")
 
             # Phase 1b: If no specific cards, try to find archetype decklists based on strategy
             # This allows strategy keywords like "graveyard" to find "Reanimator" decks and use their colors
@@ -134,11 +134,11 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
             if not template_decks and strategy:
                 strategy_decks = await self._get_archetype_decklists(archetype, [], strategy, limit=5, format=format)
                 if strategy_decks:
-                    print(f"[AI-SERVICE] Found {len(strategy_decks)} tournament decks matching strategy '{strategy}'")
+                    logger.debug(f"Found {len(strategy_decks)} tournament decks matching strategy '{strategy}'")
                     if not preserve_colors:
                         strategy_colors = self._extract_colors_from_decks(strategy_decks)
                         if strategy_colors:
-                            print(f"[AI-SERVICE] Overriding colors from {colors} to {strategy_colors} based on strategy-matched decks")
+                            logger.debug(f"Overriding colors from {colors} to {strategy_colors} based on strategy-matched decks")
                             colors = strategy_colors
                     template_decks = strategy_decks
                     template_cards = self._extract_cards_from_decks(strategy_decks)
@@ -183,7 +183,7 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
             meta_cards = template_cards if template_cards else parallel_results.get('meta_cards', [])
             example_decklists = template_decks if template_decks else parallel_results.get('example_decklists', [])
 
-            print(f"[AI-SERVICE] Parallel queries complete: {len(available_cards)} available, {len(tournament_cards)} tournament cards")
+            logger.debug(f"Parallel queries complete: {len(available_cards)} available, {len(tournament_cards)} tournament cards")
 
             # Add template cards to available cards if needed
             if template_cards:
@@ -406,7 +406,7 @@ REMINDER: ~{int(avg_lands)} LANDS + ~{total_deck_size - int(avg_lands)} NON-LAND
             # Filter tournament cards (already fetched in parallel) to deck's colors
             tournament_card_names = {c.lower() for c in tournament_cards}
             on_color_tournament = await self._filter_tournament_cards_by_color(tournament_card_names, colors)
-            print(f"[AI-SERVICE] {len(on_color_tournament)} tournament cards match colors {colors}")
+            logger.debug(f" {len(on_color_tournament)} tournament cards match colors {colors}")
 
             # Build format-specific rules
             if format == "cedh":
@@ -416,14 +416,14 @@ REMINDER: ~{int(avg_lands)} LANDS + ~{total_deck_size - int(avg_lands)} NON-LAND
                 # Priority: archetype_template > composition from meta > reasonable default
                 if archetype_template and archetype_template.get('avg_lands'):
                     target_lands = int(archetype_template['avg_lands'])
-                    print(f"[AI-SERVICE] Using archetype template land count: {target_lands}")
+                    logger.debug(f" Using archetype template land count: {target_lands}")
                 elif composition.get('sample_size', 0) > 0:
                     target_lands = composition.get('avg_lands', 29)
-                    print(f"[AI-SERVICE] Using tournament meta land count: {target_lands} (from {composition['sample_size']} decks)")
+                    logger.debug(f" Using tournament meta land count: {target_lands} (from {composition['sample_size']} decks)")
                 else:
                     # Fallback only when no tournament data available
                     target_lands = 29
-                    print(f"[AI-SERVICE] No tournament data, using default land count: {target_lands}")
+                    logger.debug(f" No tournament data, using default land count: {target_lands}")
 
                 # Get commander name from specific_cards if available
                 commander_name = specific_cards[0] if specific_cards else None
@@ -636,7 +636,7 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
                         entry["card_name"] = valid_name  # Use proper name
                         filtered_main.append(entry)
                     else:
-                        print(f"[AI-SERVICE] Removed invalid card: {card_name}")
+                        logger.debug(f" Removed invalid card: {card_name}")
 
                 # Filter sideboard to only valid cards
                 filtered_sideboard = []
@@ -647,7 +647,7 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
                         entry["card_name"] = valid_name
                         filtered_sideboard.append(entry)
                     else:
-                        print(f"[AI-SERVICE] Removed invalid sideboard card: {card_name}")
+                        logger.debug(f" Removed invalid sideboard card: {card_name}")
 
                 deck_data["main_deck"] = filtered_main
                 deck_data["sideboard"] = filtered_sideboard
@@ -672,7 +672,7 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
                 main_count = sum(e.get("quantity", 0) for e in deck_data.get("main_deck", []))
                 side_count = sum(e.get("quantity", 0) for e in deck_data.get("sideboard", []))
 
-                print(f"[AI-SERVICE] Generated deck after fixing: {main_count} main, {side_count} sideboard")
+                logger.debug(f" Generated deck after fixing: {main_count} main, {side_count} sideboard")
 
                 # Enrich deck entries with card type information for frontend categorization
                 deck_data = await self._enrich_deck_with_card_data(deck_data)
@@ -1209,7 +1209,7 @@ Return modifications as JSON:
                     if entry.get("card_name", "").lower() != commander_name.lower()
                 ]
                 if len(main_deck) < original_count:
-                    print(f"[AI-SERVICE] Removed commander '{commander_name}' from main deck (it's separate)")
+                    logger.debug(f" Removed commander '{commander_name}' from main deck (it's separate)")
                 deck_data["main_deck"] = main_deck
 
         # For cEDH, check for anti-synergies with expensive commanders
@@ -1237,7 +1237,7 @@ Return modifications as JSON:
                     ]
                     removed_count = original_count - len(main_deck)
                     if removed_count > 0:
-                        print(f"[AI-SERVICE] Removed {removed_count} artifact hate cards (anti-synergy with {commander_cmc}-mana commander)")
+                        logger.debug(f" Removed {removed_count} artifact hate cards (anti-synergy with {commander_cmc}-mana commander)")
                     deck_data["main_deck"] = main_deck
 
         # Enforce singleton for cEDH
@@ -1253,7 +1253,7 @@ Return modifications as JSON:
                     entry["quantity"] = 1
                     deduped.append(entry)
                 else:
-                    print(f"[AI-SERVICE] Removed duplicate in singleton deck: {card_name}")
+                    logger.debug(f" Removed duplicate in singleton deck: {card_name}")
             main_deck = deduped
             deck_data["main_deck"] = main_deck
 
@@ -1293,12 +1293,12 @@ Return modifications as JSON:
             else:
                 non_land_entries.append(entry)
 
-        print(f"[AI-SERVICE] Current land count: {current_land_count}, minimum: {min_lands}")
+        logger.debug(f" Current land count: {current_land_count}, minimum: {min_lands}")
 
         # If we don't have enough lands, add more basics and trim spells
         if current_land_count < min_lands:
             lands_to_add = min_lands - current_land_count
-            print(f"[AI-SERVICE] Need to add {lands_to_add} more lands")
+            logger.debug(f" Need to add {lands_to_add} more lands")
 
             # Find or create basic land entry
             existing_basic = None
@@ -1323,7 +1323,7 @@ Return modifications as JSON:
                         trim_amount = min(entry["quantity"] - 1, remaining_to_trim)
                         entry["quantity"] -= trim_amount
                         remaining_to_trim -= trim_amount
-                        print(f"[AI-SERVICE] Trimmed {trim_amount}x {entry.get('card_name')} to make room for lands")
+                        logger.debug(f" Trimmed {trim_amount}x {entry.get('card_name')} to make room for lands")
                         trimmed = True
                         if remaining_to_trim <= 0:
                             break
@@ -1332,7 +1332,7 @@ Return modifications as JSON:
                     if non_land_entries:
                         removed = non_land_entries.pop()
                         remaining_to_trim -= removed.get("quantity", 0)
-                        print(f"[AI-SERVICE] Removed {removed.get('card_name')} to make room for lands")
+                        logger.debug(f" Removed {removed.get('card_name')} to make room for lands")
 
             # Rebuild main_deck with lands first, then non-lands
             main_deck = land_entries + [e for e in non_land_entries if e.get("quantity", 0) > 0]
@@ -1344,7 +1344,7 @@ Return modifications as JSON:
         # Fix main deck to target size
         if main_count < target_main:
             deficit = target_main - main_count
-            print(f"[AI-SERVICE] Deck has {main_count} cards, need {deficit} more (target: {target_main})")
+            logger.debug(f" Deck has {main_count} cards, need {deficit} more (target: {target_main})")
 
             # First, try to add more non-land cards
             existing_cards = {entry.get("card_name", "").lower() for entry in main_deck}
@@ -1359,7 +1359,7 @@ Return modifications as JSON:
 
                 # Normalize deck colors for comparison
                 deck_colors = {c.upper() for c in colors} if colors else set()
-                print(f"[AI-SERVICE] Deck colors for filler filtering: {deck_colors}")
+                logger.debug(f" Deck colors for filler filtering: {deck_colors}")
 
                 # Query cards from tournament decklists in the metagame
                 # Get recent cEDH decklists ordered by date and extract card frequencies
@@ -1384,7 +1384,7 @@ Return modifications as JSON:
 
                 # Sort by frequency (most played cards first)
                 metagame_cards = [card for card, _ in card_frequency.most_common()]
-                print(f"[AI-SERVICE] Found {len(metagame_cards)} unique cards from {len(decklists)} metagame decklists")
+                logger.debug(f" Found {len(metagame_cards)} unique cards from {len(decklists)} metagame decklists")
 
                 # Add cards from metagame (with color identity check and legality validation)
                 cards_added = 0
@@ -1420,15 +1420,15 @@ Return modifications as JSON:
                         existing_cards.add(valid_name.lower())
                         deficit -= 1
                         cards_added += 1
-                        print(f"[AI-SERVICE] Added metagame card: {valid_name} (played in {card_frequency[card_name]} decks)")
+                        logger.debug(f" Added metagame card: {valid_name} (played in {card_frequency[card_name]} decks)")
 
-                print(f"[AI-SERVICE] Added {cards_added} cards from metagame decklists")
+                logger.debug(f" Added {cards_added} cards from metagame decklists")
 
                 # If still short and no metagame data, fall back to known cEDH staples
                 if deficit > 0:
                     from app.services.cedh_knowledge import CEDH_STAPLES
 
-                    print(f"[AI-SERVICE] Still need {deficit} cards, checking cEDH staples...")
+                    logger.debug(f" Still need {deficit} cards, checking cEDH staples...")
 
                     # Build prioritized list of staples to add
                     staples_to_add = []
@@ -1469,7 +1469,7 @@ Return modifications as JSON:
                             main_deck.append({"card_name": valid_name, "quantity": 1})
                             existing_cards.add(valid_name.lower())
                             deficit -= 1
-                            print(f"[AI-SERVICE] Added cEDH staple: {valid_name}")
+                            logger.debug(f" Added cEDH staple: {valid_name}")
 
             # If still short, add from available cards (non-cEDH formats only)
             # For cEDH, we skip this and add lands instead - the available_cards pool can have garbage
@@ -1487,7 +1487,7 @@ Return modifications as JSON:
                     qty_to_add = min(max_copies, deficit)
                     main_deck.append({"card_name": card["name"], "quantity": qty_to_add})
                     deficit -= qty_to_add
-                    print(f"[AI-SERVICE] Added {qty_to_add}x {card['name']} to fill deck")
+                    logger.debug(f" Added {qty_to_add}x {card['name']} to fill deck")
 
             # If still short, add basic lands as last resort
             if deficit > 0:
@@ -1500,7 +1500,7 @@ Return modifications as JSON:
                     existing_basic["quantity"] += deficit
                 else:
                     main_deck.append({"card_name": primary_basic, "quantity": deficit})
-                print(f"[AI-SERVICE] Added {deficit} {primary_basic} as filler (last resort)")
+                logger.debug(f" Added {deficit} {primary_basic} as filler (last resort)")
 
         elif main_count > target_main:
             # Remove cards from the end (typically less important)
@@ -1511,10 +1511,10 @@ Return modifications as JSON:
                 if qty <= excess:
                     excess -= qty
                     main_deck.pop()
-                    print(f"[AI-SERVICE] Removed {qty}x {last_entry.get('card_name')} to reduce main deck")
+                    logger.debug(f" Removed {qty}x {last_entry.get('card_name')} to reduce main deck")
                 else:
                     last_entry["quantity"] -= excess
-                    print(f"[AI-SERVICE] Reduced {last_entry.get('card_name')} by {excess} to reach {target_main}")
+                    logger.debug(f" Reduced {last_entry.get('card_name')} by {excess} to reach {target_main}")
                     excess = 0
 
         # Fix sideboard to target size
@@ -1536,7 +1536,7 @@ Return modifications as JSON:
                 if deficit > 0:
                     # Add basic land as filler
                     sideboard.append({"card_name": primary_basic, "quantity": deficit})
-                print(f"[AI-SERVICE] Fixed sideboard to {target_side} cards")
+                logger.debug(f" Fixed sideboard to {target_side} cards")
 
             elif side_count > target_side:
                 # Remove cards from sideboard
@@ -1550,7 +1550,7 @@ Return modifications as JSON:
                     else:
                         last_entry["quantity"] -= excess
                         excess = 0
-                print(f"[AI-SERVICE] Trimmed sideboard to {target_side} cards")
+                logger.debug(f" Trimmed sideboard to {target_side} cards")
 
         deck_data["main_deck"] = main_deck
         deck_data["sideboard"] = sideboard

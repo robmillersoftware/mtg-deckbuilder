@@ -163,12 +163,12 @@ class ManaBaseMixin:
 
             if is_land:
                 if card_name_lower in bad_lands:
-                    print(f"[AI-SERVICE] Removing bad land: {card_name}")
+                    logger.debug(f" Removing bad land: {card_name}")
                     continue
 
                 if is_basic:
                     if card_name_lower in existing_lands:
-                        print(f"[AI-SERVICE] Removing duplicate basic: {card_name}")
+                        logger.debug(f" Removing duplicate basic: {card_name}")
                         continue
                     entry["quantity"] = 1
 
@@ -190,7 +190,7 @@ class ManaBaseMixin:
                     if valid_name:
                         land_entries.append({"card_name": valid_name, "quantity": 1})
                         existing_lands.add(land.lower())
-                        print(f"[AI-SERVICE] Added cEDH land: {valid_name}")
+                        logger.debug(f" Added cEDH land: {valid_name}")
 
         target_lands = 29
         current_land_count = len(land_entries)
@@ -203,7 +203,7 @@ class ManaBaseMixin:
                     if basic.lower() not in existing_lands:
                         land_entries.append({"card_name": basic, "quantity": 1})
                         existing_lands.add(basic.lower())
-                        print(f"[AI-SERVICE] Added basic land: {basic}")
+                        logger.debug(f" Added basic land: {basic}")
 
         current_land_count = len(land_entries)
         if current_land_count > target_lands:
@@ -214,10 +214,10 @@ class ManaBaseMixin:
                 is_basic = card_name_lower in ["plains", "island", "swamp", "mountain", "forest"]
                 if is_basic and excess > 0:
                     excess -= 1
-                    print(f"[AI-SERVICE] Removed excess basic: {entry.get('card_name')}")
+                    logger.debug(f" Removed excess basic: {entry.get('card_name')}")
                     continue
                 filtered_lands.append(entry)
             land_entries = filtered_lands
 
         deck_data["main_deck"] = nonland_entries + land_entries
-        print(f"[AI-SERVICE] cEDH mana base: {len(land_entries)} lands")
+        logger.debug(f" cEDH mana base: {len(land_entries)} lands")

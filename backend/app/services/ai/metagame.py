@@ -207,10 +207,10 @@ class MetagameMixin:
 
         if color_counts:
             most_common = color_counts.most_common(1)[0][0]
-            print(f"[AI-SERVICE] Extracted colors {list(most_common)} from {len(decklists)} decklists")
+            logger.debug(f" Extracted colors {list(most_common)} from {len(decklists)} decklists")
             return list(most_common)
 
-        print(f"[AI-SERVICE] Could not extract colors from decklists")
+        logger.debug(f" Could not extract colors from decklists")
         return []
 
     def _extract_cards_from_decks(self, decklists: List[Decklist]) -> List[Dict[str, Any]]:
