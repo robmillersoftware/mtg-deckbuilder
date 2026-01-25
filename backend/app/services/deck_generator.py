@@ -128,6 +128,15 @@ class DeckGenerator:
         # Run deck validation
         validation = await self.validator.validate(validated_main, validated_sideboard, format=format)
 
+        # Regenerate strategy summary based on validated cards only
+        # This prevents hallucinated card names from appearing in the summary
+        strategy_summary = await self.ai_service.regenerate_strategy_summary(
+            validated_main_deck=validated_main,
+            validated_sideboard=validated_sideboard,
+            archetype=parsed_request.get("archetype", ""),
+            format=format,
+        )
+
         # Generate unique deck name if user is logged in
         deck_name = deck_data.get("name", "Generated Deck")
         if user_id:
@@ -150,7 +159,7 @@ class DeckGenerator:
             commander=commander_name,
             main_deck=validated_main,
             sideboard=validated_sideboard,
-            strategy_summary=deck_data.get("strategy_summary", ""),
+            strategy_summary=strategy_summary,
             is_validated=validation.is_valid,
             validation_errors=[e.model_dump() for e in validation.errors] if validation.errors else None,
         )
@@ -583,11 +592,13 @@ class DeckGenerator:
 
     def _format_deck_response(self, deck: Deck, deck_data: Dict[str, Any]) -> str:
         """Format deck as response message."""
+        # Use deck.strategy_summary (regenerated from validated cards) instead of deck_data
+        # to avoid hallucinated card names in the response
         lines = [
             f"## {deck.name}",
             "",
             "### Strategy",
-            deck_data.get("strategy_summary", ""),
+            deck.strategy_summary or "",
             "",
             f"### Main Deck ({sum(e.get('quantity', 0) for e in deck.main_deck)})",
             "",

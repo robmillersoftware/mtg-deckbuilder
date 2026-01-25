@@ -914,6 +914,86 @@ Return modifications as JSON:
 
         return {"changes": [], "summary": "Unable to process modification"}
 
+    async def regenerate_strategy_summary(
+        self,
+        validated_main_deck: List[Dict[str, Any]],
+        validated_sideboard: List[Dict[str, Any]],
+        archetype: str = "",
+        format: str = "standard",
+    ) -> str:
+        """
+        Regenerate strategy summary based on validated deck cards only.
+        This ensures the summary only references cards that actually exist in the deck.
+        Uses a fast model (haiku) to minimize cost.
+        """
+        if not settings.ANTHROPIC_API_KEY:
+            return self._generate_fallback_summary(validated_main_deck, archetype)
+
+        try:
+            import anthropic
+
+            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+            # Build card list from validated deck
+            main_cards = [
+                f"{e.get('quantity', 1)}x {e.get('card_name', '')}"
+                for e in validated_main_deck
+            ]
+            sideboard_cards = [
+                f"{e.get('quantity', 1)}x {e.get('card_name', '')}"
+                for e in validated_sideboard
+            ] if validated_sideboard else []
+
+            format_display = "cEDH" if format == "cedh" else format.capitalize()
+
+            system_prompt = f"""Generate a concise 2-3 sentence strategy summary for this {format_display} deck.
+
+MAIN DECK:
+{chr(10).join(main_cards)}
+
+{"SIDEBOARD:" + chr(10) + chr(10).join(sideboard_cards) if sideboard_cards else ""}
+
+RULES:
+1. ONLY reference cards that are EXACTLY in the deck list above
+2. Do NOT mention any cards not in this list
+3. Focus on the deck's game plan and win conditions
+4. Be specific about key cards and synergies from THIS deck
+
+Return ONLY the strategy summary text, no JSON or formatting."""
+
+            response = client.messages.create(
+                model="claude-3-5-haiku-latest",  # Use haiku for speed/cost
+                max_tokens=256,
+                system=system_prompt,
+                messages=[{"role": "user", "content": "Summarize this deck's strategy."}],
+            )
+
+            if response.content:
+                summary = response.content[0].text.strip()
+                # Clean up any accidental formatting
+                summary = summary.replace("**", "").replace("##", "").strip()
+                logger.debug(f"Regenerated strategy summary: {summary[:100]}...")
+                return summary
+
+        except Exception as e:
+            logger.warning(f"Failed to regenerate strategy summary: {e}")
+
+        return self._generate_fallback_summary(validated_main_deck, archetype)
+
+    def _generate_fallback_summary(
+        self,
+        main_deck: List[Dict[str, Any]],
+        archetype: str = "",
+    ) -> str:
+        """Generate a simple template-based summary when AI is unavailable."""
+        total_cards = sum(e.get("quantity", 0) for e in main_deck)
+        card_names = [e.get("card_name", "") for e in main_deck if e.get("quantity", 0) >= 3]
+
+        if archetype:
+            return f"A {archetype} deck featuring {len(main_deck)} unique cards. Key cards include {', '.join(card_names[:3])}."
+        else:
+            return f"A {total_cards}-card deck featuring {', '.join(card_names[:3]) if card_names else 'various cards'}."
+
     async def _get_cards_by_role(
         self,
         colors: List[str],
