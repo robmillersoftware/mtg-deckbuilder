@@ -206,91 +206,6 @@ CEDH_STAPLES = {
     },
 }
 
-# Commander-specific packages and strategies
-COMMANDER_PACKAGES = {
-    "atraxa_grand_unifier": {
-        "commander": "Atraxa, Grand Unifier",
-        "colors": ["W", "U", "B", "G"],
-        "strategy": "Food Chain combo into looping Atraxa to draw entire deck, then win with Thassa's Oracle",
-        "primary_win": "food_chain",
-        "backup_win": "thoracle",
-        "core_package": [
-            "Food Chain",
-            "Misthollow Griffin",
-            "Eternal Scourge",
-            "Thassa's Oracle",
-            "Demonic Consultation",
-            "Tainted Pact",
-        ],
-        "synergy_cards": [
-            "Neoform",  # Find Food Chain creatures
-            "Eldritch Evolution",
-            "Finale of Devastation",
-            "Green Sun's Zenith",
-        ],
-        "notes": "Atraxa's ETB draws 4+ cards, making her excellent for rebuilding after interaction. Loop her with Food Chain mana to draw the entire deck.",
-    },
-    "kinnan_bonder_prodigy": {
-        "commander": "Kinnan, Bonder Prodigy",
-        "colors": ["U", "G"],
-        "strategy": "Generate infinite mana with Basalt Monolith, then use Kinnan to find Thassa's Oracle",
-        "primary_win": "thoracle",
-        "core_package": [
-            "Basalt Monolith",
-            "Thassa's Oracle",
-            "Demonic Consultation",  # Not in colors, ignore
-        ],
-        "synergy_cards": [
-            "Freed from the Real",
-            "Pemmin's Aura",
-        ],
-    },
-    "tymna_kraum": {
-        "commander": ["Tymna the Weaver", "Kraum, Ludevic's Opus"],
-        "colors": ["W", "U", "B", "R"],
-        "strategy": "Aggressive card advantage from commanders, win with Thoracle or Breach lines",
-        "primary_win": "thoracle",
-        "backup_win": "underworld_breach",
-        "core_package": [
-            "Thassa's Oracle",
-            "Demonic Consultation",
-            "Tainted Pact",
-            "Underworld Breach",
-            "Brain Freeze",
-            "Lion's Eye Diamond",
-        ],
-    },
-    "najeela_blade_blossom": {
-        "commander": "Najeela, the Blade-Blossom",
-        "colors": ["W", "U", "B", "R", "G"],
-        "strategy": "Infinite combat steps with Najeela + mana producers, or Thoracle backup",
-        "primary_win": "najeela_combo",
-        "backup_win": "thoracle",
-        "core_package": [
-            "Derevi, Empyrial Tactician",
-            "Nature's Will",
-            "Sword of Feast and Famine",
-            "Bear Umbra",
-            "Druids' Repository",
-            "Thassa's Oracle",
-            "Demonic Consultation",
-        ],
-    },
-    "rogsi": {
-        "commander": ["Rograkh, Son of Rohgahh", "Silas Renn, Seeker Adept"],
-        "colors": ["U", "B", "R"],
-        "strategy": "Turbo Ad Nauseam into Thoracle win",
-        "primary_win": "ad_nauseam",
-        "backup_win": "thoracle",
-        "core_package": [
-            "Ad Nauseam",
-            "Thassa's Oracle",
-            "Demonic Consultation",
-            "Tainted Pact",
-        ],
-        "notes": "Keep average CMC extremely low (under 2.0) to maximize Ad Nauseam draws.",
-    },
-}
 
 # Complete fetch land data with color pairs
 FETCH_LANDS = {
@@ -413,8 +328,6 @@ This severely constrains mana base construction but enables a 2-card win conditi
 
 def get_cedh_system_prompt(commander: str = None, colors: List[str] = None) -> str:
     """Generate a cEDH-specific system prompt for deck building."""
-    from rapidfuzz import fuzz
-
     prompt = """You are building a competitive cEDH (Competitive Elder Dragon Highlander) deck.
 
 ## cEDH Format Rules
@@ -444,49 +357,20 @@ Include a primary combo win condition and ideally a backup. Common combos includ
 - Keep basic land count very low (1-3 total)
 - If running Tainted Pact, ensure no duplicate card names
 
+### Anti-Synergy Awareness
+Consider how your hate pieces interact with your own gameplan:
+- If your deck relies heavily on artifact mana (especially for casting an expensive commander), avoid symmetrical artifact hate
+- If your deck uses the graveyard, avoid symmetrical graveyard hate
+- If your deck needs to tutor, avoid cards that prevent searching libraries
+- High-CMC commanders that need fast mana should NOT run cards that shut off their own acceleration
+
 ### General Guidelines
 - Keep mana curve extremely low (average CMC under 2.0 ideally)
 - Prioritize efficiency - every card should have high impact for its cost
 - Balance between proactive (advancing your plan) and reactive (stopping opponents)
+- Consider your commander's mana cost when choosing acceleration and hate pieces
 
 """
-
-    # Add commander-specific knowledge if available
-    if commander:
-        # Find matching commander package with fuzzy matching
-        best_match_key = None
-        best_match_score = 0
-
-        for key, package in COMMANDER_PACKAGES.items():
-            cmd = package.get("commander", "")
-            if isinstance(cmd, list):
-                # Partner commanders
-                for c in cmd:
-                    score = fuzz.ratio(commander.lower(), c.lower())
-                    if score > best_match_score:
-                        best_match_score = score
-                        best_match_key = key
-            else:
-                score = fuzz.ratio(commander.lower(), cmd.lower())
-                if score > best_match_score:
-                    best_match_score = score
-                    best_match_key = key
-
-        # Use match if score is above threshold (70%)
-        if best_match_key and best_match_score >= 70:
-            package = COMMANDER_PACKAGES[best_match_key]
-            cmd_name = package.get("commander", commander)
-            if isinstance(cmd_name, list):
-                cmd_name = " + ".join(cmd_name)
-
-            prompt += f"\n### Commander-Specific: {cmd_name}\n"
-            prompt += f"**Strategy**: {package['strategy']}\n"
-            prompt += f"**Core Combo Package**: {', '.join(package['core_package'])}\n"
-            if package.get('synergy_cards'):
-                prompt += f"**Synergy Cards**: {', '.join(package['synergy_cards'])}\n"
-            if package.get('notes'):
-                prompt += f"**Notes**: {package['notes']}\n"
-
     return prompt
 
 
