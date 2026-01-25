@@ -2538,11 +2538,11 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
                     elif is_colorless:
                         # Colorless non-land cards are always allowed
                         filtered.append(entry)
-                    elif all(c in colors_upper for c in card_colors):
-                        # Card colors match deck colors
+                    elif all(c in colors_upper for c in card_color_identity):
+                        # Card color identity matches deck colors (use color_identity for Commander)
                         filtered.append(entry)
                     else:
-                        print(f"[AI-SERVICE] Removed off-color card: {card_name} (colors: {card_colors})")
+                        print(f"[AI-SERVICE] Removed off-color card: {card_name} (color_identity: {card_color_identity})")
                 else:
                     filtered.append(entry)  # Keep if we can't verify
 
@@ -2683,42 +2683,131 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
             # First, try to add more non-land cards
             existing_cards = {entry.get("card_name", "").lower() for entry in main_deck}
 
-            # For cEDH, add missing staples first (these are critical cards that should always be in the deck)
+            # For cEDH, add cards from tournament metagame decklists
             if format == "cedh":
-                from app.services.cedh_knowledge import CEDH_STAPLES
+                from app.models.meta import Decklist, Event
+                from app.models.card import Card
+                from app.services.card_service import get_format_legality_condition
+                from sqlalchemy import func
+                from collections import Counter
 
-                # Build prioritized list of staples to add
-                staples_to_add = []
-                for category in ["free_counterspells", "tutors", "fast_mana", "efficient_counterspells", "card_advantage", "interaction"]:
-                    if category in CEDH_STAPLES:
-                        for card_name in CEDH_STAPLES[category].get("cards", []):
-                            if card_name.lower() not in existing_cards:
-                                staples_to_add.append(card_name)
+                # Normalize deck colors for comparison
+                deck_colors = {c.upper() for c in colors} if colors else set()
+                print(f"[AI-SERVICE] Deck colors for filler filtering: {deck_colors}")
 
-                # Add staples until we have enough cards
-                for card_name in staples_to_add:
+                # Query cards from tournament decklists in the metagame
+                # Get recent cEDH decklists ordered by date and extract card frequencies
+                decklist_query = (
+                    select(Decklist.main_deck)
+                    .join(Event, Decklist.event_id == Event.id)
+                    .where(Event.format == "cedh")
+                    .order_by(Event.date.desc())
+                    .limit(200)  # Sample recent decklists
+                )
+                decklist_result = await self.db.execute(decklist_query)
+                decklists = decklist_result.scalars().all()
+
+                # Count card frequencies across all decklists
+                card_frequency = Counter()
+                for decklist_cards in decklists:
+                    if decklist_cards:
+                        for entry in decklist_cards:
+                            card_name = entry.get("card_name", "")
+                            if card_name and card_name.lower() not in existing_cards:
+                                card_frequency[card_name] += 1
+
+                # Sort by frequency (most played cards first)
+                metagame_cards = [card for card, _ in card_frequency.most_common()]
+                print(f"[AI-SERVICE] Found {len(metagame_cards)} unique cards from {len(decklists)} metagame decklists")
+
+                # Add cards from metagame (with color identity check and legality validation)
+                cards_added = 0
+                for card_name in metagame_cards:
                     if deficit <= 0:
                         break
-                    # Validate card exists and is legal
-                    from app.models.card import Card
-                    from app.services.card_service import get_format_legality_condition
-                    from sqlalchemy import func
 
-                    query = select(Card.name).where(
+                    # Query card with color identity check
+                    query = select(Card.name, Card.color_identity, Card.type_line).where(
                         func.lower(Card.name) == card_name.lower(),
                         get_format_legality_condition(format)
                     ).limit(1)
                     result = await self.db.execute(query)
-                    valid_name = result.scalar_one_or_none()
+                    row = result.first()
 
-                    if valid_name and valid_name.lower() not in existing_cards:
+                    if not row:
+                        continue
+
+                    valid_name, card_color_identity, type_line = row
+
+                    # Skip lands - we handle those separately
+                    if type_line and "land" in type_line.lower().split(" — ")[0].lower():
+                        continue
+
+                    # Check color identity - card must be playable in the deck's colors
+                    if card_color_identity:
+                        card_colors = {c.upper() for c in card_color_identity}
+                        if not card_colors.issubset(deck_colors):
+                            continue
+
+                    if valid_name.lower() not in existing_cards:
                         main_deck.append({"card_name": valid_name, "quantity": 1})
                         existing_cards.add(valid_name.lower())
                         deficit -= 1
-                        print(f"[AI-SERVICE] Added missing cEDH staple: {valid_name}")
+                        cards_added += 1
+                        print(f"[AI-SERVICE] Added metagame card: {valid_name} (played in {card_frequency[card_name]} decks)")
 
-            # If still short, add from available cards (non-cEDH formats or if staples exhausted)
-            if deficit > 0:
+                print(f"[AI-SERVICE] Added {cards_added} cards from metagame decklists")
+
+                # If still short and no metagame data, fall back to known cEDH staples
+                if deficit > 0:
+                    from app.services.cedh_knowledge import CEDH_STAPLES
+
+                    print(f"[AI-SERVICE] Still need {deficit} cards, checking cEDH staples...")
+
+                    # Build prioritized list of staples to add
+                    staples_to_add = []
+                    categories = ["free_counterspells", "tutors", "fast_mana", "efficient_counterspells",
+                                  "card_advantage", "interaction", "mana_dorks", "hatebears",
+                                  "utility_creatures", "combo_creatures"]
+
+                    for category in categories:
+                        if category in CEDH_STAPLES:
+                            for card_name in CEDH_STAPLES[category].get("cards", []):
+                                if card_name.lower() not in existing_cards:
+                                    staples_to_add.append(card_name)
+
+                    for card_name in staples_to_add:
+                        if deficit <= 0:
+                            break
+
+                        # Query card with color identity check
+                        query = select(Card.name, Card.color_identity).where(
+                            func.lower(Card.name) == card_name.lower(),
+                            get_format_legality_condition(format)
+                        ).limit(1)
+                        result = await self.db.execute(query)
+                        row = result.first()
+
+                        if not row:
+                            continue
+
+                        valid_name, card_color_identity = row
+
+                        # Check color identity
+                        if card_color_identity:
+                            card_colors = {c.upper() for c in card_color_identity}
+                            if not card_colors.issubset(deck_colors):
+                                continue
+
+                        if valid_name.lower() not in existing_cards:
+                            main_deck.append({"card_name": valid_name, "quantity": 1})
+                            existing_cards.add(valid_name.lower())
+                            deficit -= 1
+                            print(f"[AI-SERVICE] Added cEDH staple: {valid_name}")
+
+            # If still short, add from available cards (non-cEDH formats only)
+            # For cEDH, we skip this and add lands instead - the available_cards pool can have garbage
+            if deficit > 0 and format != "cedh":
                 available_nonlands = [
                     c for c in available_cards
                     if c.get("name", "").lower() not in existing_cards

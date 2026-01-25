@@ -31,10 +31,16 @@ STANDARD_FORMAT_ID = "ST"
 CEDH_FORMAT_ID = "cEDH"
 REQUEST_DELAY = 1.0  # Be nice to the server
 
-# Mapping of internal format names to mtgtop8 format IDs
+# Mapping of internal format names to mtgtop8 format IDs and scrape settings
 FORMAT_CONFIG = {
-    "standard": {"mtgtop8_id": "ST", "name": "Standard"},
-    "cedh": {"mtgtop8_id": "cEDH", "name": "cEDH"},
+    "standard": {"mtgtop8_id": "ST", "name": "Standard", "days": 14},
+    "cedh": {"mtgtop8_id": "cEDH", "name": "cEDH", "days": 30},
+    "duel_commander": {"mtgtop8_id": "EDH", "name": "Duel Commander", "days": 30},
+    "modern": {"mtgtop8_id": "MO", "name": "Modern", "days": 14},
+    "pioneer": {"mtgtop8_id": "PI", "name": "Pioneer", "days": 14},
+    "legacy": {"mtgtop8_id": "LE", "name": "Legacy", "days": 30},
+    "vintage": {"mtgtop8_id": "VI", "name": "Vintage", "days": 30},
+    "pauper": {"mtgtop8_id": "PAU", "name": "Pauper", "days": 14},
 }
 
 
@@ -461,7 +467,7 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
                         client,
                         format_id=config["mtgtop8_id"],
                         format_name=format_name,
-                        days=14,
+                        days=config.get("days", 14),
                     )
                     all_events.extend(events)
 

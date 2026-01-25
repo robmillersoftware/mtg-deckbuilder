@@ -141,6 +141,66 @@ CEDH_STAPLES = {
             "Ignoble Hierarch",
             "Noble Hierarch",
             "Elves of Deep Shadow",
+            "Avacyn's Pilgrim",
+            "Boreal Druid",
+            "Arbor Elf",
+        ],
+        "priority": "high",
+    },
+    "hatebears": {
+        "description": "Creatures that disrupt opponents' strategies",
+        "cards": [
+            "Drannith Magistrate",
+            "Opposition Agent",
+            "Aven Mindcensor",
+            "Collector Ouphe",
+            "Dauthi Voidwalker",
+            "Esper Sentinel",
+            "Grand Abolisher",
+            "Thalia, Guardian of Thraben",
+            "Sanctum Prelate",
+            "Leonin Arbiter",
+            "Spirit of the Labyrinth",
+            "Linvala, Keeper of Silence",
+            "Hullbreacher",  # Note: Banned in regular Commander but legal in cEDH
+        ],
+        "priority": "high",
+    },
+    "utility_creatures": {
+        "description": "Value creatures commonly played in cEDH",
+        "cards": [
+            "Archivist of Oghma",
+            "Ranger-Captain of Eos",
+            "Recruiter of the Guard",
+            "Imperial Recruiter",
+            "Spell Queller",
+            "Gilded Drake",
+            "Notion Thief",
+            "Seedborn Muse",
+            "Tendershoot Dryad",
+            "Destiny Spinner",
+            "Allosaurus Shepherd",
+            "Vexing Shusher",
+            "Grand Arbiter Augustin IV",
+            "Lavinia, Azorius Renegade",
+            "Kambal, Consul of Allocation",
+        ],
+        "priority": "medium",
+    },
+    "combo_creatures": {
+        "description": "Creatures that enable or are part of combo wins",
+        "cards": [
+            "Thassa's Oracle",
+            "Laboratory Maniac",
+            "Jace, Wielder of Mysteries",
+            "Walking Ballista",
+            "Devoted Druid",
+            "Vizier of Remedies",
+            "Heliod, Sun-Crowned",
+            "Kiki-Jiki, Mirror Breaker",
+            "Felidar Guardian",
+            "Phantasmal Image",
+            "Phyrexian Metamorph",
         ],
         "priority": "high",
     },
@@ -287,57 +347,34 @@ def get_cedh_system_prompt(commander: str = None, colors: List[str] = None) -> s
 ## cEDH Format Rules
 - Exactly 100 cards (99 + commander)
 - Singleton: only 1 copy of each card except basic lands
-- Commander's color identity restricts what cards you can play
+- Commander's color identity restricts what cards you can play - ONLY use cards within the commander's colors
 - No sideboard
+- Mana Crypt and Jeweled Lotus are BANNED
 
-## cEDH Meta Knowledge
+## cEDH Deck Building Principles
 
-### Primary Win Conditions
-Most cEDH decks win with one of these:
-1. **Thassa's Oracle + Demonic Consultation/Tainted Pact**: Exile library, Oracle trigger wins
-2. **Food Chain + Misthollow Griffin/Eternal Scourge**: Infinite creature mana to loop commander or win
-3. **Underworld Breach + Brain Freeze + LED**: Loop spells from graveyard
-4. **Ad Nauseam**: Draw 30+ cards at instant speed, assemble combo
+### Win Conditions
+Include a primary combo win condition and ideally a backup. Common combos include Thassa's Oracle lines, Food Chain loops, Underworld Breach combos, or commander-specific wins.
 
-### Required Staples (include these)
-**Free Counterspells** (CRITICAL - run all in your colors):
-- Force of Will, Force of Negation, Pact of Negation
-- Fierce Guardianship (if playing blue commander)
-- Deflecting Swat (if playing red commander)
-- Mindbreak Trap
+### Card Roles (fill these categories based on your colors)
+- **Fast Mana**: Mana-positive rocks, rituals, and mana dorks to accelerate your gameplan
+- **Tutors**: Search effects to find combo pieces consistently
+- **Card Advantage**: Efficient draw and selection to maintain resources
+- **Free/Cheap Counterspells**: Protection for your combos and disruption for opponents
+- **Interaction**: Efficient removal for creatures, artifacts, and enchantments
+- **Hatebears/Stax**: Creatures that disrupt opponents (e.g., prevent tutoring, tax spells, stop combos)
+- **Utility Creatures**: Value creatures that provide card advantage or protect your strategy
 
-**Efficient Counterspells**:
-- Swan Song, Flusterstorm, Mental Misstep, Dispel, Spell Pierce
-- An Offer You Can't Refuse, Counterspell, Dovin's Veto
+### Mana Base
+- Run all on-color fetch lands and dual lands (original duals or shocks)
+- Include rainbow lands for fixing
+- Keep basic land count very low (1-3 total)
+- If running Tainted Pact, ensure no duplicate card names
 
-**Fast Mana** (run all legal ones):
-- Sol Ring, Mana Vault, Chrome Mox, Mox Diamond, Lotus Petal
-- Dark Ritual, Cabal Ritual (if black)
-- NOTE: Mana Crypt and Jeweled Lotus are BANNED
-
-**Tutors** (run all in your colors):
-- Demonic Tutor, Vampiric Tutor, Imperial Seal, Grim Tutor
-- Worldly Tutor, Enlightened Tutor, Mystical Tutor, Gamble
-
-**Card Advantage**:
-- Rhystic Study, Mystic Remora, Sylvan Library, Necropotence
-- Ad Nauseam, Brainstorm, Ponder, Preordain
-
-**Interaction**:
-- Swords to Plowshares, Path to Exile, Abrupt Decay
-- Assassin's Trophy, Nature's Claim, Chain of Vapor, Cyclonic Rift
-
-**Mana Dorks** (if green):
-- Birds of Paradise, Llanowar Elves, Elvish Mystic
-- Deathrite Shaman, Noble Hierarch, Ignoble Hierarch
-
-### Mana Base Guidelines
-- All on-color fetch lands
-- Original duals or shock lands
-- Rainbow lands: Command Tower, City of Brass, Mana Confluence, Exotic Orchard
-- Ancient Tomb is auto-include
-- Only 1-3 basic lands total
-- If running Tainted Pact: NO duplicate card names (use snow basics + regular basics)
+### General Guidelines
+- Keep mana curve extremely low (average CMC under 2.0 ideally)
+- Prioritize efficiency - every card should have high impact for its cost
+- Balance between proactive (advancing your plan) and reactive (stopping opponents)
 
 """
 
