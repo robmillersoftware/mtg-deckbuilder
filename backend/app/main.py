@@ -17,6 +17,7 @@ from app.api.routes import (
     meta,
     health,
     admin,
+    simulation,
 )
 from app.jobs.scheduler import configure_scheduler, start_scheduler, shutdown_scheduler
 
@@ -71,6 +72,7 @@ app.include_router(conversations.router, prefix="/api/conversations", tags=["Con
 app.include_router(meta.router, prefix="/api/meta", tags=["Meta"])
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+app.include_router(simulation.router, prefix="/api/simulation", tags=["Simulation"])
 
 # Mount static files directory for uploads
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")

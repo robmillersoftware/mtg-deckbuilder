@@ -245,3 +245,22 @@ export const metaApi = {
   getHistory: (archetype: string, format?: string, limit?: number) =>
     api.get('/meta/history', { params: { archetype, format, limit } }),
 };
+
+// Simulation API
+export const simulationApi = {
+  runSimulation: (request: {
+    your_deck: { deck_id?: string; main_deck?: { card_name: string; quantity: number }[]; sideboard?: { card_name: string; quantity: number }[]; name?: string };
+    opponent_deck: { deck_id?: string; main_deck?: { card_name: string; quantity: number }[]; sideboard?: { card_name: string; quantity: number }[]; name?: string };
+    num_games?: number;
+    include_sideboard_games?: boolean;
+    format?: string;
+  }) => api.post('/simulation', request),
+
+  simulateVsArchetype: (request: {
+    deck_id: string;
+    opponent_archetype: string;
+    num_games?: number;
+  }) => api.post('/simulation/vs-archetype', request),
+
+  getAvailableArchetypes: () => api.get<string[]>('/simulation/archetypes'),
+};

@@ -23,6 +23,7 @@ export function Layout() {
   const navigation = [
     { name: 'Build', href: '/' },
     { name: 'My Decks', href: '/decks', auth: true },
+    { name: 'Simulate', href: '/simulate', auth: true },
     { name: 'Import', href: '/import', auth: true },
     { name: 'History', href: '/conversations', auth: true },
     { name: 'Meta', href: '/meta' },
