@@ -139,6 +139,10 @@ async def scrape_event_decklists(client: httpx.AsyncClient, event_id: str) -> Li
             if not archetype or archetype in ["→", "←", ""] or len(archetype) < 3:
                 continue
 
+            # Skip UI elements that aren't archetypes
+            if archetype.lower() in ["switch to visual", "switch to text"]:
+                continue
+
             # Skip if it looks like a navigation element (contains "deck" in lowercase)
             if "decks" in archetype.lower():
                 continue
