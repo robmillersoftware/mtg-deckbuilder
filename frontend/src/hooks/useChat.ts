@@ -14,6 +14,7 @@ export function useChat() {
     currentConversation,
     setCurrentConversation,
     addMessage,
+    currentFormat,
   } = useConversationStore();
 
   const { setCurrentDeck } = useDeckStore();
@@ -32,8 +33,8 @@ export function useChat() {
     addMessage(userMessage);
 
     try {
-      // Get the current format from preferences store
-      const format = usePreferencesStore.getState().defaultFormat;
+      // Get the current format from conversation store (per-conversation format)
+      const format = useConversationStore.getState().currentFormat;
 
       const response = await conversationsApi.sendMessage(
         content,
@@ -130,14 +131,24 @@ export function useChat() {
 
   const startNewConversation = useCallback(() => {
     setCurrentConversation(null);
+    setCurrentDeck(null);
     setSuggestions([]);
-  }, [setCurrentConversation]);
+    // Reset format to user's default preference
+    const defaultFormat = usePreferencesStore.getState().defaultFormat;
+    useConversationStore.getState().setFormat(defaultFormat);
+  }, [setCurrentConversation, setCurrentDeck]);
+
+  const setFormat = useCallback((format: string) => {
+    useConversationStore.getState().setFormat(format);
+  }, []);
 
   return {
     messages: currentConversation?.messages || [],
     conversationId: currentConversation?.id,
     isLoading,
     suggestions,
+    format: currentFormat,
+    setFormat,
     sendMessage,
     explainCard,
     startNewConversation,

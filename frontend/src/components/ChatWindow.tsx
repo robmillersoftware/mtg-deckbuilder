@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useChat } from '@/hooks/useChat';
-import { usePreferencesStore } from '@/store/preferences';
 import { Message } from '@/types';
 import ReactMarkdown, { Components } from 'react-markdown';
 import clsx from 'clsx';
@@ -10,24 +9,25 @@ interface ChatWindowProps {
   className?: string;
 }
 
-// Format display names
-const FORMAT_NAMES: Record<string, string> = {
-  standard: 'Standard',
-  historic: 'Historic',
-  modern: 'Modern',
-  legacy: 'Legacy',
-  cedh: 'cEDH',
-};
+// Format options
+const FORMAT_OPTIONS = [
+  { value: 'standard', label: 'Standard' },
+  { value: 'historic', label: 'Historic' },
+  { value: 'modern', label: 'Modern' },
+  { value: 'legacy', label: 'Legacy' },
+  { value: 'cedh', label: 'cEDH' },
+];
 
 export function ChatWindow({ className }: ChatWindowProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { defaultFormat } = usePreferencesStore();
 
   const {
     messages,
     isLoading,
     suggestions,
+    format,
+    setFormat,
     sendMessage,
     startNewConversation,
   } = useChat();
@@ -55,9 +55,17 @@ export function ChatWindow({ className }: ChatWindowProps) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
         <div className="flex items-center space-x-3">
           <h2 className="text-lg font-semibold text-white">Chat</h2>
-          <span className="px-2 py-0.5 text-xs font-medium rounded bg-primary-600/20 text-primary-400 border border-primary-600/30">
-            {FORMAT_NAMES[defaultFormat] || defaultFormat}
-          </span>
+          <select
+            value={format}
+            onChange={(e) => setFormat(e.target.value)}
+            className="px-2 py-1 text-xs font-medium rounded bg-gray-800 text-primary-400 border border-primary-600/30 focus:outline-none focus:border-primary-500 cursor-pointer"
+          >
+            {FORMAT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </div>
         <button
           onClick={startNewConversation}
