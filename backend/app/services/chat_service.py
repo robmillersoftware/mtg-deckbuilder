@@ -362,12 +362,15 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
         format_display = "cEDH" if format == "cedh" else format.capitalize()
         prompt = f"Build a competitive {color_str} {archetype} deck optimized for the current {format_display} meta"
 
+        logger.info(f"[CHAT-SERVICE] _handle_meta_deck_generation: format={format}, colors={colors}")
+
         result = await self.deck_generator.generate(
             prompt=prompt,
             user_id=user_id,
             conversation_id=conversation.id,
             include_sideboard=(format != "cedh"),  # cEDH doesn't use sideboard
             format=format,
+            colors=colors if colors else None,  # Pass explicit colors to avoid re-parsing
         )
 
         meta_summary = "\n\n**Current Meta:**\n"
@@ -435,6 +438,8 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
         format = getattr(self, "_current_format", "standard")
         format_display = "cEDH" if format == "cedh" else format.capitalize()
 
+        logger.info(f"[CHAT-SERVICE] _handle_deck_generation: format={format}, colors={colors}, specific_cards={specific_cards}")
+
         # Build a prompt from the parsed data
         prompt = f"Build a {' '.join(colors) if colors else ''} {archetype} deck"
         if strategy:
@@ -448,6 +453,8 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
             conversation_id=conversation.id,
             include_sideboard=(format != "cedh"),  # cEDH doesn't use sideboard
             format=format,
+            colors=colors if colors else None,  # Pass explicit colors to avoid re-parsing
+            specific_cards=specific_cards if specific_cards else None,  # Pass explicit specific_cards
         )
 
         return ChatResponse(

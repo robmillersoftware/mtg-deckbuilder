@@ -45,6 +45,8 @@ class DeckGenerator:
         conversation_id: Optional[UUID] = None,
         include_sideboard: bool = True,
         format: str = "standard",
+        colors: Optional[List[str]] = None,
+        specific_cards: Optional[List[str]] = None,
     ) -> DeckGenerateResponse:
         """
         Generate a deck based on natural language prompt.
@@ -55,6 +57,8 @@ class DeckGenerator:
             conversation_id: Optional existing conversation to continue
             include_sideboard: Whether to generate sideboard
             format: Game format (standard, historic, modern, legacy, cedh)
+            colors: Optional explicit colors (skip parsing if provided)
+            specific_cards: Optional explicit specific cards (skip parsing if provided)
 
         Returns:
             DeckGenerateResponse with complete deck and strategy
@@ -65,13 +69,22 @@ class DeckGenerator:
         # Add user message to conversation
         conversation.add_message("user", prompt)
 
-        # Parse the request to understand intent
+        # Parse the request to understand intent (if colors/specific_cards not provided explicitly)
         parsed_request = await self.ai_service.parse_deck_request(prompt)
-        colors = parsed_request.get("colors", [])
-        specific_cards = parsed_request.get("specific_cards", [])
+
+        # Use explicit colors if provided, otherwise use parsed colors
+        if colors is None:
+            colors = parsed_request.get("colors", [])
+
+        # Use explicit specific_cards if provided, otherwise use parsed specific_cards
+        if specific_cards is None:
+            specific_cards = parsed_request.get("specific_cards", [])
+
+        logger.info(f"[DECK-GEN] Format: {format}, Colors: {colors}, Specific cards: {specific_cards}")
 
         # For cEDH/Commander: look up commander color identity from specific cards
-        if format == "cedh" and specific_cards:
+        # Only do this if colors weren't explicitly provided (i.e., came from parsing)
+        if format == "cedh" and specific_cards and not colors:
             for card_name in specific_cards:
                 commander_colors = await self.ai_service.get_commander_color_identity(card_name)
                 if commander_colors:

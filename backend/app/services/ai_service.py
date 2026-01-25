@@ -249,18 +249,22 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
             client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
             # Phase 1: Handle specific cards and strategy-based archetype matching (may change colors)
+            # NOTE: For cEDH, colors come from the commander's color identity and should NOT be overridden
             template_decks = []
             template_cards = []
             detected_themes = []
+            preserve_colors = format == "cedh"  # Commander color identity must be preserved
             print(f"[AI-SERVICE] Specific cards from parse: {specific_cards}")
+            print(f"[AI-SERVICE] Format: {format}, preserve_colors: {preserve_colors}")
             if specific_cards:
                 template_decks = await self._find_decks_with_cards(specific_cards)
                 print(f"[AI-SERVICE] Found {len(template_decks)} tournament decks with specific cards")
                 if template_decks:
-                    template_colors = self._extract_colors_from_decks(template_decks)
-                    if template_colors:
-                        print(f"[AI-SERVICE] Overriding colors from {colors} to {template_colors} based on tournament decks")
-                        colors = template_colors
+                    if not preserve_colors:
+                        template_colors = self._extract_colors_from_decks(template_decks)
+                        if template_colors:
+                            print(f"[AI-SERVICE] Overriding colors from {colors} to {template_colors} based on tournament decks")
+                            colors = template_colors
                     template_cards = self._extract_cards_from_decks(template_decks)
                 else:
                     detected_themes = await self._detect_card_themes(specific_cards)
@@ -271,14 +275,16 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
 
             # Phase 1b: If no specific cards, try to find archetype decklists based on strategy
             # This allows strategy keywords like "graveyard" to find "Reanimator" decks and use their colors
+            # NOTE: Skip color override for cEDH - commander color identity is fixed
             if not template_decks and strategy:
                 strategy_decks = await self._get_archetype_decklists(archetype, [], strategy, limit=5)
                 if strategy_decks:
                     print(f"[AI-SERVICE] Found {len(strategy_decks)} tournament decks matching strategy '{strategy}'")
-                    strategy_colors = self._extract_colors_from_decks(strategy_decks)
-                    if strategy_colors:
-                        print(f"[AI-SERVICE] Overriding colors from {colors} to {strategy_colors} based on strategy-matched decks")
-                        colors = strategy_colors
+                    if not preserve_colors:
+                        strategy_colors = self._extract_colors_from_decks(strategy_decks)
+                        if strategy_colors:
+                            print(f"[AI-SERVICE] Overriding colors from {colors} to {strategy_colors} based on strategy-matched decks")
+                            colors = strategy_colors
                     template_decks = strategy_decks
                     template_cards = self._extract_cards_from_decks(strategy_decks)
 
