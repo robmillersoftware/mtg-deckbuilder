@@ -33,6 +33,10 @@ export function DeckList({
 }: DeckListProps) {
   // Check if this is a commander format
   const isCommanderFormat = format === 'commander' || format === 'cedh';
+
+  // Debug logging for commander display
+  console.log('[DeckList] format:', format, 'isCommanderFormat:', isCommanderFormat, 'commander:', commander);
+
   // Group cards by type
   const groupedMain = useMemo(() => groupCardsByType(mainDeck), [mainDeck]);
 

@@ -1,6 +1,26 @@
 import { create } from 'zustand';
 import { Deck, DeckEntry, ChangeLogEntry } from '@/types';
 
+// Normalize commander to always be a DeckEntry (handles legacy string format)
+function normalizeCommander(commander: unknown): DeckEntry | undefined {
+  if (!commander) return undefined;
+
+  // If it's already a DeckEntry object with card_name
+  if (typeof commander === 'object' && commander !== null && 'card_name' in commander) {
+    return commander as DeckEntry;
+  }
+
+  // If it's a string (legacy format), convert to DeckEntry
+  if (typeof commander === 'string') {
+    return {
+      card_name: commander,
+      quantity: 1,
+    };
+  }
+
+  return undefined;
+}
+
 interface DeckState {
   currentDeck: Partial<Deck> | null;
   changeLog: ChangeLogEntry[];
@@ -23,7 +43,13 @@ export const useDeckStore = create<DeckState>((set, get) => ({
   changeLog: [],
   isDirty: false,
 
-  setCurrentDeck: (deck) => set({ currentDeck: deck, isDirty: false }),
+  setCurrentDeck: (deck) => set({
+    currentDeck: deck ? {
+      ...deck,
+      commander: normalizeCommander(deck.commander),
+    } : null,
+    isDirty: false
+  }),
 
   updateMainDeck: (mainDeck) =>
     set((state) => ({
