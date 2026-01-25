@@ -233,6 +233,14 @@ export interface KeyCardAnalysis {
   reason: string;
 }
 
+export interface DeckRecommendation {
+  category: 'add_cards' | 'remove_cards' | 'adjust_quantities' | 'sideboard' | 'strategy';
+  priority: 'high' | 'medium' | 'low';
+  suggestion: string;
+  cards_mentioned: string[];
+  reasoning: string;
+}
+
 export interface MatchupAnalysisResult {
   your_deck_name: string;
   opponent_deck_name: string;
@@ -282,6 +290,7 @@ export interface SimulationRun {
   sideboard_guide?: { in: string[]; out: string[] };
   strategic_advice?: string[];
   mulligan_advice?: string;
+  deck_recommendations?: DeckRecommendation[];
 
   error_message?: string;
   created_at?: string;

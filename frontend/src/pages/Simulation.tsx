@@ -644,6 +644,56 @@ export function SimulationPage() {
                 </div>
               )}
 
+              {/* Deck Recommendations */}
+              {selectedRun.deck_recommendations && selectedRun.deck_recommendations.length > 0 && (
+                <div className="bg-gray-800 rounded-lg p-6">
+                  <h2 className="text-lg font-semibold text-white mb-4">Deck Recommendations</h2>
+                  <p className="text-gray-400 text-sm mb-4">
+                    Based on the simulation results, here are suggestions to improve your deck for this matchup:
+                  </p>
+                  <div className="space-y-4">
+                    {selectedRun.deck_recommendations.map((rec, i) => (
+                      <div
+                        key={i}
+                        className={`rounded-lg p-4 border-l-4 ${
+                          rec.priority === 'high'
+                            ? 'bg-red-900/20 border-red-500'
+                            : rec.priority === 'medium'
+                            ? 'bg-yellow-900/20 border-yellow-500'
+                            : 'bg-blue-900/20 border-blue-500'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className={`text-xs font-medium uppercase px-2 py-1 rounded ${
+                            rec.priority === 'high'
+                              ? 'bg-red-500/20 text-red-400'
+                              : rec.priority === 'medium'
+                              ? 'bg-yellow-500/20 text-yellow-400'
+                              : 'bg-blue-500/20 text-blue-400'
+                          }`}>
+                            {rec.priority} priority
+                          </span>
+                          <span className="text-xs text-gray-500 capitalize">
+                            {rec.category.replace('_', ' ')}
+                          </span>
+                        </div>
+                        <p className="text-white text-sm font-medium mb-2">{rec.suggestion}</p>
+                        <p className="text-gray-400 text-sm mb-2">{rec.reasoning}</p>
+                        {rec.cards_mentioned && rec.cards_mentioned.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {rec.cards_mentioned.map((card, j) => (
+                              <span key={j} className="text-xs bg-gray-700 text-indigo-300 px-2 py-1 rounded">
+                                {card}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Game Details */}
               {selectedRun.games && selectedRun.games.length > 0 && (
                 <div className="bg-gray-800 rounded-lg p-6">
