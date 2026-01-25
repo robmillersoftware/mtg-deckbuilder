@@ -446,28 +446,20 @@ This severely constrains mana base construction but enables a 2-card win conditi
 def get_cedh_system_prompt(commander: str = None, colors: List[str] = None, strategy: str = None) -> str:
     """Generate a cEDH-specific system prompt for deck building."""
 
-    # Check if the requested strategy is non-viable and needs redirection
-    strategy_warning = ""
-    if strategy:
-        strategy_lower = strategy.lower()
-        for non_viable, info in NON_VIABLE_STRATEGIES.items():
-            if non_viable in strategy_lower:
-                strategy_warning = f"""
-*** STRATEGY WARNING ***
-"{strategy}" is NOT a competitive cEDH strategy.
-Reason: {info['reason']}
-{info.get('note', '')}
-Instead, build a competitive {info['redirect_to']} deck that can actually win in cEDH.
-"""
-                break
-
-    # Note: Actual land count should be derived from tournament data
-    # These are only fallback guidelines if no tournament data is available
-    # Many cEDH decks run 28-30 lands regardless of color count
     num_colors = len(colors) if colors else 1
 
     prompt = f"""You are building a competitive cEDH (Competitive Elder Dragon Highlander) deck.
-{strategy_warning}
+
+## CRITICAL: How cEDH Works (READ THIS FIRST)
+cEDH is NOT like other formats. There are NO archetypes. There is no "aggro vs control vs midrange".
+There is only: **"Play the most efficient cards in your colors that help you win."**
+
+- IGNORE any "strategy" or "theme" the user mentioned (superfriends, tokens, +1/+1 counters, etc.)
+- These casual strategies DO NOT WORK in cEDH
+- The commander provides colors and maybe utility, but does NOT define a playstyle
+- Every cEDH deck is fundamentally the same: fast mana + tutors + interaction + win condition
+- You are building a pile of the BEST cards in {', '.join(colors) if colors else 'these colors'}, not a themed deck
+
 ## cEDH Format Rules
 - Exactly 100 cards (99 + commander)
 - Singleton: only 1 copy of each card except basic lands
@@ -483,16 +475,16 @@ cEDH games typically end on turns 3-5. Every card must be:
 2. **Immediately impactful** - No waiting for value over time
 3. **Part of the gameplan** - Advances your win or stops opponents
 
-### What to AVOID (These are TRAPS that seem good but lose games)
-- **The commander itself in the 99** - The commander is SEPARATE, do NOT include it as a card in the deck
-- **Slow planeswalkers** (4+ mana that don't immediately win) - Too slow, easily killed
-- **"Value over time" cards** - Games don't last long enough
-- **Pillow fort / defensive cards** - Don't advance your win condition
-- **Synergy-dependent cards** - Must be good on their own
-- **Casual "fun" cards** - This is competitive, not kitchen table
-- **Most equipment and auras** - Too slow, 2-for-1 risk
-- **Cards that need to untap** - You may not get another turn
-- **Other legendary creatures designed to be commanders** - Unless they have specific utility
+### What to AVOID (These are TRAPS - they seem good but lose games)
+- **The commander itself in the 99** - The commander is SEPARATE, do NOT include it in the deck
+- **ANY card related to a "theme"** - No planeswalkers (except Teferi/Narset/Oko), no tribal, no +1/+1 counters, no tokens theme
+- **Cards over 3 mana that aren't win conditions or crucial interaction** - Too slow
+- **"Value over time" cards** - Games end before you get value
+- **Defensive/pillow fort cards** - You need to WIN, not survive
+- **Synergy-dependent cards** - Every card must be good ON ITS OWN
+- **Equipment and auras** - Too slow, 2-for-1 risk
+- **Cards that need to untap to be good** - You may not get another turn
+- **Legendary creatures that are "meant to be commanders"** - They're not efficient enough as 99 includes
 
 ### Win Conditions (REQUIRED - every deck needs these)
 Include a primary combo win condition and ideally a backup. Common combos:

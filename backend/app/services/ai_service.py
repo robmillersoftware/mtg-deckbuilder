@@ -530,6 +530,14 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
 {land_recommendations}
 """
 
+            # For cEDH, don't pass strategy/archetype - just build the best pile of cards
+            if format == "cedh":
+                user_request_text = f"Build a cEDH deck for {commander_name or 'this commander'} in colors {', '.join(colors)}"
+                user_message = f"Build the most competitive cEDH deck possible. Ignore any themes - just play the best cards."
+            else:
+                user_request_text = f"USER REQUEST: {archetype} deck"
+                user_message = strategy
+
             system_prompt = f"""{format_header}
 {specific_cards_text}
 {decklist_examples_text}
@@ -543,7 +551,7 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
 {mana_section}
 {format_rules}
 
-USER REQUEST: {archetype} deck
+{user_request_text}
 
 {format_json}"""
 
@@ -551,7 +559,7 @@ USER REQUEST: {archetype} deck
                 model="claude-sonnet-4-20250514",
                 max_tokens=4096,
                 system=system_prompt,
-                messages=[{"role": "user", "content": strategy}],
+                messages=[{"role": "user", "content": user_message}],
             )
 
             if not response.content:
