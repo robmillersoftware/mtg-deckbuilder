@@ -293,6 +293,11 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
         )
         snapshots = result.scalars().all()
 
+        # For cEDH, we need to track the commander name separately
+        # since the "archetype" in meta is actually the commander name
+        commander_name = None
+        chosen_archetype_name = None  # The full name from meta (e.g., "Kinnan, Bonder Prodigy")
+
         # Analyze meta and pick best deck to build
         if not snapshots:
             # No meta data - build a generally good deck
@@ -306,6 +311,7 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
             if optimization_goal == "best_winrate":
                 # Build the top performing deck
                 best = snapshots[0]
+                chosen_archetype_name = best.archetype
                 archetype = self._classify_deck_type(best.archetype or "midrange")
                 colors = self._extract_colors_from_archetype(best.archetype or "")
                 reasoning = f"Building {best.archetype} - currently the #1 deck in the meta at {float(best.meta_percentage or 0):.1f}% of the field."
@@ -334,6 +340,7 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
                 # Find a deck that's good but under-represented
                 for snap in snapshots[3:8]:  # Look at positions 4-8
                     if snap.meta_percentage and float(snap.meta_percentage) > 3:
+                        chosen_archetype_name = snap.archetype
                         archetype = self._classify_deck_type(snap.archetype or "midrange")
                         colors = self._extract_colors_from_archetype(snap.archetype or "")
                         reasoning = f"Building {snap.archetype} - solid performance but less expected at {float(snap.meta_percentage):.1f}% meta share."
@@ -349,6 +356,7 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
                 # Look for a midrange deck in the meta
                 for snap in snapshots[:5]:
                     if "midrange" in (snap.archetype or "").lower():
+                        chosen_archetype_name = snap.archetype
                         colors = self._extract_colors_from_archetype(snap.archetype or "")
                         reasoning = f"Building {snap.archetype} - balanced matchups across the field."
                         break
@@ -356,13 +364,29 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
                     colors = ["B", "G"]
                     reasoning = "Building Golgari Midrange - strong, flexible, and good against most of the field."
 
+        # For cEDH, the archetype name IS the commander name
+        # We need to pass it as specific_cards and look up the actual color identity
+        specific_cards = None
+        if format == "cedh" and chosen_archetype_name:
+            commander_name = chosen_archetype_name
+            specific_cards = [commander_name]
+            # Look up the commander's actual color identity
+            commander_colors = await self.ai_service.get_commander_color_identity(commander_name)
+            if commander_colors:
+                colors = commander_colors
+                logger.info(f"[CHAT-SERVICE] Using commander {commander_name} color identity: {colors}")
+
         # Build the prompt
         color_names = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
         color_str = "/".join(color_names.get(c, c) for c in colors)
         format_display = "cEDH" if format == "cedh" else format.capitalize()
-        prompt = f"Build a competitive {color_str} {archetype} deck optimized for the current {format_display} meta"
 
-        logger.info(f"[CHAT-SERVICE] _handle_meta_deck_generation: format={format}, colors={colors}")
+        if format == "cedh" and commander_name:
+            prompt = f"Build a competitive {commander_name} cEDH deck"
+        else:
+            prompt = f"Build a competitive {color_str} {archetype} deck optimized for the current {format_display} meta"
+
+        logger.info(f"[CHAT-SERVICE] _handle_meta_deck_generation: format={format}, colors={colors}, commander={commander_name}")
 
         result = await self.deck_generator.generate(
             prompt=prompt,
@@ -370,7 +394,8 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
             conversation_id=conversation.id,
             include_sideboard=(format != "cedh"),  # cEDH doesn't use sideboard
             format=format,
-            colors=colors if colors else None,  # Pass explicit colors to avoid re-parsing
+            colors=colors if colors else None,
+            specific_cards=specific_cards,  # Pass commander name for cEDH
         )
 
         meta_summary = "\n\n**Current Meta:**\n"
