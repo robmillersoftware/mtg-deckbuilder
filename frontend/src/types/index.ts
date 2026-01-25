@@ -208,6 +208,44 @@ export interface RegisterRequest {
   display_name?: string;
 }
 
+// Simulation types
+export interface GameResult {
+  game_number: number;
+  winner: 'you' | 'opponent';
+  turns: number;
+  your_life: number;
+  opponent_life: number;
+  win_condition: string;
+  key_moments: string[];
+  your_key_cards: string[];
+  opponent_key_cards: string[];
+  sideboard_in?: string[];
+  sideboard_out?: string[];
+}
+
+export interface KeyCardAnalysis {
+  card: string;
+  importance: number;
+  reason: string;
+}
+
+export interface MatchupAnalysisResult {
+  your_deck_name: string;
+  opponent_deck_name: string;
+  games_played: number;
+  your_wins: number;
+  opponent_wins: number;
+  win_rate: number;
+  average_game_length: number;
+  matchup_assessment: 'favored' | 'even' | 'unfavored';
+  key_cards_for_you: KeyCardAnalysis[];
+  key_cards_against_you: KeyCardAnalysis[];
+  sideboard_guide: { in: string[]; out: string[] };
+  strategic_advice: string[];
+  mulligan_advice: string;
+  games: GameResult[];
+}
+
 // API response types
 export interface ApiResponse<T> {
   data: T;

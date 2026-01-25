@@ -99,6 +99,12 @@ export function DeckViewPage() {
         </div>
         <div className="flex items-center space-x-2">
           <button
+            onClick={() => navigate(`/simulate?deck=${deck.id}`)}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
+          >
+            Simulate
+          </button>
+          <button
             onClick={handleEdit}
             className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
           >
