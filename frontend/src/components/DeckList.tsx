@@ -70,7 +70,7 @@ export function DeckList({
           </div>
         )}
         {/* Commander - shown for commander/cEDH formats */}
-        {isCommanderFormat && commander && (
+        {isCommanderFormat && commander?.card_name && (
           <div className="pb-3 border-b border-gray-700">
             <h3 className="text-sm font-medium text-purple-400 mb-2">
               Commander
@@ -141,7 +141,7 @@ export function DeckList({
       {/* Stats */}
       <div className="px-4 py-3 border-t border-gray-700 text-xs text-gray-500">
         <div className="flex justify-between">
-          {isCommanderFormat && commander ? (
+          {isCommanderFormat && commander?.card_name ? (
             <>
               <span>Commander: 1</span>
               <span>Main: {mainCount} cards</span>

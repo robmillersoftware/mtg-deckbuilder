@@ -17,8 +17,13 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   // For DFCs, use only the front face name for API lookup
-  const lookupName = cardName.includes(' // ') ? cardName.split(' // ')[0] : cardName;
-  const { data: card, isLoading } = useCardByName(isVisible ? lookupName : undefined);
+  const lookupName = cardName?.includes(' // ') ? cardName.split(' // ')[0] : cardName;
+  const { data: card, isLoading } = useCardByName(isVisible && lookupName ? lookupName : undefined);
+
+  // If no cardName provided, just render children without tooltip
+  if (!cardName) {
+    return <span className={className}>{children}</span>;
+  }
 
   const handleMouseEnter = (e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect();
