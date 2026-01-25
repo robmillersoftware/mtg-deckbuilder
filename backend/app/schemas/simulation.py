@@ -87,3 +87,45 @@ class QuickSimRequest(BaseModel):
     deck_id: UUID
     opponent_archetype: str  # e.g., "Mono-Red Aggro", "Azorius Control"
     num_games: int = Field(default=5, ge=1, le=10)
+
+
+class SimulationRunResponse(BaseModel):
+    """Response for a simulation run."""
+    id: UUID
+    status: str
+    your_deck_id: Optional[UUID] = None
+    your_deck_name: str
+    opponent_deck_name: str
+    opponent_archetype: Optional[str] = None
+    format: str
+    num_games: int
+    include_sideboard_games: bool
+    games_completed: int
+    current_game_turn: Optional[int] = None
+
+    # Results (when completed)
+    your_wins: Optional[int] = None
+    opponent_wins: Optional[int] = None
+    win_rate: Optional[float] = None
+    average_game_length: Optional[float] = None
+    matchup_assessment: Optional[str] = None
+    games: Optional[List[GameResult]] = None
+    key_cards_for_you: Optional[List[Dict[str, Any]]] = None
+    key_cards_against_you: Optional[List[Dict[str, Any]]] = None
+    sideboard_guide: Optional[Dict[str, List[str]]] = None
+    strategic_advice: Optional[List[str]] = None
+    mulligan_advice: Optional[str] = None
+
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SimulationRunListResponse(BaseModel):
+    """List of simulation runs."""
+    items: List[SimulationRunResponse]
+    total: int

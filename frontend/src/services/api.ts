@@ -248,6 +248,7 @@ export const metaApi = {
 
 // Simulation API
 export const simulationApi = {
+  // Legacy synchronous endpoints
   runSimulation: (request: {
     your_deck: { deck_id?: string; main_deck?: { card_name: string; quantity: number }[]; sideboard?: { card_name: string; quantity: number }[]; name?: string };
     opponent_deck: { deck_id?: string; main_deck?: { card_name: string; quantity: number }[]; sideboard?: { card_name: string; quantity: number }[]; name?: string };
@@ -262,5 +263,20 @@ export const simulationApi = {
     num_games?: number;
   }) => api.post('/simulation/vs-archetype', request),
 
-  getAvailableArchetypes: () => api.get<string[]>('/simulation/archetypes'),
+  getAvailableArchetypes: (format: string = 'standard') =>
+    api.get<string[]>('/simulation/archetypes', { params: { format } }),
+
+  // Persistent simulation runs (background execution)
+  listRuns: (params?: { limit?: number; offset?: number; status?: string }) =>
+    api.get('/simulation/runs', { params }),
+
+  createRun: (request: {
+    deck_id: string;
+    opponent_archetype: string;
+    num_games?: number;
+  }) => api.post('/simulation/runs', request),
+
+  getRun: (id: string) => api.get(`/simulation/runs/${id}`),
+
+  deleteRun: (id: string) => api.delete(`/simulation/runs/${id}`),
 };
