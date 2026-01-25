@@ -156,10 +156,18 @@ class DeckGenerator:
         )
 
         # Update conversation with deck
+        # Commander needs to be stored as a DeckEntry dict for frontend compatibility
+        commander_entry = None
+        if commander_name:
+            commander_entry = {
+                "card_name": commander_name,
+                "quantity": 1,
+                "card": None,
+            }
         conversation.current_deck = {
             "name": deck.name,
             "archetype": deck.archetype,
-            "commander": commander_name,
+            "commander": commander_entry,
             "main_deck": deck.main_deck,
             "sideboard": deck.sideboard,
             "format": format,
@@ -349,10 +357,19 @@ class DeckGenerator:
         validation = await self.validator.validate(validated_main, validated_sideboard, format=deck_format)
 
         # Update conversation
+        # Preserve commander in DeckEntry dict format
+        existing_commander = current_deck.get("commander")
+        # If commander is a string (legacy format), convert to dict
+        if isinstance(existing_commander, str):
+            existing_commander = {
+                "card_name": existing_commander,
+                "quantity": 1,
+                "card": None,
+            }
         conversation.current_deck = {
             "name": current_deck.get("name", "Modified Deck"),
             "archetype": current_deck.get("archetype"),
-            "commander": current_deck.get("commander"),
+            "commander": existing_commander,
             "main_deck": validated_main,
             "sideboard": validated_sideboard,
             "format": deck_format,

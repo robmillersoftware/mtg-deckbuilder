@@ -101,7 +101,7 @@ async def create_deck(
     validator = DeckValidator(db)
     main_deck_entries = [entry.model_dump(mode='json') for entry in deck_data.main_deck]
     sideboard_entries = [entry.model_dump(mode='json') for entry in deck_data.sideboard]
-    validation = await validator.validate(main_deck_entries, sideboard_entries)
+    validation = await validator.validate(main_deck_entries, sideboard_entries, deck_data.format)
 
     # Create deck
     deck = Deck(
@@ -213,7 +213,7 @@ async def update_deck(
     # Re-validate if deck contents changed
     if deck_data.main_deck is not None or deck_data.sideboard is not None:
         validator = DeckValidator(db)
-        validation = await validator.validate(deck.main_deck, deck.sideboard)
+        validation = await validator.validate(deck.main_deck, deck.sideboard, deck.format)
         deck.is_validated = validation.is_valid
         deck.validation_errors = [e.model_dump(mode='json') for e in validation.errors] if validation.errors else None
 
@@ -337,7 +337,7 @@ async def validate_deck(
     current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
-    """Validate a deck against Standard rules."""
+    """Validate a deck against its format's rules."""
     result = await db.execute(
         select(Deck).where(
             and_(
@@ -355,7 +355,7 @@ async def validate_deck(
         )
 
     validator = DeckValidator(db)
-    report = await validator.validate(deck.main_deck, deck.sideboard)
+    report = await validator.validate(deck.main_deck, deck.sideboard, deck.format)
 
     # Update deck validation status
     deck.is_validated = report.is_valid
@@ -438,10 +438,10 @@ async def generate_sideboard_matrix(
             detail="Deck not found",
         )
 
-    # Fetch current meta archetypes (top 10 by meta percentage)
+    # Fetch current meta archetypes (top 10 by meta percentage) for the deck's format
     meta_result = await db.execute(
         select(MetaSnapshot)
-        .where(MetaSnapshot.format == "standard")
+        .where(MetaSnapshot.format == deck.format)
         .order_by(MetaSnapshot.meta_percentage.desc())
         .limit(10)
     )
