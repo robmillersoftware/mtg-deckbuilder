@@ -383,6 +383,8 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
             conversation_id=result.conversation_id,
             deck={
                 "name": result.deck.name,
+                "format": result.deck.format,
+                "commander": result.deck.commander,
                 "main_deck": result.deck.main_deck,
                 "sideboard": result.deck.sideboard,
                 "archetype": result.deck.archetype,
@@ -463,6 +465,8 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
             conversation_id=result.conversation_id,
             deck={
                 "name": result.deck.name,
+                "format": result.deck.format,
+                "commander": result.deck.commander,
                 "main_deck": result.deck.main_deck,
                 "sideboard": result.deck.sideboard,
                 "archetype": result.deck.archetype,
@@ -501,8 +505,11 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
             conversation_id=conversation.id,
             deck={
                 "name": result.deck.name,
+                "format": result.deck.format,
+                "commander": result.deck.commander,
                 "main_deck": result.deck.main_deck,
                 "sideboard": result.deck.sideboard,
+                "archetype": result.deck.archetype,
             },
             suggestions=["Undo changes", "Show the full list", "Explain changes"],
         )

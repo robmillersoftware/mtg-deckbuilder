@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { conversationsApi } from '@/services/api';
 import { useConversationStore } from '@/store/conversation';
+import { useDeckStore } from '@/store/deck';
 import { Conversation } from '@/types';
 import clsx from 'clsx';
 
@@ -13,6 +14,7 @@ export function ConversationList({ className }: ConversationListProps) {
   const [isLoading, setIsLoading] = useState(true);
 
   const { currentConversation, setCurrentConversation } = useConversationStore();
+  const { setCurrentDeck } = useDeckStore();
 
   useEffect(() => {
     loadConversations();
@@ -34,6 +36,10 @@ export function ConversationList({ className }: ConversationListProps) {
     try {
       const response = await conversationsApi.getById(conversation.id);
       setCurrentConversation(response.data);
+      // Also load the deck if one exists in the conversation
+      if (response.data.current_deck) {
+        setCurrentDeck(response.data.current_deck);
+      }
     } catch (error) {
       console.error('Failed to load conversation:', error);
     }

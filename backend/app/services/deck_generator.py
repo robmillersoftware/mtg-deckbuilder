@@ -264,6 +264,7 @@ class DeckGenerator:
                 current_deck = {
                     "name": deck.name,
                     "archetype": deck.archetype,
+                    "commander": deck.commander,
                     "main_deck": deck.main_deck,
                     "sideboard": deck.sideboard,
                     "format": deck.format,
