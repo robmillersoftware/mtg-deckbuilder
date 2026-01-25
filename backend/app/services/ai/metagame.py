@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, union_all
 
 from app.models.meta import Decklist, Event, CardCooccurrence
+from app.services.card_service import get_format_legality_condition
 
 logger = logging.getLogger(__name__)
 
@@ -120,17 +121,23 @@ class MetagameMixin:
 
         return matching_cards
 
-    async def _get_all_tournament_cards(self) -> List[str]:
-        """Get all unique card names that appear in tournament decklists. Uses cache."""
+    async def _get_all_tournament_cards(self, format: str = "standard") -> List[str]:
+        """Get all unique card names that appear in tournament decklists for the given format. Uses cache."""
         global _tournament_cards_cache
 
+        # Use format-specific cache key
+        cache_key = f"{format}_data"
         now = time.time()
-        if (_tournament_cards_cache["data"] is not None and
-            now - _tournament_cards_cache["timestamp"] < _tournament_cards_cache["ttl"]):
-            logger.debug("Using cached tournament cards")
-            return _tournament_cards_cache["data"]
 
-        query = select(Decklist).join(Event).where(Event.format == "standard").limit(200)
+        # Check format-specific cache
+        if (cache_key in _tournament_cards_cache and
+            _tournament_cards_cache[cache_key] is not None and
+            now - _tournament_cards_cache.get(f"{format}_timestamp", 0) < _tournament_cards_cache["ttl"]):
+            logger.debug(f"Using cached {format} tournament cards")
+            return _tournament_cards_cache[cache_key]
+
+        # Query for the specified format
+        query = select(Decklist).join(Event).where(Event.format == format).limit(200)
         result = await self.db.execute(query)
         decklists = result.scalars().all()
 
@@ -146,15 +153,15 @@ class MetagameMixin:
                     all_cards.add(card_name)
 
         cards_list = list(all_cards)
-        _tournament_cards_cache["data"] = cards_list
-        _tournament_cards_cache["timestamp"] = now
-        logger.info(f"Cached {len(cards_list)} tournament cards")
+        _tournament_cards_cache[cache_key] = cards_list
+        _tournament_cards_cache[f"{format}_timestamp"] = now
+        logger.info(f"Cached {len(cards_list)} {format} tournament cards")
 
         return cards_list
 
-    async def _find_decks_with_cards(self, card_names: List[str]) -> List[Decklist]:
+    async def _find_decks_with_cards(self, card_names: List[str], format: str = "standard") -> List[Decklist]:
         """Find tournament decklists that contain the specified cards."""
-        query = select(Decklist).join(Event).where(Event.format == "standard")
+        query = select(Decklist).join(Event).where(Event.format == format)
         result = await self.db.execute(query.limit(100))
         all_decklists = result.scalars().all()
 
@@ -292,7 +299,7 @@ class MetagameMixin:
 
         return "\n".join(examples)
 
-    async def _get_mana_base_from_meta(self, archetype: str, colors: List[str]) -> Dict[str, Any]:
+    async def _get_mana_base_from_meta(self, archetype: str, colors: List[str], format: str = "standard") -> Dict[str, Any]:
         """Get recommended mana base by analyzing similar tournament decks."""
         from app.models.card import Card
 
@@ -300,7 +307,7 @@ class MetagameMixin:
         is_mono_color = len(colors_upper) == 1
 
         # Find similar decklists from tournaments
-        query = select(Decklist).join(Event).where(Event.format == "standard")
+        query = select(Decklist).join(Event).where(Event.format == format)
 
         # Try to match archetype name (fuzzy)
         if archetype:
@@ -311,8 +318,8 @@ class MetagameMixin:
         decklists = result.scalars().all()
 
         if not decklists:
-            # Fallback: get any recent decklists
-            query = select(Decklist).join(Event).where(Event.format == "standard").limit(50)
+            # Fallback: get any recent decklists for this format
+            query = select(Decklist).join(Event).where(Event.format == format).limit(50)
             result = await self.db.execute(query)
             decklists = result.scalars().all()
 
@@ -393,7 +400,7 @@ class MetagameMixin:
             "recommended_lands": recommended_lands[:15],  # Top 15 lands
         }
 
-    async def _get_meta_cards(self, archetype: str, strategy: str = "") -> List[Dict[str, Any]]:
+    async def _get_meta_cards(self, archetype: str, strategy: str = "", format: str = "standard") -> List[Dict[str, Any]]:
         """Get commonly played non-land cards from tournament decks for the given archetype."""
         from app.models.card import Card
 
@@ -425,7 +432,7 @@ class MetagameMixin:
                 search_terms.extend(terms)
 
         # Find similar decklists from tournaments
-        query = select(Decklist).join(Event).where(Event.format == "standard")
+        query = select(Decklist).join(Event).where(Event.format == format)
 
         if search_terms:
             # Search for any matching archetype term
@@ -481,7 +488,8 @@ class MetagameMixin:
         archetype: str,
         colors: List[str],
         strategy: str = "",
-        limit: int = MAX_DECKLIST_EXAMPLES
+        limit: int = MAX_DECKLIST_EXAMPLES,
+        format: str = "standard"
     ) -> List[Decklist]:
         """Get tournament decklists for a given archetype."""
         # Map strategy keywords to archetype search terms
@@ -512,7 +520,7 @@ class MetagameMixin:
                 search_terms.extend(terms)
 
         query = select(Decklist).join(Event).where(
-            Event.format == "standard"
+            Event.format == format
         )
 
         # Match archetype name (fuzzy) with any search term
@@ -527,9 +535,9 @@ class MetagameMixin:
         decklists = result.scalars().all()
 
         if not decklists:
-            # Fallback: get any recent top-placing decklists
+            # Fallback: get any recent top-placing decklists for this format
             query = select(Decklist).join(Event).where(
-                Event.format == "standard"
+                Event.format == format
             ).order_by(Decklist.placement.asc().nullslast()).limit(limit * 3)
             result = await self.db.execute(query)
             decklists = result.scalars().all()
@@ -553,7 +561,8 @@ class MetagameMixin:
         self,
         card_names: List[str],
         colors: List[str],
-        limit: int = 30
+        limit: int = 30,
+        format: str = "standard"
     ) -> List[Dict[str, Any]]:
         """Get cards that frequently co-occur with the given cards in tournament decks."""
         from app.models.card import Card
@@ -569,7 +578,7 @@ class MetagameMixin:
             CardCooccurrence.card_b.label("partner"),
             CardCooccurrence.cooccurrence_count.label("count")
         ).where(
-            CardCooccurrence.format == "standard",
+            CardCooccurrence.format == format,
             func.lower(CardCooccurrence.card_a).in_(card_names_lower)
         )
 
@@ -578,7 +587,7 @@ class MetagameMixin:
             CardCooccurrence.card_a.label("partner"),
             CardCooccurrence.cooccurrence_count.label("count")
         ).where(
-            CardCooccurrence.format == "standard",
+            CardCooccurrence.format == format,
             func.lower(CardCooccurrence.card_b).in_(card_names_lower)
         )
 
@@ -606,7 +615,7 @@ class MetagameMixin:
 
         card_query = select(Card).where(
             func.lower(Card.name).in_([n.lower() for n in card_names_to_check]),
-            Card.is_standard_legal == True
+            get_format_legality_condition(format)
         )
         card_result = await self.db.execute(card_query)
         cards = card_result.scalars().all()
@@ -640,7 +649,8 @@ class MetagameMixin:
     async def _get_sideboard_patterns(
         self,
         archetype: str,
-        colors: List[str]
+        colors: List[str],
+        format: str = "standard"
     ) -> Dict[str, Any]:
         """Analyze sideboard patterns from tournament decks to identify hate cards."""
         from app.models.card import Card
@@ -649,7 +659,7 @@ class MetagameMixin:
 
         # Get decklists with sideboards
         query = select(Decklist).join(Event).where(
-            Event.format == "standard"
+            Event.format == format
         )
         if archetype:
             query = query.where(Decklist.archetype.ilike(f"%{archetype}%"))
@@ -679,7 +689,7 @@ class MetagameMixin:
         if all_sideboard_names:
             card_query = select(Card).where(
                 func.lower(Card.name).in_([n.lower() for n in all_sideboard_names]),
-                Card.is_standard_legal == True
+                get_format_legality_condition(format)
             )
             card_result = await self.db.execute(card_query)
             cards = card_result.scalars().all()
@@ -714,12 +724,13 @@ class MetagameMixin:
     async def _get_deck_composition_from_meta(
         self,
         archetype: str,
-        colors: List[str]
+        colors: List[str],
+        format: str = "standard"
     ) -> Dict[str, Any]:
         """Analyze actual tournament decks to derive typical composition ratios."""
         from app.models.card import Card
 
-        query = select(Decklist).join(Event).where(Event.format == "standard")
+        query = select(Decklist).join(Event).where(Event.format == format)
         if archetype:
             query = query.where(Decklist.archetype.ilike(f"%{archetype}%"))
         query = query.limit(50)

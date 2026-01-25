@@ -110,7 +110,7 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
             print(f"[AI-SERVICE] Specific cards from parse: {specific_cards}")
             print(f"[AI-SERVICE] Format: {format}, preserve_colors: {preserve_colors}")
             if specific_cards:
-                template_decks = await self._find_decks_with_cards(specific_cards)
+                template_decks = await self._find_decks_with_cards(specific_cards, format=format)
                 print(f"[AI-SERVICE] Found {len(template_decks)} tournament decks with specific cards")
                 if template_decks:
                     if not preserve_colors:
@@ -125,14 +125,14 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
                     detected_themes = await self._detect_card_themes(specific_cards)
                     print(f"[AI-SERVICE] Detected themes: {detected_themes}")
                     if detected_themes:
-                        template_cards = await self._get_tournament_synergy_cards(detected_themes)
+                        template_cards = await self._get_tournament_synergy_cards(detected_themes, format=format)
                         print(f"[AI-SERVICE] Found {len(template_cards)} tournament-played synergy cards")
 
             # Phase 1b: If no specific cards, try to find archetype decklists based on strategy
             # This allows strategy keywords like "graveyard" to find "Reanimator" decks and use their colors
             # NOTE: Skip color override for cEDH - commander color identity is fixed
             if not template_decks and strategy:
-                strategy_decks = await self._get_archetype_decklists(archetype, [], strategy, limit=5)
+                strategy_decks = await self._get_archetype_decklists(archetype, [], strategy, limit=5, format=format)
                 if strategy_decks:
                     print(f"[AI-SERVICE] Found {len(strategy_decks)} tournament decks matching strategy '{strategy}'")
                     if not preserve_colors:
@@ -146,20 +146,20 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
             # Phase 2: Run independent queries in parallel
             parallel_tasks = {
                 'available_cards': self._get_available_cards(colors, format),
-                'sideboard_patterns': self._get_sideboard_patterns(archetype, colors),
-                'composition': self._get_deck_composition_from_meta(archetype, colors),
-                'mana_base_data': self._get_mana_base_from_meta(archetype, colors),
-                'semantic_cards': self._semantic_card_search(strategy, colors),
-                'tournament_cards': self._get_all_tournament_cards(),
+                'sideboard_patterns': self._get_sideboard_patterns(archetype, colors, format=format),
+                'composition': self._get_deck_composition_from_meta(archetype, colors, format=format),
+                'mana_base_data': self._get_mana_base_from_meta(archetype, colors, format=format),
+                'semantic_cards': self._semantic_card_search(strategy, colors, format=format),
+                'tournament_cards': self._get_all_tournament_cards(format=format),
             }
 
             # Add conditional parallel tasks
             if specific_cards:
-                parallel_tasks['cooccurrence_cards'] = self._get_cooccurrence_cards(specific_cards, colors)
+                parallel_tasks['cooccurrence_cards'] = self._get_cooccurrence_cards(specific_cards, colors, format=format)
             if not template_cards:
-                parallel_tasks['meta_cards'] = self._get_meta_cards(archetype, strategy)
+                parallel_tasks['meta_cards'] = self._get_meta_cards(archetype, strategy, format=format)
             if not template_decks and archetype:
-                parallel_tasks['example_decklists'] = self._get_archetype_decklists(archetype, colors, strategy)
+                parallel_tasks['example_decklists'] = self._get_archetype_decklists(archetype, colors, strategy, format=format)
 
             # Execute all queries in parallel
             task_names = list(parallel_tasks.keys())
@@ -250,7 +250,8 @@ WINNING TOURNAMENT DECKLISTS - Study and emulate these actual winning decklists:
 Use these decklists as your primary reference. Copy their card choices and quantities.
 """
 
-            # Format meta cards section
+            # Build format-aware prompt sections from the queried data
+            # All queries are now format-aware, so they return data for the specified format
             meta_cards_text = ""
             if template_cards and template_decks:
                 # We found tournament decks with the requested cards - use them as strong guidance
@@ -268,7 +269,6 @@ TOURNAMENT-PLAYED {theme_str.upper()} CARDS - These cards match your theme AND s
 {chr(10).join(f"- {c['name']}: {c['recommended_quantity']} copies (played in {c['frequency']} tournament decks)" for c in template_cards[:40])}
 
 USE THESE CARDS. They are competitively proven for the {theme_str} theme.
-Do NOT use cards like Solemn Simulacrum, Prophetic Prism, or other "classic" artifacts that don't see current Standard tournament play.
 """
             elif meta_cards:
                 meta_cards_text = f"""
@@ -296,9 +296,9 @@ STRATEGY-RELEVANT CARDS (semantically matched to your request):
 {chr(10).join(f"- {c['name']}: {c['type_line']}" for c in semantic_cards[:15])}
 """
 
-            # Format sideboard patterns
+            # Format sideboard patterns (skip for Commander formats which have no sideboard)
             sideboard_guide_text = ""
-            if sideboard_patterns.get("sideboard_staples"):
+            if format not in ["cedh", "commander"] and sideboard_patterns.get("sideboard_staples"):
                 sideboard_guide_text = f"""
 SIDEBOARD GUIDE - These cards appear most frequently in tournament sideboards for this archetype:
 {chr(10).join(f"- {c['name']}: {c['avg_quantity']} copies (in {c['frequency']}/{c['total_decks']} decks)" for c in sideboard_patterns['sideboard_staples'][:15])}
@@ -494,6 +494,26 @@ Colors: {', '.join(colors)}"""
     ]
 }}"""
 
+            # Build tournament data sections
+            # For cEDH, the cedh_knowledge prompt already provides comprehensive staple/mana guidance
+            # For other formats, use tournament data if available
+            if format == "cedh":
+                tournament_section = ""  # cedh_knowledge in format_header provides comprehensive guidance
+                mana_section = ""  # cedh_knowledge handles mana base recommendations
+            else:
+                tournament_section = ""
+                if on_color_tournament:
+                    tournament_section = f"""
+TOURNAMENT-PLAYED CARDS IN YOUR COLORS (USE THESE):
+{chr(10).join(f"- {name}" for name in on_color_tournament[:150])}
+"""
+                mana_section = ""
+                if mana_base_data.get('sample_size', 0) > 0:
+                    mana_section = f"""
+MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
+{land_recommendations}
+"""
+
             system_prompt = f"""{format_header}
 {specific_cards_text}
 {decklist_examples_text}
@@ -503,13 +523,8 @@ Colors: {', '.join(colors)}"""
 {composition_text}
 {role_distribution_text}
 {sideboard_guide_text}
-
-TOURNAMENT-PLAYED CARDS IN YOUR COLORS (USE THESE):
-{chr(10).join(f"- {name}" for name in on_color_tournament[:150])}
-
-MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
-{land_recommendations}
-
+{tournament_section}
+{mana_section}
 {format_rules}
 
 USER REQUEST: {archetype} deck

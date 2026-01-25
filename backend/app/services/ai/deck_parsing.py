@@ -147,14 +147,15 @@ async def extract_card_names_from_prompt(
             potential_names.append(four_word)
 
     # Check each potential name against the database
+    from app.services.card_service import get_format_legality_condition
+
     for name in potential_names:
         if len(name) < 3:
             continue
         query = select(Card.name).where(
-            func.lower(Card.name).like(f"%{name.lower()}%")
+            func.lower(Card.name).like(f"%{name.lower()}%"),
+            get_format_legality_condition(format)
         )
-        if format not in ["cedh", "commander", "legacy", "modern", "historic"]:
-            query = query.where(Card.is_standard_legal == True)
         query = query.limit(1)
         result = await db.execute(query)
         card = result.scalar_one_or_none()

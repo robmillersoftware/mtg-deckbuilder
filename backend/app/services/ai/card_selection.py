@@ -19,7 +19,8 @@ class CardSelectionMixin:
         self,
         strategy: str,
         colors: List[str],
-        limit: int = 20
+        limit: int = 20,
+        format: str = "standard"
     ) -> List[Dict[str, Any]]:
         """Search for cards that match the strategy semantically."""
         from app.models.card import Card
@@ -37,7 +38,7 @@ class CardSelectionMixin:
                 Card.oracle_text.ilike(f"%{keyword}%") |
                 Card.type_line.ilike(f"%{keyword}%") |
                 Card.name.ilike(f"%{keyword}%"),
-                Card.is_standard_legal == True
+                get_format_legality_condition(format)
             ).limit(10)
 
             result = await self.db.execute(query)
@@ -102,7 +103,8 @@ class CardSelectionMixin:
     async def _get_tournament_synergy_cards(
         self,
         themes: List[str],
-        limit: int = 40
+        limit: int = 40,
+        format: str = "standard"
     ) -> List[Dict[str, Any]]:
         """Get tournament-played cards that match the given themes."""
         from app.models.card import Card
@@ -111,9 +113,9 @@ class CardSelectionMixin:
         if not themes:
             return []
 
-        # Get recent tournament decklists
+        # Get recent tournament decklists for the specified format
         query = select(Decklist).join(Event).where(
-            Event.format == "standard"
+            Event.format == format
         ).limit(100)
         result = await self.db.execute(query)
         decklists = result.scalars().all()
@@ -166,10 +168,12 @@ class CardSelectionMixin:
         self,
         themes: List[str],
         colors: List[str],
-        limit: int = 30
+        limit: int = 30,
+        format: str = "standard"
     ) -> List[Dict[str, Any]]:
         """Get cards that synergize with the given themes."""
         from app.models.card import Card
+        from app.services.card_service import get_format_legality_condition
 
         if not themes:
             return []
@@ -182,7 +186,7 @@ class CardSelectionMixin:
             query = select(Card).where(
                 Card.oracle_text.ilike(f"%{theme}%") |
                 Card.type_line.ilike(f"%{theme}%"),
-                Card.is_standard_legal == True
+                get_format_legality_condition(format)
             ).limit(20)
 
             result = await self.db.execute(query)
