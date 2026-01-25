@@ -521,7 +521,7 @@ Colors: {', '.join(colors)}"""
 5. ONLY use cards legal in Commander format
 6. Every card's color identity must fit within colors {colors}
 7. For {len(colors)}-color decks: {"Use mostly basic lands." if len(colors) == 1 else "Use appropriate dual lands, fetch lands, and color fixing."}
-8. Include staple cEDH cards: fast mana (Mana Crypt, Sol Ring, Mana Vault, etc.), efficient interaction, and win conditions
+8. Include staple cEDH cards: fast mana (Sol Ring, Mana Vault, Chrome Mox, Mox Diamond, Lotus Petal, etc.), efficient interaction, and win conditions
 9. EVERY card must have a clear purpose"""
 
                 format_json = """Return JSON with reasoning for key cards:
