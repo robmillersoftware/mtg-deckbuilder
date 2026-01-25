@@ -12,6 +12,7 @@ from app.models.deck import Deck
 from app.models.conversation import Conversation
 from app.models.meta import Event, Decklist, MetaSnapshot, CardCooccurrence, ArchetypeTemplate
 from app.models.job import JobRun
+from app.models.simulation import SimulationRun
 
 __all__ = [
     "Base",
@@ -30,4 +31,5 @@ __all__ = [
     "CardCooccurrence",
     "ArchetypeTemplate",
     "JobRun",
+    "SimulationRun",
 ]

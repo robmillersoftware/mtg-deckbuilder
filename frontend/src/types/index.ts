@@ -246,6 +246,43 @@ export interface MatchupAnalysisResult {
   games: GameResult[];
 }
 
+export interface SimulationRun {
+  id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  your_deck_id?: string;
+  your_deck_name: string;
+  opponent_deck_name: string;
+  opponent_archetype?: string;
+  format: string;
+  num_games: number;
+  include_sideboard_games: boolean;
+  games_completed: number;
+  current_game_turn?: number;
+
+  // Results (when completed)
+  your_wins?: number;
+  opponent_wins?: number;
+  win_rate?: number;
+  average_game_length?: number;
+  matchup_assessment?: 'favored' | 'even' | 'unfavored';
+  games?: GameResult[];
+  key_cards_for_you?: KeyCardAnalysis[];
+  key_cards_against_you?: KeyCardAnalysis[];
+  sideboard_guide?: { in: string[]; out: string[] };
+  strategic_advice?: string[];
+  mulligan_advice?: string;
+
+  error_message?: string;
+  created_at?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface SimulationRunListResponse {
+  items: SimulationRun[];
+  total: number;
+}
+
 // API response types
 export interface ApiResponse<T> {
   data: T;

@@ -7,17 +7,19 @@ The LLM plays both sides, tracking game state and making decisions.
 
 from typing import Optional, List, Dict, Any, Tuple
 from uuid import UUID, uuid4
+from datetime import datetime
 import logging
 import json
 import random
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc
 
 from app.core.config import settings
 from app.models.deck import Deck
 from app.models.meta import Decklist, Event
 from app.models.card import Card
+from app.models.simulation import SimulationRun
 from app.services.card_service import CardService
 from app.schemas.simulation import (
     DeckInput,
@@ -103,6 +105,7 @@ class GameSimulator:
         num_games: int = 5,
         include_sideboard_games: bool = True,
         format: str = "standard",
+        on_progress: Optional[Any] = None,  # Callback(games_completed, current_turn)
     ) -> MatchupAnalysisResult:
         """
         Simulate a match (multiple games) between two decks.
@@ -112,6 +115,7 @@ class GameSimulator:
             opponent_deck: Opponent deck configuration
             num_games: Number of games to simulate
             include_sideboard_games: Whether games 2+ use sideboards
+            on_progress: Optional callback for progress updates
 
         Returns:
             MatchupAnalysisResult with statistics and insights
@@ -147,6 +151,10 @@ class GameSimulator:
             if game_result.winner == "you":
                 your_wins += 1
             total_turns += game_result.turns
+
+            # Report progress
+            if on_progress:
+                await on_progress(game_num, None)
 
         # Calculate statistics
         win_rate = your_wins / num_games
@@ -627,3 +635,200 @@ Return as JSON:
             .order_by(Decklist.archetype)
         )
         return [row[0] for row in result.all() if row[0]]
+
+    # =========================================================================
+    # Persistent Simulation Run Methods
+    # =========================================================================
+
+    async def create_simulation_run(
+        self,
+        user_id: UUID,
+        deck_id: UUID,
+        opponent_archetype: str,
+        num_games: int = 5,
+        include_sideboard_games: bool = True,
+    ) -> SimulationRun:
+        """
+        Create a new simulation run record.
+        Returns the created run so it can be executed in the background.
+        """
+        # Get user's deck
+        result = await self.db.execute(
+            select(Deck).where(Deck.id == deck_id)
+        )
+        deck = result.scalar_one_or_none()
+        if not deck:
+            raise ValueError(f"Deck {deck_id} not found")
+
+        deck_format = deck.format or "standard"
+
+        # Get opponent decklist
+        opponent_decklist = await self._get_archetype_decklist(opponent_archetype, deck_format)
+        if not opponent_decklist:
+            raise ValueError(f"No {deck_format} decklists found for archetype: {opponent_archetype}")
+
+        # Create snapshot of decks
+        your_deck_snapshot = {
+            "main_deck": deck.main_deck or [],
+            "sideboard": deck.sideboard or [],
+        }
+        opponent_deck_snapshot = {
+            "main_deck": opponent_decklist.get("main_deck", []),
+            "sideboard": opponent_decklist.get("sideboard", []),
+        }
+
+        # Create the simulation run record
+        sim_run = SimulationRun(
+            user_id=user_id,
+            status="pending",
+            your_deck_id=deck_id,
+            your_deck_name=deck.name,
+            your_deck_snapshot=your_deck_snapshot,
+            opponent_deck_name=opponent_decklist.get("name", opponent_archetype),
+            opponent_archetype=opponent_archetype,
+            opponent_deck_snapshot=opponent_deck_snapshot,
+            format=deck_format,
+            num_games=num_games,
+            include_sideboard_games=1 if include_sideboard_games else 0,
+            games_completed=0,
+        )
+
+        self.db.add(sim_run)
+        await self.db.commit()
+        await self.db.refresh(sim_run)
+
+        return sim_run
+
+    async def execute_simulation_run(self, simulation_id: UUID) -> SimulationRun:
+        """
+        Execute a simulation run and update the record with results.
+        This is designed to be called from a background job.
+        """
+        # Get the simulation run
+        result = await self.db.execute(
+            select(SimulationRun).where(SimulationRun.id == simulation_id)
+        )
+        sim_run = result.scalar_one_or_none()
+        if not sim_run:
+            raise ValueError(f"Simulation run {simulation_id} not found")
+
+        # Mark as running
+        sim_run.status = "running"
+        sim_run.started_at = datetime.utcnow()
+        await self.db.commit()
+
+        try:
+            # Build deck inputs from snapshots
+            your_deck = DeckInput(
+                main_deck=sim_run.your_deck_snapshot.get("main_deck", []),
+                sideboard=sim_run.your_deck_snapshot.get("sideboard", []),
+                name=sim_run.your_deck_name,
+            )
+            opponent_deck = DeckInput(
+                main_deck=sim_run.opponent_deck_snapshot.get("main_deck", []),
+                sideboard=sim_run.opponent_deck_snapshot.get("sideboard", []),
+                name=sim_run.opponent_deck_name,
+            )
+
+            # Run the simulation
+            match_result = await self.simulate_match(
+                your_deck=your_deck,
+                opponent_deck=opponent_deck,
+                num_games=sim_run.num_games,
+                include_sideboard_games=bool(sim_run.include_sideboard_games),
+                format=sim_run.format,
+                on_progress=lambda completed, turn: self._update_progress(
+                    sim_run, completed, turn
+                ),
+            )
+
+            # Update with results
+            sim_run.status = "completed"
+            sim_run.completed_at = datetime.utcnow()
+            sim_run.your_wins = match_result.your_wins
+            sim_run.opponent_wins = match_result.opponent_wins
+            sim_run.win_rate = match_result.win_rate
+            sim_run.average_game_length = match_result.average_game_length
+            sim_run.matchup_assessment = match_result.matchup_assessment
+            sim_run.games = [g.model_dump() for g in match_result.games]
+            sim_run.key_cards_for_you = match_result.key_cards_for_you
+            sim_run.key_cards_against_you = match_result.key_cards_against_you
+            sim_run.sideboard_guide = match_result.sideboard_guide
+            sim_run.strategic_advice = match_result.strategic_advice
+            sim_run.mulligan_advice = match_result.mulligan_advice
+            sim_run.games_completed = sim_run.num_games
+
+            await self.db.commit()
+            await self.db.refresh(sim_run)
+
+        except Exception as e:
+            logger.error(f"Simulation run {simulation_id} failed: {e}")
+            sim_run.status = "failed"
+            sim_run.error_message = str(e)[:1000]
+            sim_run.completed_at = datetime.utcnow()
+            await self.db.commit()
+            raise
+
+        return sim_run
+
+    async def _update_progress(
+        self, sim_run: SimulationRun, games_completed: int, current_turn: Optional[int]
+    ):
+        """Update simulation progress (called during simulation)."""
+        sim_run.games_completed = games_completed
+        sim_run.current_game_turn = current_turn
+        await self.db.commit()
+
+    async def get_simulation_run(self, simulation_id: UUID, user_id: UUID) -> Optional[SimulationRun]:
+        """Get a simulation run by ID (user must own it)."""
+        result = await self.db.execute(
+            select(SimulationRun).where(
+                SimulationRun.id == simulation_id,
+                SimulationRun.user_id == user_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_simulation_runs(
+        self,
+        user_id: UUID,
+        limit: int = 20,
+        offset: int = 0,
+        status: Optional[str] = None,
+    ) -> Tuple[List[SimulationRun], int]:
+        """List simulation runs for a user."""
+        query = select(SimulationRun).where(SimulationRun.user_id == user_id)
+
+        if status:
+            query = query.where(SimulationRun.status == status)
+
+        # Count total
+        from sqlalchemy import func
+        count_query = select(func.count()).select_from(
+            query.subquery()
+        )
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        # Get paginated results
+        query = query.order_by(desc(SimulationRun.created_at)).offset(offset).limit(limit)
+        result = await self.db.execute(query)
+        runs = result.scalars().all()
+
+        return list(runs), total
+
+    async def delete_simulation_run(self, simulation_id: UUID, user_id: UUID) -> bool:
+        """Delete a simulation run (user must own it)."""
+        result = await self.db.execute(
+            select(SimulationRun).where(
+                SimulationRun.id == simulation_id,
+                SimulationRun.user_id == user_id,
+            )
+        )
+        sim_run = result.scalar_one_or_none()
+        if not sim_run:
+            return False
+
+        await self.db.delete(sim_run)
+        await self.db.commit()
+        return True
