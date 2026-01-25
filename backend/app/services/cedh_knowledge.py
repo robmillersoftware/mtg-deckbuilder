@@ -280,6 +280,7 @@ This severely constrains mana base construction but enables a 2-card win conditi
 
 def get_cedh_system_prompt(commander: str = None, colors: List[str] = None) -> str:
     """Generate a cEDH-specific system prompt for deck building."""
+    from rapidfuzz import fuzz
 
     prompt = """You are building a competitive cEDH (Competitive Elder Dragon Highlander) deck.
 
@@ -342,30 +343,39 @@ Most cEDH decks win with one of these:
 
     # Add commander-specific knowledge if available
     if commander:
-        commander_key = commander.lower().replace(" ", "_").replace(",", "").replace("'", "")
+        # Find matching commander package with fuzzy matching
+        best_match_key = None
+        best_match_score = 0
 
-        # Check for known commanders
         for key, package in COMMANDER_PACKAGES.items():
             cmd = package.get("commander", "")
             if isinstance(cmd, list):
-                if any(commander.lower() in c.lower() for c in cmd):
-                    prompt += f"\n### Commander-Specific: {commander}\n"
-                    prompt += f"**Strategy**: {package['strategy']}\n"
-                    prompt += f"**Core Combo Package**: {', '.join(package['core_package'])}\n"
-                    if package.get('synergy_cards'):
-                        prompt += f"**Synergy Cards**: {', '.join(package['synergy_cards'])}\n"
-                    if package.get('notes'):
-                        prompt += f"**Notes**: {package['notes']}\n"
-                    break
-            elif commander.lower() in cmd.lower():
-                prompt += f"\n### Commander-Specific: {commander}\n"
-                prompt += f"**Strategy**: {package['strategy']}\n"
-                prompt += f"**Core Combo Package**: {', '.join(package['core_package'])}\n"
-                if package.get('synergy_cards'):
-                    prompt += f"**Synergy Cards**: {', '.join(package['synergy_cards'])}\n"
-                if package.get('notes'):
-                    prompt += f"**Notes**: {package['notes']}\n"
-                break
+                # Partner commanders
+                for c in cmd:
+                    score = fuzz.ratio(commander.lower(), c.lower())
+                    if score > best_match_score:
+                        best_match_score = score
+                        best_match_key = key
+            else:
+                score = fuzz.ratio(commander.lower(), cmd.lower())
+                if score > best_match_score:
+                    best_match_score = score
+                    best_match_key = key
+
+        # Use match if score is above threshold (70%)
+        if best_match_key and best_match_score >= 70:
+            package = COMMANDER_PACKAGES[best_match_key]
+            cmd_name = package.get("commander", commander)
+            if isinstance(cmd_name, list):
+                cmd_name = " + ".join(cmd_name)
+
+            prompt += f"\n### Commander-Specific: {cmd_name}\n"
+            prompt += f"**Strategy**: {package['strategy']}\n"
+            prompt += f"**Core Combo Package**: {', '.join(package['core_package'])}\n"
+            if package.get('synergy_cards'):
+                prompt += f"**Synergy Cards**: {', '.join(package['synergy_cards'])}\n"
+            if package.get('notes'):
+                prompt += f"**Notes**: {package['notes']}\n"
 
     return prompt
 

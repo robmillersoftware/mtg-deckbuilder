@@ -36,6 +36,81 @@ class AIService:
         self.db = db
         self.card_service = CardService(db)
 
+    def _repair_json(self, json_str: str) -> str:
+        """Attempt to repair common JSON formatting issues."""
+        import re
+
+        repaired = json_str
+
+        # Fix unescaped quotes in strings (common in card text/reasons)
+        # This is tricky - we look for patterns like "text with "quoted" words"
+        # and escape the inner quotes
+        def escape_inner_quotes(match):
+            content = match.group(1)
+            # Escape any unescaped quotes in the middle
+            escaped = content.replace('\\"', '__ESCAPED_QUOTE__')
+            escaped = escaped.replace('"', '\\"')
+            escaped = escaped.replace('__ESCAPED_QUOTE__', '\\"')
+            return f'"{escaped}"'
+
+        # Fix trailing commas before ] or }
+        repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+
+        # Fix missing commas between array elements
+        repaired = re.sub(r'"\s*\n\s*\{', '",\n{', repaired)
+        repaired = re.sub(r'}\s*\n\s*\{', '},\n{', repaired)
+
+        # Fix single quotes used instead of double quotes
+        # Only do this carefully for obvious cases
+        repaired = re.sub(r"'(\w+)':", r'"\1":', repaired)
+
+        return repaired
+
+    def _extract_deck_from_malformed_json(self, json_str: str) -> Optional[Dict[str, Any]]:
+        """Last resort: extract deck data from malformed JSON using regex."""
+        import re
+
+        try:
+            deck_data = {
+                "name": "Generated Deck",
+                "strategy_summary": "",
+                "main_deck": [],
+                "sideboard": []
+            }
+
+            # Try to extract card entries using regex
+            # Pattern: "card_name": "Card Name", "quantity": N
+            card_pattern = r'"card_name"\s*:\s*"([^"]+)"\s*,\s*"quantity"\s*:\s*(\d+)'
+            matches = re.findall(card_pattern, json_str)
+
+            if matches:
+                for card_name, quantity in matches:
+                    deck_data["main_deck"].append({
+                        "card_name": card_name,
+                        "quantity": int(quantity)
+                    })
+                logger.info(f"Extracted {len(matches)} cards from malformed JSON")
+                return deck_data
+
+            # Alternative pattern: "Card Name": N or N Card Name
+            alt_pattern = r'(\d+)\s*[x×]?\s*([A-Z][^",\n]+)'
+            matches = re.findall(alt_pattern, json_str)
+
+            if matches:
+                for quantity, card_name in matches:
+                    deck_data["main_deck"].append({
+                        "card_name": card_name.strip(),
+                        "quantity": int(quantity)
+                    })
+                logger.info(f"Extracted {len(matches)} cards using alt pattern")
+                return deck_data
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to extract deck from malformed JSON: {e}")
+            return None
+
     async def parse_deck_request(self, prompt: str) -> Dict[str, Any]:
         """
         Parse a natural language deck request to extract:
@@ -188,10 +263,12 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
         return specific_cards
 
     async def get_commander_color_identity(self, card_name: str) -> List[str]:
-        """Get a commander's color identity from the database."""
+        """Get a commander's color identity from the database with fuzzy matching."""
         from app.models.card import Card
         from sqlalchemy import func
+        from rapidfuzz import fuzz
 
+        # 1. Try exact match
         query = select(Card).where(
             func.lower(Card.name) == card_name.lower()
         ).limit(1)
@@ -199,12 +276,35 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
         card = result.scalar_one_or_none()
 
         if not card:
-            # Try partial match
+            # 2. Try partial/substring match
             query = select(Card).where(
                 func.lower(Card.name).like(f"%{card_name.lower()}%")
             ).limit(1)
             result = await self.db.execute(query)
             card = result.scalar_one_or_none()
+
+        if not card:
+            # 3. Try fuzzy match - search for cards with similar first word
+            first_word = card_name.split()[0].split(",")[0] if card_name else ""
+            if first_word and len(first_word) >= 3:
+                query = select(Card).where(
+                    func.lower(Card.name).like(f"{first_word.lower()}%")
+                ).limit(20)
+                result = await self.db.execute(query)
+                candidates = result.scalars().all()
+
+                if candidates:
+                    # Find best fuzzy match
+                    best_match = None
+                    best_score = 0
+                    for c in candidates:
+                        score = fuzz.ratio(card_name.lower(), c.name.lower())
+                        if score > best_score and score >= 70:  # 70% similarity threshold
+                            best_score = score
+                            best_match = c
+                    if best_match:
+                        logger.info(f"Fuzzy matched '{card_name}' to '{best_match.name}' (score: {best_score})")
+                        card = best_match
 
         if card and card.color_identity:
             logger.info(f"Found color identity for {card.name}: {card.color_identity}")
@@ -659,11 +759,27 @@ USER REQUEST: {archetype} deck
 
             content = response.content[0].text
 
-            # Extract JSON
+            # Extract JSON with error recovery
             if "{" in content:
                 json_start = content.index("{")
                 json_end = content.rindex("}") + 1
-                deck_data = json.loads(content[json_start:json_end])
+                json_str = content[json_start:json_end]
+
+                try:
+                    deck_data = json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON parse error: {e}, attempting repair")
+                    # Try to repair common JSON issues
+                    repaired = self._repair_json(json_str)
+                    try:
+                        deck_data = json.loads(repaired)
+                        logger.info("JSON repair successful")
+                    except json.JSONDecodeError as e2:
+                        logger.error(f"JSON repair failed: {e2}")
+                        # Last resort: try to extract just the main_deck array
+                        deck_data = self._extract_deck_from_malformed_json(json_str)
+                        if not deck_data:
+                            raise ValueError(f"Could not parse AI response: {e2}")
 
                 # Helper to validate card exists with proper format legality
                 # Direct database lookup - no pre-fetching needed
@@ -2560,7 +2676,19 @@ Sideboard ({sum(e.get('quantity', 0) for e in decklist.sideboard or [])} cards):
                 and "land" not in (c.get("type_line") or "").lower().split(" — ")[0].lower()
             ]
 
-            # Add cards from available pool (prefer cards that appear in tournament decks)
+            # For cEDH, prioritize adding staples instead of random cards
+            if format == "cedh":
+                from app.services.cedh_knowledge import CEDH_STAPLES
+                staple_names = set()
+                for category in CEDH_STAPLES.values():
+                    staple_names.update(card.lower() for card in category.get("cards", []))
+
+                # Sort: cEDH staples first, then others
+                available_nonlands.sort(
+                    key=lambda c: (0 if c.get("name", "").lower() in staple_names else 1, c.get("name", ""))
+                )
+
+            # Add cards from available pool (prefer staples for cEDH)
             cards_added = 0
             for card in available_nonlands:
                 if deficit <= 0:
