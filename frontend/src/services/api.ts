@@ -262,5 +262,6 @@ export const simulationApi = {
     num_games?: number;
   }) => api.post('/simulation/vs-archetype', request),
 
-  getAvailableArchetypes: () => api.get<string[]>('/simulation/archetypes'),
+  getAvailableArchetypes: (format: string = 'standard') =>
+    api.get<string[]>('/simulation/archetypes', { params: { format } }),
 };

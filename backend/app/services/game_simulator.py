@@ -207,10 +207,13 @@ class GameSimulator:
         if not deck:
             raise ValueError(f"Deck {deck_id} not found")
 
-        # Find a tournament decklist for the archetype
-        opponent_decklist = await self._get_archetype_decklist(opponent_archetype)
+        # Get format from user's deck
+        deck_format = deck.format or "standard"
+
+        # Find a tournament decklist for the archetype in the same format
+        opponent_decklist = await self._get_archetype_decklist(opponent_archetype, deck_format)
         if not opponent_decklist:
-            raise ValueError(f"No decklists found for archetype: {opponent_archetype}")
+            raise ValueError(f"No {deck_format} decklists found for archetype: {opponent_archetype}")
 
         your_deck = DeckInput(
             deck_id=deck_id,
@@ -227,6 +230,7 @@ class GameSimulator:
             your_deck=your_deck,
             opponent_deck=opponent_deck,
             num_games=num_games,
+            format=deck_format,
         )
 
     async def _resolve_deck(self, deck_input: DeckInput) -> Optional[Dict[str, Any]]:
@@ -584,13 +588,18 @@ Return as JSON:
                 "mulligan_advice": "Keep balanced hands.",
             }
 
-    async def _get_archetype_decklist(self, archetype: str) -> Optional[Dict[str, Any]]:
-        """Get a representative decklist for a meta archetype."""
-        # Search for recent tournament decklists with this archetype
+    async def _get_archetype_decklist(
+        self, archetype: str, format: str = "standard"
+    ) -> Optional[Dict[str, Any]]:
+        """Get a representative decklist for a meta archetype in the specified format."""
+        # Search for recent tournament decklists with this archetype in the same format
         result = await self.db.execute(
             select(Decklist)
             .join(Event)
-            .where(Decklist.archetype.ilike(f"%{archetype}%"))
+            .where(
+                Decklist.archetype.ilike(f"%{archetype}%"),
+                Event.format == format,
+            )
             .order_by(Event.date.desc())
             .limit(1)
         )
@@ -605,12 +614,16 @@ Return as JSON:
 
         return None
 
-    async def get_meta_archetypes(self) -> List[str]:
-        """Get list of available meta archetypes to simulate against."""
+    async def get_meta_archetypes(self, format: str = "standard") -> List[str]:
+        """Get list of available meta archetypes to simulate against for a specific format."""
         result = await self.db.execute(
             select(Decklist.archetype)
+            .join(Event)
             .distinct()
-            .where(Decklist.archetype.isnot(None))
+            .where(
+                Decklist.archetype.isnot(None),
+                Event.format == format,
+            )
             .order_by(Decklist.archetype)
         )
         return [row[0] for row in result.all() if row[0]]

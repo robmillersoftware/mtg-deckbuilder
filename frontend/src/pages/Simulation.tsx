@@ -10,38 +10,72 @@ export function SimulationPage() {
 
   const [decks, setDecks] = useState<Deck[]>([]);
   const [selectedDeckId, setSelectedDeckId] = useState<string>(initialDeckId || '');
+  const [selectedFormat, setSelectedFormat] = useState<string>('standard');
   const [archetypes, setArchetypes] = useState<string[]>([]);
   const [selectedArchetype, setSelectedArchetype] = useState<string>('');
   const [numGames, setNumGames] = useState<number>(5);
   const [includeSideboard, setIncludeSideboard] = useState<boolean>(true);
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingArchetypes, setIsLoadingArchetypes] = useState(false);
   const [result, setResult] = useState<MatchupAnalysisResult | null>(null);
   const [expandedGame, setExpandedGame] = useState<number | null>(null);
 
   useEffect(() => {
     loadDecks();
-    loadArchetypes();
   }, []);
+
+  // Load archetypes when format changes
+  useEffect(() => {
+    loadArchetypes(selectedFormat);
+  }, [selectedFormat]);
+
+  // Update format when deck selection changes
+  useEffect(() => {
+    if (selectedDeckId) {
+      const deck = decks.find((d) => d.id === selectedDeckId);
+      if (deck?.format) {
+        setSelectedFormat(deck.format);
+      }
+    }
+  }, [selectedDeckId, decks]);
 
   const loadDecks = async () => {
     try {
       const response = await decksApi.list(100);
-      setDecks(response.data.items || response.data);
+      const loadedDecks = response.data.items || response.data;
+      setDecks(loadedDecks);
+
+      // If we have an initial deck ID, set the format from that deck
+      if (initialDeckId) {
+        const deck = loadedDecks.find((d: Deck) => d.id === initialDeckId);
+        if (deck?.format) {
+          setSelectedFormat(deck.format);
+        }
+      }
     } catch (error) {
       console.error('Failed to load decks:', error);
     }
   };
 
-  const loadArchetypes = async () => {
+  const loadArchetypes = async (format: string) => {
+    setIsLoadingArchetypes(true);
     try {
-      const response = await simulationApi.getAvailableArchetypes();
+      const response = await simulationApi.getAvailableArchetypes(format);
       setArchetypes(response.data);
-      if (response.data.length > 0 && !selectedArchetype) {
-        setSelectedArchetype(response.data[0]);
+      // Reset selected archetype if it's not in the new list
+      if (response.data.length > 0) {
+        if (!response.data.includes(selectedArchetype)) {
+          setSelectedArchetype(response.data[0]);
+        }
+      } else {
+        setSelectedArchetype('');
       }
     } catch (error) {
       console.error('Failed to load archetypes:', error);
+      setArchetypes([]);
+    } finally {
+      setIsLoadingArchetypes(false);
     }
   };
 
@@ -113,28 +147,42 @@ export function SimulationPage() {
               <option value="">Select a deck...</option>
               {decks.map((deck) => (
                 <option key={deck.id} value={deck.id}>
-                  {deck.name}
+                  {deck.name} ({deck.format || 'standard'})
                 </option>
               ))}
             </select>
+            {selectedDeckId && (
+              <p className="text-xs text-gray-500 mt-1">
+                Format: {selectedFormat}
+              </p>
+            )}
           </div>
 
           {/* Archetype Selection */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
-              Opponent Archetype
+              Opponent Archetype ({selectedFormat})
             </label>
             <select
               value={selectedArchetype}
               onChange={(e) => setSelectedArchetype(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              disabled={isLoadingArchetypes}
+              className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
             >
-              <option value="">Select archetype...</option>
-              {archetypes.map((arch) => (
-                <option key={arch} value={arch}>
-                  {arch}
-                </option>
-              ))}
+              {isLoadingArchetypes ? (
+                <option value="">Loading archetypes...</option>
+              ) : archetypes.length === 0 ? (
+                <option value="">No archetypes for {selectedFormat}</option>
+              ) : (
+                <>
+                  <option value="">Select archetype...</option>
+                  {archetypes.map((arch) => (
+                    <option key={arch} value={arch}>
+                      {arch}
+                    </option>
+                  ))}
+                </>
+              )}
             </select>
           </div>
 

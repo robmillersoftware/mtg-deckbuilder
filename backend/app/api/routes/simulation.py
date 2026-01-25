@@ -5,7 +5,7 @@ Simulation API routes for running game simulations between decks.
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -94,13 +94,15 @@ async def simulate_vs_archetype(
 
 @router.get("/archetypes", response_model=List[str])
 async def get_available_archetypes(
+    format: str = Query("standard", description="Format to filter archetypes by"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Get list of meta archetypes available for simulation.
 
-    Returns archetype names that have tournament decklists in the database.
+    Returns archetype names that have tournament decklists in the database
+    for the specified format.
     """
     simulator = GameSimulator(db)
-    return await simulator.get_meta_archetypes()
+    return await simulator.get_meta_archetypes(format=format)
