@@ -12,6 +12,9 @@ const FORMAT_DISPLAY_NAMES: Record<string, string> = {
   cedh: 'cEDH',
 };
 
+// cEDH uses commanders instead of archetypes
+const isCommanderFormat = (format: string) => format === 'cedh';
+
 export function MetaPage() {
   const [archetypes, setArchetypes] = useState<MetaArchetype[]>([]);
   const [selectedArchetype, setSelectedArchetype] = useState<MetaArchetype | null>(null);
@@ -71,11 +74,13 @@ export function MetaPage() {
         </div>
       ) : (
         <div className="grid gap-6 lg:grid-cols-3">
-          {/* Archetype List */}
+          {/* Archetype/Commander List */}
           <div className="lg:col-span-2">
             <div className="bg-gray-900 rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-800">
-                <h2 className="text-lg font-semibold text-white">Top Archetypes</h2>
+                <h2 className="text-lg font-semibold text-white">
+                  {isCommanderFormat(format) ? 'Top Commanders' : 'Top Archetypes'}
+                </h2>
               </div>
 
               <div className="divide-y divide-gray-800">
@@ -169,7 +174,7 @@ export function MetaPage() {
               </div>
             ) : (
               <div className="bg-gray-900 rounded-lg p-4 text-center text-gray-400">
-                <p>Select an archetype to see details</p>
+                <p>Select {isCommanderFormat(format) ? 'a commander' : 'an archetype'} to see details</p>
               </div>
             )}
           </div>

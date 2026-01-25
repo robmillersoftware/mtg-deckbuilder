@@ -70,6 +70,10 @@ class Decklist(Base):
     archetype = Column(String(100), nullable=True, index=True)
     archetype_tags = Column(ARRAY(String(50)), nullable=True)
 
+    # Commander(s) for cEDH/Commander format - stored as JSON array
+    # e.g., ["Tymna the Weaver", "Kraum, Ludevic's Opus"] for partner commanders
+    commander = Column(JSONB, nullable=True)
+
     # Deck contents as JSON arrays of {card_name, quantity}
     main_deck = Column(JSONB, nullable=False, default=list)
     sideboard = Column(JSONB, nullable=False, default=list)
