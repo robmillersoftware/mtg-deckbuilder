@@ -3,7 +3,7 @@ from collections import defaultdict
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from app.models.card import Card
 from app.schemas.deck import DeckValidationReport, DeckValidationError
@@ -143,12 +143,52 @@ class DeckValidator:
         if all_card_names:
             legality_key = FORMAT_LEGALITY_MAP.get(format, "standard")
 
+            # First, try exact name matches
             result = await self.db.execute(
                 select(Card.name, Card.is_standard_legal, Card.legalities)
                 .where(func.lower(Card.name).in_([n.lower() for n in all_card_names]))
             )
             rows = result.all()
-            card_data = {row[0].lower(): {"is_standard_legal": row[1], "legalities": row[2]} for row in rows}
+            # Map both exact name and searched name to card data
+            card_data = {}
+            for row in rows:
+                card_data[row[0].lower()] = {"is_standard_legal": row[1], "legalities": row[2], "actual_name": row[0]}
+
+            # Find cards not matched by exact name - they might be DFC faces
+            unmatched_names = [n for n in all_card_names if n.lower() not in card_data]
+
+            # For unmatched names, try DFC face matching
+            if unmatched_names:
+                dfc_conditions = []
+                for name in unmatched_names:
+                    name_lower = name.lower()
+                    # Match front face: "Name // Back" or back face: "Front // Name"
+                    dfc_conditions.append(func.lower(Card.name).like(f"{name_lower} // %"))
+                    dfc_conditions.append(func.lower(Card.name).like(f"% // {name_lower}"))
+
+                if dfc_conditions:
+                    dfc_result = await self.db.execute(
+                        select(Card.name, Card.is_standard_legal, Card.legalities)
+                        .where(or_(*dfc_conditions))
+                    )
+                    dfc_rows = dfc_result.all()
+
+                    # Map the searched face name to the actual DFC card
+                    for row in dfc_rows:
+                        actual_name = row[0]
+                        actual_lower = actual_name.lower()
+                        # Extract face names
+                        if " // " in actual_name:
+                            faces = actual_name.split(" // ")
+                            for face in faces:
+                                face_lower = face.lower()
+                                # If this face was one we were searching for, map it
+                                if face_lower in [n.lower() for n in unmatched_names]:
+                                    card_data[face_lower] = {
+                                        "is_standard_legal": row[1],
+                                        "legalities": row[2],
+                                        "actual_name": actual_name
+                                    }
 
             for card_name in all_card_names:
                 card_name_lower = card_name.lower()
@@ -233,11 +273,27 @@ class DeckValidator:
 
         # Check legality
         legality_key = FORMAT_LEGALITY_MAP.get(format, "standard")
+        card_name_lower = card_name.lower()
+
+        # First try exact match
         result = await self.db.execute(
             select(Card.is_standard_legal, Card.legalities)
-            .where(func.lower(Card.name) == card_name.lower())
+            .where(func.lower(Card.name) == card_name_lower)
         )
         row = result.first()
+
+        # If not found and doesn't contain "//", try DFC face matching
+        if row is None and "//" not in card_name:
+            dfc_result = await self.db.execute(
+                select(Card.is_standard_legal, Card.legalities)
+                .where(
+                    or_(
+                        func.lower(Card.name).like(f"{card_name_lower} // %"),
+                        func.lower(Card.name).like(f"% // {card_name_lower}"),
+                    )
+                )
+            )
+            row = dfc_result.first()
 
         if row is None:
             return DeckValidationError(
