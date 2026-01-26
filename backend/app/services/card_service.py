@@ -48,15 +48,44 @@ class CardService:
         standard_only: bool = True,
         format: Optional[str] = None,
     ) -> Optional[Card]:
-        """Get a card by exact name (case-insensitive). Returns first match if multiple printings exist."""
-        query = select(Card).where(func.lower(Card.name) == name.lower())
+        """
+        Get a card by exact name (case-insensitive). Returns first match if multiple printings exist.
+        For double-faced cards (DFCs), matches either face name.
+        E.g., searching "Sephiroth, Fabled SOLDIER" will match "Sephiroth, Fabled SOLDIER // Sephiroth, One-Winged Angel"
+        """
+        # Build base conditions for format/legality
+        format_conditions = []
         if format and format in FORMAT_LEGALITY_MAP:
-            query = query.where(get_format_legality_condition(format))
+            format_conditions.append(get_format_legality_condition(format))
         elif standard_only:
-            query = query.where(Card.is_standard_legal == True)
+            format_conditions.append(Card.is_standard_legal == True)
+
+        # First try exact match
+        query = select(Card).where(func.lower(Card.name) == name.lower())
+        if format_conditions:
+            query = query.where(and_(*format_conditions))
         query = query.limit(1)
         result = await self.db.execute(query)
-        return result.scalar_one_or_none()
+        card = result.scalar_one_or_none()
+        if card:
+            return card
+
+        # If no exact match and name doesn't contain "//", try matching DFC faces
+        if "//" not in name:
+            # Match front face: "Name // Back" or back face: "Front // Name"
+            dfc_query = select(Card).where(
+                or_(
+                    func.lower(Card.name).like(f"{name.lower()} // %"),  # Front face
+                    func.lower(Card.name).like(f"% // {name.lower()}"),  # Back face
+                )
+            )
+            if format_conditions:
+                dfc_query = dfc_query.where(and_(*format_conditions))
+            dfc_query = dfc_query.limit(1)
+            result = await self.db.execute(dfc_query)
+            return result.scalar_one_or_none()
+
+        return None
 
     async def fuzzy_search_by_name(
         self,
@@ -64,8 +93,47 @@ class CardService:
         limit: int = 5,
         standard_only: bool = True,
     ) -> List[Card]:
-        """Find cards with names similar to the given name."""
+        """Find cards with names similar to the given name. Returns unique cards by name."""
         from rapidfuzz import fuzz
+
+        def score_card(card: Card, search_name: str) -> int:
+            """Score a card against search name, with DFC face matching."""
+            search_lower = search_name.lower()
+            card_name_lower = card.name.lower()
+
+            # Exact match gets highest score
+            if card_name_lower == search_lower:
+                return 100
+
+            # For DFCs, check if search matches either face exactly
+            if " // " in card.name:
+                faces = card.name.split(" // ")
+                for face in faces:
+                    if face.lower() == search_lower:
+                        return 99  # Near-perfect match for exact face
+                    face_score = fuzz.ratio(search_lower, face.lower())
+                    if face_score > 90:
+                        return face_score
+
+            # Standard fuzzy match
+            return fuzz.ratio(search_lower, card_name_lower)
+
+        def dedupe_and_score(cards: List[Card], search_name: str, max_results: int) -> List[Card]:
+            """Deduplicate by name and sort by fuzzy match score."""
+            # Score all cards
+            scored = [(card, score_card(card, search_name)) for card in cards]
+            scored.sort(key=lambda x: x[1], reverse=True)
+
+            # Deduplicate by name, keeping highest scored version
+            seen_names = set()
+            unique = []
+            for card, _ in scored:
+                if card.name not in seen_names:
+                    seen_names.add(card.name)
+                    unique.append(card)
+                    if len(unique) >= max_results:
+                        break
+            return unique
 
         # First try exact prefix match
         query = select(Card).where(
@@ -73,16 +141,13 @@ class CardService:
         )
         if standard_only:
             query = query.where(Card.is_standard_legal == True)
-        query = query.limit(limit * 2)
+        query = query.limit(limit * 10)  # Fetch more to account for duplicates
 
         result = await self.db.execute(query)
-        candidates = result.scalars().all()
+        candidates = list(result.scalars().all())
 
         if candidates:
-            # Sort by fuzzy match score
-            scored = [(card, fuzz.ratio(name.lower(), card.name.lower())) for card in candidates]
-            scored.sort(key=lambda x: x[1], reverse=True)
-            return [card for card, _ in scored[:limit]]
+            return dedupe_and_score(candidates, name, limit)
 
         # Fallback to contains match
         query = select(Card).where(
@@ -90,15 +155,13 @@ class CardService:
         )
         if standard_only:
             query = query.where(Card.is_standard_legal == True)
-        query = query.limit(limit * 2)
+        query = query.limit(limit * 10)  # Fetch more to account for duplicates
 
         result = await self.db.execute(query)
-        candidates = result.scalars().all()
+        candidates = list(result.scalars().all())
 
         if candidates:
-            scored = [(card, fuzz.ratio(name.lower(), card.name.lower())) for card in candidates]
-            scored.sort(key=lambda x: x[1], reverse=True)
-            return [card for card, _ in scored[:limit]]
+            return dedupe_and_score(candidates, name, limit)
 
         return []
 
