@@ -27,8 +27,8 @@ const TOUR_STEPS: TourStep[] = [
   },
   {
     target: '[data-tour="simulate"]',
-    title: 'Hand Simulator',
-    content: 'Test your deck before playing! Draw opening hands, practice mulligans, and see how consistent your deck is.',
+    title: 'Game Simulator',
+    content: 'Test your deck against meta archetypes! AI simulates full games and provides matchup analysis, sideboard guides, and strategic advice.',
     placement: 'bottom',
     authRequired: true,
   },
