@@ -52,8 +52,8 @@ const DEFAULT_CHECKLIST_ITEMS: OnboardingChecklistItem[] = [
   },
   {
     id: 'try-simulator',
-    title: 'Test your draws',
-    description: 'Simulate opening hands and mulligan decisions',
+    title: 'Simulate games',
+    description: 'Test your deck against meta archetypes',
     completed: false,
     link: '/simulate',
   },

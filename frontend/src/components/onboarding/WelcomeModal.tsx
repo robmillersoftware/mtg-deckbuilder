@@ -78,8 +78,8 @@ export function WelcomeModal({ onStartTour }: WelcomeModalProps) {
               </svg>
             </div>
             <div>
-              <h3 className="text-white font-semibold">Simulate Draws</h3>
-              <p className="text-gray-400 text-sm">Test opening hands and practice mulligan decisions</p>
+              <h3 className="text-white font-semibold">Simulate Games</h3>
+              <p className="text-gray-400 text-sm">Test your deck against meta archetypes with AI-powered game simulations</p>
             </div>
           </div>
         </div>
