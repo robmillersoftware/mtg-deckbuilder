@@ -4,7 +4,6 @@ import { conversationsApi } from '@/services/api';
 import { Conversation } from '@/types';
 import { useAuth } from '@/hooks/useAuth';
 import toast from 'react-hot-toast';
-import { EmptyState } from '@/components/onboarding';
 
 export function ConversationsPage() {
   const { user } = useAuth();
@@ -106,7 +105,15 @@ export function ConversationsPage() {
       </div>
 
       {conversations.length === 0 ? (
-        <EmptyState variant="conversations" />
+        <div className="text-center py-12">
+          <p className="text-gray-400 mb-4">No conversations yet. Start building a deck!</p>
+          <Link
+            to="/"
+            className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors"
+          >
+            Start New Conversation
+          </Link>
+        </div>
       ) : (
         <div className="grid gap-6 lg:grid-cols-2">
           {/* Conversation List */}

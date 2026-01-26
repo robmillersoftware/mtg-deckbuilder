@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { decksApi } from '@/services/api';
 import { Deck } from '@/types';
 import clsx from 'clsx';
-import { EmptyState } from '@/components/onboarding';
 
 export function DecksPage() {
   const [decks, setDecks] = useState<Deck[]>([]);
@@ -65,7 +64,15 @@ export function DecksPage() {
       </div>
 
       {decks.length === 0 ? (
-        <EmptyState variant="decks" />
+        <div className="text-center py-12">
+          <p className="text-gray-400 mb-4">You haven't created any decks yet.</p>
+          <Link
+            to="/"
+            className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors"
+          >
+            Build Your First Deck
+          </Link>
+        </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {decks.map((deck) => (

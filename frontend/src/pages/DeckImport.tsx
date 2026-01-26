@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { decksApi } from '@/services/api';
 import { ValidationError, DeckEntry } from '@/types';
-import { useOnboardingStore } from '@/store/onboarding';
 import toast from 'react-hot-toast';
 
 type ImportFormat = 'arena' | 'mtgo' | 'text';
@@ -86,17 +85,11 @@ function normalizeImportResult(backend: BackendImportResult): ImportResult {
 export function DeckImportPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { completeChecklistItem } = useOnboardingStore();
   const [deckText, setDeckText] = useState('');
   const [format, setFormat] = useState<ImportFormat>('arena');
   const [deckName, setDeckName] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
-
-  // Mark onboarding checklist item as completed
-  useEffect(() => {
-    completeChecklistItem('import-deck');
-  }, [completeChecklistItem]);
 
   const handleImport = async () => {
     if (!deckText.trim()) {
