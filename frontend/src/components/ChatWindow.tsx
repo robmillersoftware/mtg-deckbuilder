@@ -4,6 +4,7 @@ import { Message } from '@/types';
 import ReactMarkdown, { Components } from 'react-markdown';
 import clsx from 'clsx';
 import { CardTooltip } from './CardTooltip';
+import { HelpTooltip } from './onboarding';
 
 // Progress messages that rotate during deck generation
 const PROGRESS_MESSAGES = [
@@ -81,17 +82,24 @@ export function ChatWindow({ className }: ChatWindowProps) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
         <div className="flex items-center space-x-3">
           <h2 className="text-lg font-semibold text-white">Chat</h2>
-          <select
-            value={format}
-            onChange={(e) => setFormat(e.target.value)}
-            className="px-2 py-1 text-xs font-medium rounded bg-gray-800 text-primary-400 border border-primary-600/30 focus:outline-none focus:border-primary-500 cursor-pointer"
-          >
-            {FORMAT_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center space-x-1" data-tour="format-selector">
+            <select
+              value={format}
+              onChange={(e) => setFormat(e.target.value)}
+              className="px-2 py-1 text-xs font-medium rounded bg-gray-800 text-primary-400 border border-primary-600/30 focus:outline-none focus:border-primary-500 cursor-pointer"
+            >
+              {FORMAT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <HelpTooltip
+              title="Deck Format"
+              content="Choose the format for your deck. This affects which cards are legal and influences the AI's suggestions."
+              placement="bottom"
+            />
+          </div>
         </div>
         <button
           onClick={startNewConversation}

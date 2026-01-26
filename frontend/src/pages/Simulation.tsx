@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { decksApi, simulationApi } from '@/services/api';
 import { Deck, SimulationRun, GameResult, TurnAction } from '@/types';
+import { useOnboardingStore } from '@/store/onboarding';
 import toast from 'react-hot-toast';
 
 // Live feed entry combining game info with turn data
@@ -234,6 +235,7 @@ export function SimulationPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialDeckId = searchParams.get('deck');
   const viewRunId = searchParams.get('run');
+  const { completeChecklistItem } = useOnboardingStore();
 
   // Deck and configuration state
   const [decks, setDecks] = useState<Deck[]>([]);
@@ -258,6 +260,11 @@ export function SimulationPage() {
   const [expandedGame, setExpandedGame] = useState<number | null>(null);
   const [expandedTranscript, setExpandedTranscript] = useState<number | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
+
+  // Mark onboarding checklist item as completed
+  useEffect(() => {
+    completeChecklistItem('try-simulator');
+  }, [completeChecklistItem]);
 
   // Load decks and runs on mount
   useEffect(() => {

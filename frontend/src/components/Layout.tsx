@@ -50,12 +50,12 @@ export function Layout() {
   }, []);
 
   const navigation = [
-    { name: 'Build', href: '/' },
-    { name: 'My Decks', href: '/decks', auth: true },
-    { name: 'Simulate', href: '/simulate', auth: true },
-    { name: 'Import', href: '/import', auth: true },
+    { name: 'Build', href: '/', tourId: 'build' },
+    { name: 'My Decks', href: '/decks', auth: true, tourId: 'my-decks' },
+    { name: 'Simulate', href: '/simulate', auth: true, tourId: 'simulate' },
+    { name: 'Import', href: '/import', auth: true, tourId: 'import' },
     { name: 'History', href: '/conversations', auth: true },
-    { name: 'Meta', href: '/meta' },
+    { name: 'Meta', href: '/meta', tourId: 'meta' },
   ];
 
   return (
@@ -95,6 +95,7 @@ export function Layout() {
                   <Link
                     key={item.name}
                     to={item.href}
+                    data-tour={item.tourId}
                     className={clsx(
                       'px-3 py-2 rounded-md text-sm font-medium transition-colors',
                       location.pathname === item.href
