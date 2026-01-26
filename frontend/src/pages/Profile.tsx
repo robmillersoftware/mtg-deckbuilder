@@ -167,7 +167,7 @@ export function ProfilePage() {
       <div className="bg-gray-900 rounded-lg p-6">
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Avatar Preview */}
-          <div className="flex items-center space-x-6">
+          <div className="flex flex-col sm:flex-row items-center sm:space-x-6 space-y-4 sm:space-y-0">
             <div className="relative">
               <div className="w-20 h-20 rounded-full bg-gray-700 flex items-center justify-center overflow-hidden">
                 {avatarUrl ? (
@@ -204,7 +204,7 @@ export function ProfilePage() {
                 className="hidden"
               />
             </div>
-            <div>
+            <div className="text-center sm:text-left">
               <h2 className="text-lg font-medium text-white">{displayName || user.username}</h2>
               <p className="text-sm text-gray-400">@{user.username}</p>
             </div>
@@ -215,7 +215,7 @@ export function ProfilePage() {
             <label className="block text-sm font-medium text-gray-300 mb-2">
               Email
             </label>
-            <div className="flex space-x-2">
+            <div className="flex flex-col sm:flex-row sm:space-x-2 space-y-2 sm:space-y-0">
               <input
                 type="email"
                 value={user.email}
@@ -225,7 +225,7 @@ export function ProfilePage() {
               <button
                 type="button"
                 onClick={() => setShowEmailChange(!showEmailChange)}
-                className="px-4 py-2 text-sm text-primary-400 hover:text-primary-300 transition-colors"
+                className="px-4 py-2 text-sm text-primary-400 hover:text-primary-300 transition-colors whitespace-nowrap"
               >
                 Change
               </button>
@@ -236,7 +236,7 @@ export function ProfilePage() {
                 <p className="text-sm text-gray-400 mb-3">
                   A verification link will be sent to your new email address.
                 </p>
-                <div className="flex space-x-2">
+                <div className="flex flex-col sm:flex-row sm:space-x-2 space-y-2 sm:space-y-0">
                   <input
                     type="email"
                     value={newEmail}
@@ -248,7 +248,7 @@ export function ProfilePage() {
                     type="button"
                     onClick={handleEmailChangeRequest}
                     disabled={emailChangeLoading || !newEmail.trim()}
-                    className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                   >
                     {emailChangeLoading ? 'Sending...' : 'Send Verification'}
                   </button>
