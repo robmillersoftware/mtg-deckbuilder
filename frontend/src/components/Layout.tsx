@@ -5,9 +5,12 @@ import clsx from 'clsx';
 
 export function Layout() {
   const location = useLocation();
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, isAuthenticated, isLoading, isHydrated, logout } = useAuth();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Show loading state while hydrating or fetching user
+  const isLoadingAuth = !isHydrated || (isAuthenticated && !user && isLoading);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -64,14 +67,19 @@ export function Layout() {
 
             {/* User Menu */}
             <div className="flex items-center space-x-4">
-              {isAuthenticated ? (
+              {isLoadingAuth ? (
+                <div className="flex items-center space-x-2 text-sm text-gray-400">
+                  <div className="w-8 h-8 rounded-full bg-gray-700 animate-pulse" />
+                  <div className="w-16 h-4 bg-gray-700 rounded animate-pulse" />
+                </div>
+              ) : isAuthenticated && user ? (
                 <div ref={menuRef} className="relative">
                   <button
                     onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                     className="flex items-center space-x-2 text-sm text-gray-300 hover:text-white transition-colors"
                   >
                     <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center overflow-hidden">
-                      {user?.avatar_url ? (
+                      {user.avatar_url ? (
                         <img
                           src={user.avatar_url}
                           alt=""
@@ -79,11 +87,11 @@ export function Layout() {
                         />
                       ) : (
                         <span className="text-sm">
-                          {(user?.display_name || user?.username || '?')[0].toUpperCase()}
+                          {(user.display_name || user.username || 'U')[0].toUpperCase()}
                         </span>
                       )}
                     </div>
-                    <span>{user?.display_name || user?.username}</span>
+                    <span>{user.display_name || user.username}</span>
                     <svg
                       className={clsx(
                         'w-4 h-4 transition-transform',
@@ -120,7 +128,7 @@ export function Layout() {
                       >
                         Conversation History
                       </Link>
-                      {user?.is_superuser && (
+                      {user.is_superuser && (
                         <>
                           <div className="border-t border-gray-700 my-1"></div>
                           <Link

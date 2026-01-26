@@ -87,6 +87,68 @@ class CardService:
 
         return None
 
+    async def get_cards_by_names(
+        self,
+        names: List[str],
+        standard_only: bool = False,
+    ) -> Dict[str, Card]:
+        """
+        Batch fetch cards by names (case-insensitive).
+        Returns a dict mapping lowercase card name to Card object.
+        Handles DFC face matching - both faces map to the same card.
+        """
+        if not names:
+            return {}
+
+        # Normalize names to lowercase for lookup
+        names_lower = [n.lower() for n in names]
+
+        # First, try exact matches
+        result = await self.db.execute(
+            select(Card).where(func.lower(Card.name).in_(names_lower))
+        )
+        exact_matches = result.scalars().all()
+
+        # Build result dict
+        cards_map: Dict[str, Card] = {}
+        matched_names = set()
+
+        for card in exact_matches:
+            card_name_lower = card.name.lower()
+            cards_map[card_name_lower] = card
+            matched_names.add(card_name_lower)
+            # Also map DFC face names to this card
+            if " // " in card.name:
+                for face in card.name.split(" // "):
+                    face_lower = face.lower()
+                    if face_lower not in cards_map:
+                        cards_map[face_lower] = card
+
+        # Find unmatched names that might be DFC faces
+        unmatched = [n for n in names_lower if n not in cards_map]
+
+        if unmatched:
+            # Try matching as DFC faces
+            dfc_conditions = []
+            for name in unmatched:
+                dfc_conditions.append(func.lower(Card.name).like(f"{name} // %"))
+                dfc_conditions.append(func.lower(Card.name).like(f"% // {name}"))
+
+            if dfc_conditions:
+                dfc_result = await self.db.execute(
+                    select(Card).where(or_(*dfc_conditions))
+                )
+                dfc_cards = dfc_result.scalars().all()
+
+                for card in dfc_cards:
+                    if " // " in card.name:
+                        for face in card.name.split(" // "):
+                            face_lower = face.lower()
+                            if face_lower in unmatched and face_lower not in cards_map:
+                                cards_map[face_lower] = card
+
+        return cards_map
+
     async def fuzzy_search_by_name(
         self,
         name: str,

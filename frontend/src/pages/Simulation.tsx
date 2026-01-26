@@ -30,6 +30,7 @@ export function SimulationPage() {
 
   // UI state
   const [expandedGame, setExpandedGame] = useState<number | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   // Load decks and runs on mount
   useEffect(() => {
@@ -205,6 +206,21 @@ export function SimulationPage() {
       loadRuns();
     } catch (error) {
       toast.error('Failed to delete simulation');
+    }
+  };
+
+  const retryRun = async (runId: string) => {
+    setIsRetrying(true);
+    try {
+      const response = await simulationApi.retryRun(runId);
+      toast.success('Simulation restarted!');
+      setSelectedRun(response.data);
+      loadRuns();
+    } catch (error: any) {
+      console.error('Failed to retry simulation:', error);
+      toast.error(error.response?.data?.detail || 'Failed to retry simulation');
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -487,7 +503,14 @@ export function SimulationPage() {
               <div className="text-center">
                 <div className="text-red-400 text-4xl mb-4">!</div>
                 <h3 className="text-white font-semibold mb-2">Simulation Failed</h3>
-                <p className="text-gray-400">{selectedRun.error_message || 'An error occurred'}</p>
+                <p className="text-gray-400 mb-4">{selectedRun.error_message || 'An error occurred'}</p>
+                <button
+                  onClick={() => retryRun(selectedRun.id)}
+                  disabled={isRetrying}
+                  className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {isRetrying ? 'Retrying...' : 'Retry Simulation'}
+                </button>
               </div>
             </div>
           ) : (

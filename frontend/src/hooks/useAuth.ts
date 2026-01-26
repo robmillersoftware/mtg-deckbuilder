@@ -9,16 +9,28 @@ export function useAuth() {
     user,
     isAuthenticated,
     isLoading,
+    isHydrated,
+    isFetchingUser,
     setUser,
     setTokens,
     logout: storeLogout,
     setLoading,
+    setFetchingUser,
   } = useAuthStore();
 
   // Fetch user and preferences on mount if we have tokens
+  // Only runs after hydration completes and prevents concurrent fetches
   useEffect(() => {
     const fetchUserAndPreferences = async () => {
+      // Wait for hydration before checking auth state
+      if (!isHydrated) return;
+
+      // Prevent concurrent fetches
+      if (isFetchingUser) return;
+
+      // Only fetch if authenticated but no user data
       if (isAuthenticated && !user) {
+        setFetchingUser(true);
         setLoading(true);
         try {
           const response = await usersApi.getMe();
@@ -32,18 +44,24 @@ export function useAuth() {
           }
         } catch (error) {
           console.error('Failed to fetch user:', error);
-          storeLogout();
+          // Only logout if it's an auth error, not a network error
+          const status = (error as { response?: { status?: number } })?.response?.status;
+          if (status === 401 || status === 403) {
+            storeLogout();
+          }
         } finally {
           setLoading(false);
+          setFetchingUser(false);
         }
       }
     };
 
     fetchUserAndPreferences();
-  }, [isAuthenticated, user, setUser, storeLogout, setLoading]);
+  }, [isHydrated, isAuthenticated, user, isFetchingUser, setUser, storeLogout, setLoading, setFetchingUser]);
 
   const login = useCallback(async (email: string, password: string) => {
     setLoading(true);
+    setFetchingUser(true); // Prevent useEffect from racing with login
     try {
       const response = await authApi.login(email, password);
       const { access_token, refresh_token } = response.data;
@@ -70,8 +88,9 @@ export function useAuth() {
       return false;
     } finally {
       setLoading(false);
+      setFetchingUser(false);
     }
-  }, [setTokens, setUser, setLoading]);
+  }, [setTokens, setUser, setLoading, setFetchingUser]);
 
   const register = useCallback(async (
     email: string,
@@ -152,6 +171,7 @@ export function useAuth() {
     user,
     isAuthenticated,
     isLoading,
+    isHydrated,
     login,
     register,
     logout,

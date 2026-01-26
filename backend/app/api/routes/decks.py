@@ -124,6 +124,10 @@ async def create_deck(
     await db.commit()
     await db.refresh(deck)
 
+    # Enrich deck entries with card data (type_line, etc.)
+    deck_service = DeckService(db)
+    await deck_service.enrich_deck(deck)
+
     return deck
 
 
@@ -133,7 +137,7 @@ async def get_deck(
     current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a specific deck by ID."""
+    """Get a specific deck by ID with enriched card data."""
     result = await db.execute(
         select(Deck).where(
             and_(
@@ -149,6 +153,10 @@ async def get_deck(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Deck not found",
         )
+
+    # Enrich deck entries with card data (type_line, etc.)
+    deck_service = DeckService(db)
+    await deck_service.enrich_deck(deck)
 
     return deck
 
@@ -220,6 +228,10 @@ async def update_deck(
     await db.commit()
     await db.refresh(deck)
 
+    # Enrich deck entries with card data (type_line, etc.)
+    deck_service = DeckService(db)
+    await deck_service.enrich_deck(deck)
+
     return deck
 
 
@@ -271,6 +283,10 @@ async def get_public_deck(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Deck not found or not public",
         )
+
+    # Enrich deck entries with card data (type_line, etc.)
+    deck_service = DeckService(db)
+    await deck_service.enrich_deck(deck)
 
     return deck
 

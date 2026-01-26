@@ -141,6 +141,37 @@ async def delete_simulation_run(
     return {"message": "Simulation run deleted"}
 
 
+@router.post("/runs/{simulation_id}/retry", response_model=SimulationRunResponse)
+async def retry_simulation_run(
+    simulation_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Retry a failed simulation run.
+
+    Only works for simulations with status 'failed'.
+    Resets the simulation and queues it for background execution.
+    """
+    simulator = GameSimulator(db)
+    sim_run = await simulator.retry_simulation_run(simulation_id, current_user.id)
+
+    if not sim_run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Simulation run not found or not in failed status",
+        )
+
+    # Queue background execution
+    background_tasks.add_task(
+        _execute_simulation_background,
+        simulation_id=sim_run.id,
+    )
+
+    return _run_to_response(sim_run)
+
+
 # =============================================================================
 # Synchronous Simulation (Legacy - waits for completion)
 # =============================================================================

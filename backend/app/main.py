@@ -33,6 +33,9 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
 
+    # Cleanup stale simulation runs (from server restarts/crashes)
+    await cleanup_stale_simulations()
+
     # Start scheduler if enabled
     if settings.ENABLE_SCHEDULER:
         configure_scheduler()
@@ -45,6 +48,21 @@ async def lifespan(app: FastAPI):
     if settings.ENABLE_SCHEDULER:
         shutdown_scheduler()
         logger.info("Job scheduler stopped")
+
+
+async def cleanup_stale_simulations():
+    """Mark any orphaned 'running' simulations as failed on startup."""
+    from app.db.session import async_session_factory
+    from app.services.game_simulator import GameSimulator
+
+    try:
+        async with async_session_factory() as db:
+            simulator = GameSimulator(db)
+            count = await simulator.cleanup_stale_runs(timeout_minutes=10)
+            if count > 0:
+                logger.info(f"Cleaned up {count} stale simulation run(s)")
+    except Exception as e:
+        logger.error(f"Failed to cleanup stale simulations: {e}")
 
 
 app = FastAPI(

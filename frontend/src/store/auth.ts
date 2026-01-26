@@ -8,11 +8,15 @@ interface AuthState {
   refreshToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isHydrated: boolean;
+  isFetchingUser: boolean;
 
   setUser: (user: User | null) => void;
   setTokens: (accessToken: string, refreshToken: string) => void;
   logout: () => void;
   setLoading: (loading: boolean) => void;
+  setHydrated: (hydrated: boolean) => void;
+  setFetchingUser: (fetching: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -23,6 +27,8 @@ export const useAuthStore = create<AuthState>()(
       refreshToken: null,
       isAuthenticated: false,
       isLoading: false,
+      isHydrated: false,
+      isFetchingUser: false,
 
       setUser: (user) => set({ user }),
 
@@ -35,9 +41,12 @@ export const useAuthStore = create<AuthState>()(
           accessToken: null,
           refreshToken: null,
           isAuthenticated: false,
+          isFetchingUser: false,
         }),
 
       setLoading: (isLoading) => set({ isLoading }),
+      setHydrated: (isHydrated) => set({ isHydrated }),
+      setFetchingUser: (isFetchingUser) => set({ isFetchingUser }),
     }),
     {
       name: 'spellbook-auth',
@@ -46,6 +55,10 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: state.refreshToken,
         isAuthenticated: state.isAuthenticated,
       }),
+      onRehydrateStorage: () => (state) => {
+        // Called when hydration is complete
+        state?.setHydrated(true);
+      },
     }
   )
 );

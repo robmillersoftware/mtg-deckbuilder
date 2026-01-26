@@ -29,8 +29,11 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
-    // If 401 and we haven't already retried
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Skip token refresh for auth endpoints to avoid loops
+    const isAuthEndpoint = originalRequest?.url?.includes('/auth/');
+
+    // If 401 and we haven't already retried, and it's not an auth endpoint
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true;
 
       const refreshToken = useAuthStore.getState().refreshToken;
@@ -49,7 +52,12 @@ api.interceptors.response.use(
         } catch (refreshError) {
           // Refresh failed, logout user
           useAuthStore.getState().logout();
-          window.location.href = '/login';
+          // Only redirect if not already on auth pages
+          const currentPath = window.location.pathname;
+          if (!currentPath.startsWith('/login') && !currentPath.startsWith('/register')) {
+            window.location.href = '/login';
+          }
+          return Promise.reject(refreshError);
         }
       }
     }
@@ -279,4 +287,6 @@ export const simulationApi = {
   getRun: (id: string) => api.get(`/simulation/runs/${id}`),
 
   deleteRun: (id: string) => api.delete(`/simulation/runs/${id}`),
+
+  retryRun: (id: string) => api.post(`/simulation/runs/${id}/retry`),
 };

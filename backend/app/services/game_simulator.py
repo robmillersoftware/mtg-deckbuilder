@@ -1237,3 +1237,94 @@ Provide 2-4 specific, actionable recommendations."""
         await self.db.delete(sim_run)
         await self.db.commit()
         return True
+
+    async def cleanup_stale_runs(self, timeout_minutes: int = 30) -> int:
+        """
+        Mark stale 'running' simulations as failed.
+        Called on app startup to handle orphaned runs from crashes/restarts.
+
+        Args:
+            timeout_minutes: How long a run can be 'running' before considered stale
+
+        Returns:
+            Number of runs marked as failed
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+
+        # Find running simulations that started more than timeout_minutes ago
+        result = await self.db.execute(
+            select(SimulationRun).where(
+                SimulationRun.status == "running",
+                SimulationRun.started_at < cutoff,
+            )
+        )
+        stale_runs = result.scalars().all()
+
+        count = 0
+        for run in stale_runs:
+            run.status = "failed"
+            run.error_message = f"Simulation timed out or server restarted (was running for >{timeout_minutes} minutes)"
+            run.completed_at = datetime.utcnow()
+            count += 1
+            logger.warning(f"Marked stale simulation {run.id} as failed")
+
+        if count > 0:
+            await self.db.commit()
+
+        return count
+
+    async def retry_simulation_run(
+        self, simulation_id: UUID, user_id: UUID
+    ) -> Optional[SimulationRun]:
+        """
+        Retry a failed simulation run by resetting its status to pending.
+
+        Args:
+            simulation_id: ID of the simulation to retry
+            user_id: User ID (must own the simulation)
+
+        Returns:
+            Updated SimulationRun or None if not found/not retryable
+        """
+        result = await self.db.execute(
+            select(SimulationRun).where(
+                SimulationRun.id == simulation_id,
+                SimulationRun.user_id == user_id,
+            )
+        )
+        sim_run = result.scalar_one_or_none()
+
+        if not sim_run:
+            return None
+
+        # Only allow retrying failed runs
+        if sim_run.status != "failed":
+            return None
+
+        # Reset for retry
+        sim_run.status = "pending"
+        sim_run.error_message = None
+        sim_run.started_at = None
+        sim_run.completed_at = None
+        sim_run.games_completed = 0
+        sim_run.current_game_turn = None
+        # Clear previous partial results
+        sim_run.games = None
+        sim_run.your_wins = None
+        sim_run.opponent_wins = None
+        sim_run.win_rate = None
+        sim_run.average_game_length = None
+        sim_run.matchup_assessment = None
+        sim_run.key_cards_for_you = None
+        sim_run.key_cards_against_you = None
+        sim_run.sideboard_guide = None
+        sim_run.strategic_advice = None
+        sim_run.mulligan_advice = None
+        sim_run.deck_recommendations = None
+
+        await self.db.commit()
+        await self.db.refresh(sim_run)
+
+        return sim_run

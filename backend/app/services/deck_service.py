@@ -61,16 +61,26 @@ class DeckService:
         )
         return list(result.scalars().all())
 
-    async def enrich_deck_cards(self, deck: Deck) -> Dict[str, Any]:
+    async def enrich_deck_entries(self, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Enrich a deck with full card information.
-        Returns deck data with card details populated.
+        Enrich deck entries with card data using batch fetching.
+        Returns entries with card details populated.
         """
-        enriched_main = []
-        for entry in deck.main_deck or []:
+        if not entries:
+            return []
+
+        # Collect all unique card names
+        card_names = list(set(e.get("card_name", "") for e in entries if e.get("card_name")))
+
+        # Batch fetch all cards
+        cards_map = await self.card_service.get_cards_by_names(card_names)
+
+        # Enrich entries
+        enriched = []
+        for entry in entries:
             card_name = entry.get("card_name", "")
-            card = await self.card_service.get_by_name(card_name)
-            enriched_main.append({
+            card = cards_map.get(card_name.lower())
+            enriched.append({
                 **entry,
                 "card": {
                     "id": str(card.id) if card else None,
@@ -83,22 +93,24 @@ class DeckService:
                 } if card else None,
             })
 
-        enriched_sideboard = []
-        for entry in deck.sideboard or []:
-            card_name = entry.get("card_name", "")
-            card = await self.card_service.get_by_name(card_name)
-            enriched_sideboard.append({
-                **entry,
-                "card": {
-                    "id": str(card.id) if card else None,
-                    "name": card.name if card else card_name,
-                    "mana_cost": card.mana_cost if card else None,
-                    "type_line": card.type_line if card else None,
-                    "oracle_text": card.oracle_text if card else None,
-                    "image_uri": card.image_uri if card else None,
-                    "image_uri_small": card.image_uri_small if card else None,
-                } if card else None,
-            })
+        return enriched
+
+    async def enrich_deck(self, deck: Deck) -> Deck:
+        """
+        Enrich a deck's card entries with full card data.
+        Modifies deck.main_deck and deck.sideboard in place.
+        """
+        deck.main_deck = await self.enrich_deck_entries(deck.main_deck or [])
+        deck.sideboard = await self.enrich_deck_entries(deck.sideboard or [])
+        return deck
+
+    async def enrich_deck_cards(self, deck: Deck) -> Dict[str, Any]:
+        """
+        Enrich a deck with full card information.
+        Returns deck data with card details populated.
+        """
+        enriched_main = await self.enrich_deck_entries(deck.main_deck or [])
+        enriched_sideboard = await self.enrich_deck_entries(deck.sideboard or [])
 
         return {
             "id": str(deck.id),
