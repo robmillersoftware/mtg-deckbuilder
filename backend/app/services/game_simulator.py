@@ -702,15 +702,15 @@ Return the complete game as JSON."""
             card_info = cards.get(name, {})
 
             if card_info:
-                mana = card_info.get("mana_cost", "")
-                type_line = card_info.get("type_line", "")
-                oracle = card_info.get("oracle_text", "")
+                mana = card_info.get("mana_cost") or ""
+                type_line = card_info.get("type_line") or ""
+                oracle = card_info.get("oracle_text") or ""
                 pt = ""
                 if card_info.get("power") and card_info.get("toughness"):
                     pt = f" [{card_info['power']}/{card_info['toughness']}]"
 
                 # Truncate oracle text if too long
-                if len(oracle) > 100:
+                if oracle and len(oracle) > 100:
                     oracle = oracle[:100] + "..."
 
                 lines.append(f"{qty}x {name} {mana} - {type_line}{pt}")
