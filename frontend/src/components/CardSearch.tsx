@@ -14,7 +14,7 @@ export function CardSearch({ onAddCard, existingCards = new Set() }: CardSearchP
   const [isOpen, setIsOpen] = useState(false);
   const { cards, isLoading, search } = useCardSearch();
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<NodeJS.Timeout>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Debounced search
   const handleSearch = useCallback((value: string) => {

@@ -3,6 +3,7 @@ import { metaApi, usersApi } from '@/services/api';
 import { MetaArchetype, MetaTrendsResponse, MetaHealthResponse, ArchetypeTrend } from '@/types';
 import { CardTooltip } from '@/components/CardTooltip';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { useOnboardingStore } from '@/store/onboarding';
 import clsx from 'clsx';
 
 const FORMAT_DISPLAY_NAMES: Record<string, string> = {
@@ -46,6 +47,7 @@ export function MetaPage() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [format, setFormat] = useState<string>('standard');
+  const { completeChecklistItem } = useOnboardingStore();
 
   // New state for trends and health
   const [trends, setTrends] = useState<MetaTrendsResponse | null>(null);
@@ -55,6 +57,11 @@ export function MetaPage() {
   // History chart data
   const [historyData, setHistoryData] = useState<HistoryDataPoint[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Mark onboarding checklist item as completed
+  useEffect(() => {
+    completeChecklistItem('explore-meta');
+  }, [completeChecklistItem]);
 
   useEffect(() => {
     loadPreferencesAndMeta();

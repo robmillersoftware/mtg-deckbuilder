@@ -19,6 +19,7 @@ import { ConversationsPage } from '@/pages/Conversations';
 import { AdminPage } from '@/pages/Admin';
 import { VerifyEmailPage } from '@/pages/VerifyEmail';
 import { SimulationPage } from '@/pages/Simulation';
+import { WelcomeModal, FeatureTour } from '@/components/onboarding';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -61,6 +62,8 @@ function App() {
           duration: 3000,
         }}
       />
+      <WelcomeModal />
+      <FeatureTour />
     </QueryClientProvider>
   );
 }

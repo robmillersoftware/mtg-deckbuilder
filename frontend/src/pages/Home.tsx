@@ -1,16 +1,26 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChatWindow } from '@/components/ChatWindow';
 import { DeckList } from '@/components/DeckList';
 import { DeckActions } from '@/components/DeckActions';
 import { ConversationList } from '@/components/ConversationList';
+import { OnboardingChecklist } from '@/components/onboarding';
 import { useDeckStore } from '@/store/deck';
+import { useOnboardingStore } from '@/store/onboarding';
 import { useAuth } from '@/hooks/useAuth';
 import clsx from 'clsx';
 
 export function HomePage() {
   const { currentDeck, updateCardQuantity, addCard } = useDeckStore();
   const { isAuthenticated } = useAuth();
+  const { completeChecklistItem } = useOnboardingStore();
   const [mobileTab, setMobileTab] = useState<'chat' | 'deck'>('chat');
+
+  // Mark "create-deck" checklist item as complete when a deck is generated
+  useEffect(() => {
+    if (currentDeck && currentDeck.main_deck && currentDeck.main_deck.length > 0) {
+      completeChecklistItem('create-deck');
+    }
+  }, [currentDeck, completeChecklistItem]);
 
   const handleQuantityChange = (
     cardName: string,
@@ -96,11 +106,19 @@ export function HomePage() {
             )}
           </>
         ) : (
-          <div className="bg-gray-900 rounded-lg p-4 text-center text-gray-400">
-            <p className="text-lg mb-2">No deck yet</p>
-            <p className="text-sm">
-              Tell Spellbook what kind of deck you want to build
-            </p>
+          <div className="space-y-4">
+            <div className="bg-gray-900 rounded-lg p-4 text-center text-gray-400">
+              <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-gray-800 flex items-center justify-center">
+                <svg className="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+              </div>
+              <p className="text-lg mb-2 text-white">No deck yet</p>
+              <p className="text-sm">
+                Tell Spellbook what kind of deck you want to build
+              </p>
+            </div>
+            <OnboardingChecklist />
           </div>
         )}
       </div>
