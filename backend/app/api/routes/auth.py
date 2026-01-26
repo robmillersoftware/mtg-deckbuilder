@@ -12,6 +12,7 @@ from app.schemas.user import (
     UserResponse,
     UserLogin,
     Token,
+    RefreshTokenRequest,
     PasswordReset,
     PasswordResetConfirm,
 )
@@ -242,7 +243,7 @@ async def confirm_password_reset(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
-    refresh_token: str,
+    request: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """Refresh access token using refresh token."""
@@ -252,7 +253,7 @@ async def refresh_token(
 
     try:
         payload = jwt.decode(
-            refresh_token,
+            request.refresh_token,
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
         )
