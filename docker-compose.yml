@@ -45,7 +45,7 @@ services:
       DATABASE_URL_SYNC: postgresql://spellbook:spellbook@db:5432/spellbook
       REDIS_URL: redis://redis:6379/0
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-in-production}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-in-production}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
       APP_URL: http://localhost:3000
       ENABLE_SCHEDULER: "true"
