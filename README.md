@@ -4,7 +4,7 @@ AI-powered Magic: The Gathering deck builder for competitive Standard play.
 
 ## Overview
 
-Spellbook is a full-stack application that uses AI to generate tournament-ready Magic: The Gathering decks. It combines real-time metagame data with Claude AI to create optimized 60-card main decks and 15-card sideboards tailored to the current competitive landscape.
+Spellbook is a full-stack application that uses AI to generate tournament-ready Magic: The Gathering decks. It combines real-time metagame data with Claude AI to create optimized decks tailored to the current competitive landscape.
 
 ## Features
 
