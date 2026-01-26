@@ -7,13 +7,30 @@ import toast from 'react-hot-toast';
 
 type ImportFormat = 'arena' | 'mtgo' | 'text';
 
+interface CardSuggestion {
+  original: string;
+  suggestions: string[];
+  reason: string;
+}
+
+// Matches backend DeckImportResponse schema
+interface BackendImportResult {
+  valid: boolean;
+  main_deck?: DeckEntry[];
+  sideboard?: DeckEntry[];
+  errors: string[];
+  warnings: string[];
+  card_suggestions: CardSuggestion[];
+  archetype?: string;
+}
+
+// Normalized format for UI rendering
 interface ImportResult {
   success: boolean;
   deck?: {
-    id: string;
-    name: string;
     main_deck: DeckEntry[];
     sideboard: DeckEntry[];
+    archetype?: string;
   };
   errors?: {
     line_number?: number;
@@ -23,6 +40,46 @@ interface ImportResult {
   }[];
   warnings?: string[];
   validation_errors?: ValidationError[];
+}
+
+// Transform backend response to normalized UI format
+function normalizeImportResult(backend: BackendImportResult): ImportResult {
+  // Build error objects from strings and card_suggestions
+  const errors: ImportResult['errors'] = [];
+
+  // Add card suggestion errors (these have suggestions)
+  for (const suggestion of backend.card_suggestions) {
+    errors.push({
+      card_name: suggestion.original,
+      message: suggestion.reason,
+      suggestions: suggestion.suggestions,
+    });
+  }
+
+  // Add other string errors (skip ones already covered by card_suggestions)
+  const cardSuggestionOriginals = new Set(backend.card_suggestions.map(s => s.original));
+  for (const errorStr of backend.errors) {
+    // Check if this error is about a card we already have a suggestion for
+    const isCardNotFoundError = errorStr.startsWith("Card not found:");
+    if (isCardNotFoundError) {
+      const match = errorStr.match(/Card not found: '(.+)'/);
+      if (match && cardSuggestionOriginals.has(match[1])) {
+        continue; // Skip - already covered by card_suggestions
+      }
+    }
+    errors.push({ message: errorStr });
+  }
+
+  return {
+    success: backend.valid,
+    deck: backend.main_deck ? {
+      main_deck: backend.main_deck,
+      sideboard: backend.sideboard || [],
+      archetype: backend.archetype,
+    } : undefined,
+    errors: errors.length > 0 ? errors : undefined,
+    warnings: backend.warnings.length > 0 ? backend.warnings : undefined,
+  };
 }
 
 export function DeckImportPage() {
@@ -45,7 +102,8 @@ export function DeckImportPage() {
 
     try {
       const response = await decksApi.import(deckText, format);
-      const result = response.data as ImportResult;
+      const backendResult = response.data as BackendImportResult;
+      const result = normalizeImportResult(backendResult);
       setImportResult(result);
 
       if (result.success && result.deck) {
@@ -73,11 +131,11 @@ export function DeckImportPage() {
     try {
       const response = await decksApi.create({
         name: deckName,
-        main_deck: importResult.deck.main_deck.map((e) => ({
+        main_deck: importResult.deck.main_deck.map((e: DeckEntry) => ({
           card_name: e.card_name,
           quantity: e.quantity,
         })),
-        sideboard: importResult.deck.sideboard?.map((e) => ({
+        sideboard: importResult.deck.sideboard?.map((e: DeckEntry) => ({
           card_name: e.card_name,
           quantity: e.quantity,
         })),
@@ -267,13 +325,13 @@ SB: 2 Abrade`,
                     <div className="flex justify-between text-gray-400">
                       <span>Main Deck:</span>
                       <span className="text-white">
-                        {importResult.deck.main_deck.reduce((sum, e) => sum + e.quantity, 0)} cards
+                        {importResult.deck.main_deck.reduce((sum: number, e: DeckEntry) => sum + e.quantity, 0)} cards
                       </span>
                     </div>
                     <div className="flex justify-between text-gray-400">
                       <span>Sideboard:</span>
                       <span className="text-white">
-                        {(importResult.deck.sideboard || []).reduce((sum, e) => sum + e.quantity, 0)} cards
+                        {(importResult.deck.sideboard || []).reduce((sum: number, e: DeckEntry) => sum + e.quantity, 0)} cards
                       </span>
                     </div>
                   </div>
