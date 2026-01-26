@@ -13,6 +13,9 @@ export function Layout() {
   // Show loading state while hydrating or fetching user
   const isLoadingAuth = !isHydrated || (isAuthenticated && !user && isLoading);
 
+  // Detect broken auth state: authenticated but no user and not loading
+  const isBrokenAuthState = isHydrated && isAuthenticated && !user && !isLoading;
+
   // Close menu when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -88,8 +91,15 @@ export function Layout() {
               {isLoadingAuth ? (
                 <div className="flex items-center space-x-2 text-sm text-gray-400">
                   <div className="w-8 h-8 rounded-full bg-gray-700 animate-pulse" />
-                  <div className="w-16 h-4 bg-gray-700 rounded animate-pulse" />
+                  <div className="hidden sm:block w-16 h-4 bg-gray-700 rounded animate-pulse" />
                 </div>
+              ) : isBrokenAuthState ? (
+                <button
+                  onClick={logout}
+                  className="text-sm text-yellow-400 hover:text-yellow-300 transition-colors"
+                >
+                  Session expired - Log in
+                </button>
               ) : isAuthenticated && user ? (
                 <div ref={menuRef} className="relative">
                   <button
