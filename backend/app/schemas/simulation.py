@@ -39,6 +39,15 @@ class GameAction(BaseModel):
     cards_involved: List[str] = []
 
 
+class TurnAction(BaseModel):
+    """A single turn in the game transcript."""
+    turn_number: int
+    active_player: str  # "you" or "opponent" (or "opponent_1", etc. for multiplayer)
+    life_totals: Dict[str, int]
+    actions: List[str]  # List of action descriptions
+    board_state: Optional[Dict[str, Any]] = None  # Optional for size
+
+
 class GameResult(BaseModel):
     """Result of a single simulated game."""
     game_number: int
@@ -56,6 +65,7 @@ class GameResult(BaseModel):
     opponent_key_cards_by_player: Optional[Dict[str, List[str]]] = None  # Per-opponent in multiplayer
     sideboard_in: Optional[List[str]] = None  # Cards you sided in (games 2-3)
     sideboard_out: Optional[List[str]] = None
+    transcript: Optional[List[TurnAction]] = None  # Full turn-by-turn game data
 
 
 class MatchupAnalysisResult(BaseModel):
@@ -129,6 +139,7 @@ class SimulationRunResponse(BaseModel):
     include_sideboard_games: bool
     games_completed: int
     current_game_turn: Optional[int] = None
+    current_game_turns: Optional[List[TurnAction]] = None  # Live turns from in-progress game
 
     # Results (when completed)
     your_wins: Optional[int] = None

@@ -5,6 +5,17 @@ import ReactMarkdown, { Components } from 'react-markdown';
 import clsx from 'clsx';
 import { CardTooltip } from './CardTooltip';
 
+// Progress messages that rotate during deck generation
+const PROGRESS_MESSAGES = [
+  'Analyzing your request...',
+  'Searching for synergies...',
+  'Building the mana base...',
+  'Selecting sideboard cards...',
+  'Optimizing the curve...',
+  'Finding key interactions...',
+  'Validating deck...',
+];
+
 interface ChatWindowProps {
   className?: string;
 }
@@ -20,6 +31,7 @@ const FORMAT_OPTIONS = [
 
 export function ChatWindow({ className }: ChatWindowProps) {
   const [input, setInput] = useState('');
+  const [progressMessageIndex, setProgressMessageIndex] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -36,6 +48,20 @@ export function ChatWindow({ className }: ChatWindowProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Rotate progress messages during loading
+  useEffect(() => {
+    if (!isLoading) {
+      setProgressMessageIndex(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setProgressMessageIndex((prev) => (prev + 1) % PROGRESS_MESSAGES.length);
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,13 +133,17 @@ export function ChatWindow({ className }: ChatWindowProps) {
         )}
 
         {isLoading && (
-          <div className="flex items-center space-x-2 text-gray-400">
-            <div className="animate-pulse flex space-x-1">
+          <div className="flex items-start space-x-3 p-3 bg-gray-800/50 rounded-lg">
+            <div className="flex space-x-1 pt-1">
               <div className="w-2 h-2 bg-primary-400 rounded-full animate-bounce" />
               <div className="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
               <div className="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
             </div>
-            <span className="text-sm">Spellbook is typing...</span>
+            <div className="flex-1">
+              <span className="text-sm text-primary-400 font-medium transition-opacity duration-300">
+                {PROGRESS_MESSAGES[progressMessageIndex]}
+              </span>
+            </div>
           </div>
         )}
 
@@ -230,7 +260,7 @@ function MessageBubble({ message }: MessageBubbleProps) {
       }
       // If children contain text nodes, try to parse them
       if (Array.isArray(children)) {
-        const processedChildren = children.map((child, i) => {
+        const processedChildren = children.map((child) => {
           if (typeof child === 'string') {
             return parseCardNames(child);
           }

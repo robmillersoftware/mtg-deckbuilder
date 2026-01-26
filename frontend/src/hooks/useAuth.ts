@@ -172,6 +172,7 @@ export function useAuth() {
     isAuthenticated,
     isLoading,
     isHydrated,
+    isFetchingUser,
     login,
     register,
     logout,

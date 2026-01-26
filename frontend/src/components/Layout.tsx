@@ -5,17 +5,26 @@ import clsx from 'clsx';
 
 export function Layout() {
   const location = useLocation();
-  const { user, isAuthenticated, isLoading, isHydrated, logout } = useAuth();
+  const { user, isAuthenticated, isLoading, isHydrated, isFetchingUser, logout } = useAuth();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
+  const [initialLoadGracePeriod, setInitialLoadGracePeriod] = useState(true);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Show loading state while hydrating or fetching user
-  const isLoadingAuth = !isHydrated || (isAuthenticated && !user && isLoading && !loadingTimedOut);
+  // Give the auth system a brief moment to start fetching after hydration
+  useEffect(() => {
+    if (isHydrated) {
+      const timer = setTimeout(() => setInitialLoadGracePeriod(false), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isHydrated]);
 
-  // Detect broken auth state: authenticated but no user and not loading (or timed out)
-  const isBrokenAuthState = isHydrated && isAuthenticated && !user && (!isLoading || loadingTimedOut);
+  // Show loading state when authenticated and fetching user data
+  const isLoadingAuth = isHydrated && isAuthenticated && !user && (isLoading || isFetchingUser || initialLoadGracePeriod) && !loadingTimedOut;
+
+  // Detect broken auth state: authenticated but no user, not loading, and grace period passed
+  const isBrokenAuthState = isHydrated && isAuthenticated && !user && !isLoading && !isFetchingUser && !initialLoadGracePeriod && !loadingTimedOut;
 
   // Timeout for loading state - if stuck for 10 seconds, show recovery UI
   useEffect(() => {

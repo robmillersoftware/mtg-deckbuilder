@@ -14,6 +14,7 @@ import random
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import settings
 from app.models.deck import Deck
@@ -26,6 +27,7 @@ from app.schemas.simulation import (
     GameResult,
     MatchupAnalysisResult,
     SimulationRequest,
+    TurnAction,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,10 +41,30 @@ GAME_SYSTEM_PROMPT = """You are a Magic: The Gathering game simulator. You will 
 
 RULES:
 1. Follow official MTG rules strictly
-2. Make the best possible play for whichever player's turn it is
-3. Track life totals, cards in hand, battlefield, graveyard
-4. Consider mana efficiency, tempo, and card advantage
-5. Be realistic about combat math and sequencing
+2. The player who goes FIRST does NOT draw a card on their first turn (they start with 7 cards and skip their first draw step)
+3. The player who goes SECOND draws normally on their first turn (draws to 8 cards before their first main phase)
+4. Make the best possible play for whichever player's turn it is
+5. Track life totals, cards in hand, battlefield, graveyard
+6. Consider mana efficiency, tempo, and card advantage
+7. Be realistic about combat math and sequencing
+
+INSTANT-SPEED INTERACTION (CRITICAL):
+Players can cast instants and activate abilities at any time they have priority:
+- In response to ANY spell on the stack (including counterspells!)
+- During the opponent's turn (upkeep, draw, combat, end step)
+- During combat (before blockers, after blockers, during damage)
+
+When simulating, ALWAYS consider:
+1. COUNTERSPELLS: If a player has blue mana open and cards in hand, they may counter key spells. Include "Player 2 counters [Spell] with [Counterspell]" when appropriate.
+2. INSTANT REMOVAL: Players can kill creatures in response to auras, equipment, or before combat damage.
+3. COMBAT TRICKS: Giant Growth effects, flash creatures as blockers, etc.
+4. END STEP PLAYS: Drawing cards, flashing in threats at end of opponent's turn.
+
+The non-active player should use instant-speed interaction optimally:
+- Counter the most impactful spells (not every spell)
+- Hold up mana when they have relevant instants
+- Bluff having interaction when they don't
+- Use removal at the most effective time (often in response to pump spells or during combat)
 
 OUTPUT FORMAT:
 Return JSON with this structure:
@@ -55,7 +77,9 @@ Return JSON with this structure:
             "actions": [
                 "Drew [Card Name]",
                 "Played Mountain",
-                "Cast Goblin Guide, attacked for 2"
+                "Cast Goblin Guide",
+                "Player 2 responds: No response",
+                "Attacked with Goblin Guide for 2"
             ],
             "board_state": {
                 "player1": {"lands": [...], "creatures": [...], "other": [...]},
@@ -72,12 +96,13 @@ Return JSON with this structure:
     "final_life": {"player1": 12, "player2": 0},
     "total_turns": 7,
     "key_moments": [
-        "Turn 3: Player 2's removal spell on Goblin Guide prevented early pressure",
-        "Turn 6: Player 1 topdecked Lightning Strike for lethal"
+        "Turn 3: Player 2 countered Fable of the Mirror-Breaker with Make Disappear",
+        "Turn 5: Player 1 baited the counterspell, then resolved Sheoldred",
+        "Turn 6: Player 2's end-step Shoot the Sheriff on Sheoldred stabilized the board"
     ],
     "mvp_cards": {
-        "player1": ["Goblin Guide", "Lightning Strike"],
-        "player2": ["Fatal Push"]
+        "player1": ["Sheoldred", "Go for the Throat"],
+        "player2": ["Make Disappear", "Memory Deluge"]
     }
 }
 
@@ -86,7 +111,9 @@ IMPORTANT:
 - Both players mulligan optimally (mulligan poor hands, keep good ones)
 - Games should end within 15 turns typically
 - If game is clearly decided, you can end early with "concede" as win condition
-- Be concise in actions but clear about what happens"""
+- Be concise in actions but clear about what happens
+- ALWAYS simulate instant-speed responses - this is critical for accurate results
+- Note when a player holds up mana but chooses not to respond"""
 
 
 # System prompt for multiplayer Commander games
@@ -94,16 +121,37 @@ MULTIPLAYER_SYSTEM_PROMPT = """You are a Magic: The Gathering Commander game sim
 
 COMMANDER RULES:
 1. Starting life total: 40 per player
-2. Commander damage: 21 damage from a single commander eliminates a player
-3. Command zone: Commanders can be cast from command zone with +2 mana each time
-4. Free-for-all: Players can attack/target any opponent
-5. Politics matter: Consider threat assessment, temporary alliances, and optimal targeting
+2. In multiplayer, ALL players (including first player) draw on their first turn
+3. Commander damage: 21 damage from a single commander eliminates a player
+4. Command zone: Commanders can be cast from command zone with +2 mana each time
+5. Free-for-all: Players can attack/target any opponent
+6. Politics matter: Consider threat assessment, temporary alliances, and optimal targeting
 
 MULTIPLAYER DYNAMICS:
 - Players should avoid becoming the "archenemy" too early
 - Threat assessment: Focus removal on the biggest threats
 - Board wipes become more valuable
 - Card advantage and resilience matter more than raw speed
+
+INSTANT-SPEED INTERACTION (CRITICAL):
+In Commander, instant-speed interaction is even MORE important due to multiple opponents:
+- ANY player can respond to spells on the stack
+- Players will try to make others spend removal before committing threats
+- Counterspell wars are common for game-winning spells
+- Flash threats at end of turn before your untap is a key strategy
+
+When simulating, ALWAYS consider:
+1. COUNTERSPELLS: Multiple players may have counters. Note counter wars: "Player 2 casts Counterspell on Expropriate, Player 1 responds with Force of Will"
+2. INSTANT REMOVAL: Any player can respond to threatening plays. Remove threats BEFORE they generate value.
+3. POLITICS: Players may agree not to counter each other's spells temporarily, or gang up on the leader
+4. TIMING: Savvy players cast threats at end of turn before their untap, or wait until counter mana is tapped
+5. STACK INTERACTIONS: Multiple responses can happen - resolve in LIFO order
+
+The non-active players should interact optimally:
+- Counter or remove the biggest threats to THEM specifically
+- Let others spend resources when possible
+- Protect their own key pieces with interaction
+- Use removal politically (remove the leader's threats)
 
 OUTPUT FORMAT:
 Return JSON with this structure:
@@ -114,7 +162,13 @@ Return JSON with this structure:
             "active_player": "player1",
             "life_totals": {"player1": 40, "player2": 40, "player3": 40, "player4": 40},
             "commander_damage": {"player1": {}, "player2": {}, "player3": {}, "player4": {}},
-            "actions": ["Drew [Card]", "Played Sol Ring", "Cast Commander"],
+            "actions": [
+                "Drew [Card]",
+                "Played Sol Ring",
+                "Cast Commander",
+                "Player 3 responds with Swords to Plowshares targeting Commander",
+                "Player 1 responds with Flawless Maneuver, Commander resolves"
+            ],
             "eliminations": []
         }
     ],
@@ -124,12 +178,13 @@ Return JSON with this structure:
     "final_life": {"player1": 23, "player2": 0, "player3": 0, "player4": 0},
     "total_turns": 12,
     "key_moments": [
-        "Turn 5: Player 2 cast board wipe, resetting the game",
-        "Turn 8: Player 1's commander dealt lethal commander damage to Player 3"
+        "Turn 5: Player 2 cast Cyclonic Rift, Players 3 and 4 couldn't counter it",
+        "Turn 8: Player 1's Thassa's Oracle triggered, Player 2 tried to Stifle but Player 1 had Swan Song",
+        "Turn 10: Player 3 attempted Torment of Hailfire for 15, counter war ensued with 4 spells on stack"
     ],
     "mvp_cards": {
-        "player1": ["Sol Ring", "Commander"],
-        "player2": ["Wrath of God"],
+        "player1": ["Thassa's Oracle", "Swan Song"],
+        "player2": ["Cyclonic Rift", "Counterspell"],
         "player3": ["Rhystic Study"],
         "player4": ["Mana Crypt"]
     }
@@ -139,7 +194,9 @@ IMPORTANT:
 - Players are eliminated when reaching 0 life or 21 commander damage from one source
 - Game ends when one player remains
 - Be concise but track all eliminations and key plays
-- Commander games typically last 10-15 turns"""
+- Commander games typically last 10-15 turns
+- ALWAYS simulate instant-speed responses from ALL players - this is critical for accurate multiplayer results
+- Show counter wars and removal timing explicitly in actions"""
 
 
 class GameSimulator:
@@ -161,6 +218,7 @@ class GameSimulator:
         on_progress: Optional[Any] = None,  # Callback(games_completed, current_turn)
         opponent_decks: Optional[List[DeckInput]] = None,  # For multiplayer
         num_players: int = 2,
+        sim_run: Optional[SimulationRun] = None,  # For live turn updates
     ) -> MatchupAnalysisResult:
         """
         Simulate a match (multiple games) between decks.
@@ -219,6 +277,7 @@ class GameSimulator:
                     opponent_decks=opponent_decks_enriched,
                     game_number=game_num,
                     num_players=num_players,
+                    sim_run=sim_run,
                 )
                 # In multiplayer, track placement
                 if game_result.winner == "you":
@@ -244,6 +303,7 @@ class GameSimulator:
                     game_number=game_num,
                     use_sideboard=use_sideboard,
                     on_the_play=(game_num % 2 == 1),
+                    sim_run=sim_run,
                 )
                 if game_result.winner == "you":
                     your_wins += 1
@@ -252,7 +312,7 @@ class GameSimulator:
             total_turns += game_result.turns
 
             if on_progress:
-                await on_progress(game_num, None)
+                await on_progress(game_num, None, game_result)
 
         # Calculate statistics
         avg_game_length = total_turns / num_games
@@ -421,6 +481,116 @@ class GameSimulator:
 
         return enriched
 
+    def _parse_turn_from_raw(self, turn: Dict[str, Any], is_multiplayer: bool = False, num_players: int = 2) -> TurnAction:
+        """Parse a raw turn dict into a TurnAction with proper player naming."""
+        active_player = turn.get("active_player", "player1")
+
+        if is_multiplayer:
+            # Map player1 -> "you", player2 -> "opponent_1", player3 -> "opponent_2", etc.
+            if active_player == "player1":
+                active_player = "you"
+            else:
+                # Extract player number and convert to opponent_N
+                try:
+                    player_num = int(active_player.replace("player", ""))
+                    active_player = f"opponent_{player_num - 1}"
+                except:
+                    active_player = "opponent_1"
+
+            # Map life totals for multiplayer
+            raw_life = turn.get("life_totals", {})
+            life_totals = {"you": raw_life.get("player1", 40)}
+            for i in range(2, num_players + 1):
+                life_totals[f"opponent_{i - 1}"] = raw_life.get(f"player{i}", 40)
+        else:
+            # 2-player: player1 -> "you", player2 -> "opponent"
+            if active_player == "player1":
+                active_player = "you"
+            else:
+                active_player = "opponent"
+
+            raw_life = turn.get("life_totals", {})
+            life_totals = {
+                "you": raw_life.get("player1", 20),
+                "opponent": raw_life.get("player2", 20),
+            }
+
+        return TurnAction(
+            turn_number=turn.get("turn_number", 1),
+            active_player=active_player,
+            life_totals=life_totals,
+            actions=turn.get("actions", []),
+            board_state=turn.get("board_state"),
+        )
+
+    def _extract_turns_from_partial_json(self, text: str) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Extract complete turn objects from partial JSON text.
+        Returns (list of turn dicts, index of last successfully parsed position).
+        """
+        import re
+        turns = []
+
+        # Find the turns array start
+        turns_match = re.search(r'"turns"\s*:\s*\[', text)
+        if not turns_match:
+            return [], 0
+
+        start_idx = turns_match.end()
+
+        # Track brace depth to find complete turn objects
+        i = start_idx
+        while i < len(text):
+            # Skip whitespace and commas
+            while i < len(text) and text[i] in ' \t\n\r,':
+                i += 1
+
+            if i >= len(text):
+                break
+
+            # Check for array end
+            if text[i] == ']':
+                break
+
+            # Should be start of a turn object
+            if text[i] != '{':
+                break
+
+            # Find the matching closing brace
+            brace_depth = 0
+            obj_start = i
+
+            while i < len(text):
+                if text[i] == '{':
+                    brace_depth += 1
+                elif text[i] == '}':
+                    brace_depth -= 1
+                    if brace_depth == 0:
+                        # Found complete object
+                        obj_text = text[obj_start:i + 1]
+                        try:
+                            turn_obj = json.loads(obj_text)
+                            turns.append(turn_obj)
+                        except json.JSONDecodeError:
+                            pass
+                        i += 1
+                        break
+                elif text[i] == '"':
+                    # Skip string content (handle escaped quotes)
+                    i += 1
+                    while i < len(text) and text[i] != '"':
+                        if text[i] == '\\' and i + 1 < len(text):
+                            i += 2
+                        else:
+                            i += 1
+                i += 1
+
+            # If we didn't find closing brace, this turn is incomplete
+            if brace_depth != 0:
+                break
+
+        return turns, len(turns)
+
     async def _simulate_single_game(
         self,
         your_deck: Dict[str, Any],
@@ -428,15 +598,15 @@ class GameSimulator:
         game_number: int,
         use_sideboard: bool = False,
         on_the_play: bool = True,
+        sim_run: Optional[SimulationRun] = None,
     ) -> GameResult:
-        """Simulate a single game using the LLM."""
+        """Simulate a single game using the LLM with streaming for live updates."""
 
         if not settings.ANTHROPIC_API_KEY:
             # Return mock result if no API key
             return self._mock_game_result(game_number)
 
         import anthropic
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
         # Build the game prompt
         prompt = self._build_game_prompt(
@@ -448,18 +618,63 @@ class GameSimulator:
         )
 
         try:
-            response = client.messages.create(
+            # Use streaming to get live turn updates
+            accumulated_text = ""
+            last_parsed_turn_count = 0
+            live_turns: List[TurnAction] = []
+
+            # Clear any previous game's turns
+            if sim_run:
+                sim_run.current_game_turns = []
+                flag_modified(sim_run, "current_game_turns")
+                await self.db.commit()
+
+            # Use async client for proper async streaming
+            async_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+            async with async_client.messages.stream(
                 model="claude-sonnet-4-20250514",
                 max_tokens=4096,
                 system=GAME_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
-            )
+            ) as stream:
+                async for text in stream.text_stream:
+                    accumulated_text += text
 
-            # Parse the response
-            response_text = response.content[0].text
+                    # Try to extract complete turns from the accumulated text
+                    raw_turns, turn_count = self._extract_turns_from_partial_json(accumulated_text)
 
-            # Extract JSON from response
+                    # If we found new turns, parse and save them
+                    if turn_count > last_parsed_turn_count:
+                        for raw_turn in raw_turns[last_parsed_turn_count:]:
+                            turn_action = self._parse_turn_from_raw(raw_turn, is_multiplayer=False)
+                            live_turns.append(turn_action)
+
+                            # Save to database for live updates
+                            if sim_run:
+                                sim_run.current_game_turns = [t.model_dump() for t in live_turns]
+                                sim_run.current_game_turn = turn_action.turn_number
+                                flag_modified(sim_run, "current_game_turns")
+                                await self.db.commit()
+
+                        last_parsed_turn_count = turn_count
+
+            # Parse the complete response
+            response_text = accumulated_text
             game_data = self._parse_game_response(response_text)
+
+            # Build final transcript from turns data
+            transcript = None
+            raw_turns = game_data.get("turns", [])
+            if raw_turns:
+                transcript = []
+                for turn in raw_turns:
+                    transcript.append(self._parse_turn_from_raw(turn, is_multiplayer=False))
+
+            # Clear current_game_turns since game is complete
+            if sim_run:
+                sim_run.current_game_turns = None
+                await self.db.commit()
 
             return GameResult(
                 game_number=game_number,
@@ -473,10 +688,15 @@ class GameSimulator:
                 opponent_key_cards=game_data.get("mvp_cards", {}).get("player2", []),
                 sideboard_in=game_data.get("sideboard_in") if use_sideboard else None,
                 sideboard_out=game_data.get("sideboard_out") if use_sideboard else None,
+                transcript=transcript,
             )
 
         except Exception as e:
             logger.error(f"Error simulating game: {e}")
+            # Clear current_game_turns on error
+            if sim_run:
+                sim_run.current_game_turns = None
+                await self.db.commit()
             return self._mock_game_result(game_number)
 
     async def _simulate_multiplayer_game(
@@ -485,14 +705,14 @@ class GameSimulator:
         opponent_decks: List[Dict[str, Any]],
         game_number: int,
         num_players: int = 4,
+        sim_run: Optional[SimulationRun] = None,
     ) -> GameResult:
-        """Simulate a multiplayer Commander game using the LLM."""
+        """Simulate a multiplayer Commander game using the LLM with streaming for live updates."""
 
         if not settings.ANTHROPIC_API_KEY:
             return self._mock_multiplayer_result(game_number, num_players)
 
         import anthropic
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
         # Build the multiplayer game prompt
         prompt = self._build_multiplayer_prompt(
@@ -503,15 +723,54 @@ class GameSimulator:
         )
 
         try:
-            response = client.messages.create(
+            # Use streaming to get live turn updates
+            accumulated_text = ""
+            last_parsed_turn_count = 0
+            live_turns: List[TurnAction] = []
+
+            # Clear any previous game's turns
+            if sim_run:
+                sim_run.current_game_turns = []
+                flag_modified(sim_run, "current_game_turns")
+                await self.db.commit()
+
+            # Use async client for proper async streaming
+            async_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+            async with async_client.messages.stream(
                 model="claude-sonnet-4-20250514",
                 max_tokens=6000,  # Multiplayer games need more tokens
                 system=MULTIPLAYER_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
-            )
+            ) as stream:
+                async for text in stream.text_stream:
+                    accumulated_text += text
 
-            response_text = response.content[0].text
+                    # Try to extract complete turns from the accumulated text
+                    raw_turns, turn_count = self._extract_turns_from_partial_json(accumulated_text)
+
+                    # If we found new turns, parse and save them
+                    if turn_count > last_parsed_turn_count:
+                        for raw_turn in raw_turns[last_parsed_turn_count:]:
+                            turn_action = self._parse_turn_from_raw(raw_turn, is_multiplayer=True, num_players=num_players)
+                            live_turns.append(turn_action)
+
+                            # Save to database for live updates
+                            if sim_run:
+                                sim_run.current_game_turns = [t.model_dump() for t in live_turns]
+                                sim_run.current_game_turn = turn_action.turn_number
+                                flag_modified(sim_run, "current_game_turns")
+                                await self.db.commit()
+
+                        last_parsed_turn_count = turn_count
+
+            response_text = accumulated_text
             game_data = self._parse_game_response(response_text)
+
+            # Clear current_game_turns since game is complete
+            if sim_run:
+                sim_run.current_game_turns = None
+                await self.db.commit()
 
             # Map winner to our naming convention
             winner = game_data.get("winner", "player1")
@@ -553,6 +812,38 @@ class GameSimulator:
                     player_num = int(key.replace("player", ""))
                     opponent_key_by_player[f"opponent_{player_num - 1}"] = cards
 
+            # Build transcript from turns data
+            transcript = None
+            raw_turns = game_data.get("turns", [])
+            if raw_turns:
+                transcript = []
+                for turn in raw_turns:
+                    # Map player names: player1 -> "you", playerN -> "opponent_N-1"
+                    active_player = turn.get("active_player", "player1")
+                    if active_player == "player1":
+                        active_player = "you"
+                    else:
+                        p_num = int(active_player.replace("player", ""))
+                        active_player = f"opponent_{p_num - 1}"
+
+                    # Map life totals to our naming convention
+                    raw_turn_life = turn.get("life_totals", {})
+                    turn_life_totals = {}
+                    for key, val in raw_turn_life.items():
+                        if key == "player1":
+                            turn_life_totals["you"] = val
+                        else:
+                            p_num = int(key.replace("player", ""))
+                            turn_life_totals[f"opponent_{p_num - 1}"] = val
+
+                    transcript.append(TurnAction(
+                        turn_number=turn.get("turn_number", 1),
+                        active_player=active_player,
+                        life_totals=turn_life_totals,
+                        actions=turn.get("actions", []),
+                        board_state=turn.get("board_state"),
+                    ))
+
             return GameResult(
                 game_number=game_number,
                 winner=winner_str,
@@ -566,10 +857,15 @@ class GameSimulator:
                 your_key_cards=your_key,
                 opponent_key_cards=opponent_key_cards,
                 opponent_key_cards_by_player=opponent_key_by_player if opponent_key_by_player else None,
+                transcript=transcript,
             )
 
         except Exception as e:
             logger.error(f"Error simulating multiplayer game: {e}")
+            # Clear current_game_turns on error
+            if sim_run:
+                sim_run.current_game_turns = None
+                await self.db.commit()
             return self._mock_multiplayer_result(game_number, num_players)
 
     def _build_multiplayer_prompt(
@@ -1154,11 +1450,12 @@ Provide 2-4 specific, actionable recommendations."""
                 num_games=sim_run.num_games,
                 include_sideboard_games=bool(sim_run.include_sideboard_games),
                 format=sim_run.format,
-                on_progress=lambda completed, turn: self._update_progress(
-                    sim_run, completed, turn
+                on_progress=lambda completed, turn, game_result: self._update_progress(
+                    sim_run, completed, turn, game_result
                 ),
                 opponent_decks=opponent_decks,
                 num_players=sim_run.num_players,
+                sim_run=sim_run,  # Pass for live turn updates
             )
 
             # Update with results
@@ -1187,6 +1484,15 @@ Provide 2-4 specific, actionable recommendations."""
                 ]
             sim_run.games_completed = sim_run.num_games
 
+            # Force SQLAlchemy to detect JSONB changes
+            flag_modified(sim_run, "games")
+            flag_modified(sim_run, "key_cards_for_you")
+            flag_modified(sim_run, "key_cards_against_you")
+            flag_modified(sim_run, "sideboard_guide")
+            flag_modified(sim_run, "strategic_advice")
+            if match_result.deck_recommendations:
+                flag_modified(sim_run, "deck_recommendations")
+
             await self.db.commit()
             await self.db.refresh(sim_run)
 
@@ -1201,11 +1507,26 @@ Provide 2-4 specific, actionable recommendations."""
         return sim_run
 
     async def _update_progress(
-        self, sim_run: SimulationRun, games_completed: int, current_turn: Optional[int]
+        self, sim_run: SimulationRun, games_completed: int, current_turn: Optional[int],
+        game_result: Optional[GameResult] = None
     ):
         """Update simulation progress (called during simulation)."""
         sim_run.games_completed = games_completed
         sim_run.current_game_turn = current_turn
+
+        # Save completed game incrementally
+        if game_result:
+            existing_games = list(sim_run.games or [])  # Make a copy to ensure mutation detection
+            existing_games.append(game_result.model_dump())
+            sim_run.games = existing_games
+            flag_modified(sim_run, "games")  # Force SQLAlchemy to detect JSONB change
+
+            # Update running win count
+            if game_result.winner == "you":
+                sim_run.your_wins = (sim_run.your_wins or 0) + 1
+            else:
+                sim_run.opponent_wins = (sim_run.opponent_wins or 0) + 1
+
         await self.db.commit()
 
     async def get_simulation_run(self, simulation_id: UUID, user_id: UUID) -> Optional[SimulationRun]:

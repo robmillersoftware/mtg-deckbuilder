@@ -20,6 +20,7 @@ from app.schemas.simulation import (
     SimulationRunListResponse,
     GameResult,
     DeckRecommendation,
+    TurnAction,
 )
 
 router = APIRouter()
@@ -272,6 +273,12 @@ def _run_to_response(sim_run) -> SimulationRunResponse:
     if sim_run.games:
         games = [GameResult(**g) for g in sim_run.games]
 
+    # Handle current_game_turns (may not exist on old records or if migration not run)
+    current_game_turns = None
+    raw_turns = getattr(sim_run, 'current_game_turns', None)
+    if raw_turns:
+        current_game_turns = [TurnAction(**t) for t in raw_turns]
+
     return SimulationRunResponse(
         id=sim_run.id,
         status=sim_run.status,
@@ -288,6 +295,7 @@ def _run_to_response(sim_run) -> SimulationRunResponse:
         include_sideboard_games=bool(sim_run.include_sideboard_games),
         games_completed=sim_run.games_completed,
         current_game_turn=sim_run.current_game_turn,
+        current_game_turns=current_game_turns,
         your_wins=sim_run.your_wins,
         opponent_wins=sim_run.opponent_wins,
         # Multiplayer results

@@ -38,7 +38,7 @@ interface DeckState {
   reset: () => void;
 }
 
-export const useDeckStore = create<DeckState>((set, get) => ({
+export const useDeckStore = create<DeckState>((set, _get) => ({
   currentDeck: null,
   changeLog: [],
   isDirty: false,

@@ -252,6 +252,12 @@ export const metaApi = {
 
   getHistory: (archetype: string, format?: string, limit?: number) =>
     api.get('/meta/history', { params: { archetype, format, limit } }),
+
+  getTrends: (format?: string, daysBack?: number) =>
+    api.get('/meta/trends', { params: { format, days_back: daysBack } }),
+
+  getHealth: (format?: string) =>
+    api.get('/meta/health', { params: { format } }),
 };
 
 // Simulation API

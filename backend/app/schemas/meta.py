@@ -57,3 +57,37 @@ class CooccurrenceResult(BaseModel):
     card_a: str
     card_b: str
     count: int
+
+
+class ArchetypeTrend(BaseModel):
+    """An archetype with its trend data (rising/falling)."""
+    name: str
+    current_percentage: float
+    previous_percentage: float
+    change: float  # Percentage point change (positive = rising, negative = falling)
+    change_percent: float  # Relative change percentage
+    sample_size: int
+    key_cards: List[str]
+
+
+class MetaTrendsResponse(BaseModel):
+    """Response containing emerging and declining archetypes."""
+    format: str
+    current_date: date
+    comparison_date: date
+    rising: List[ArchetypeTrend]
+    falling: List[ArchetypeTrend]
+    new_archetypes: List[ArchetypeEntry]  # Archetypes that didn't exist before
+    disappeared: List[str]  # Archetypes that disappeared from meta
+
+
+class MetaHealthResponse(BaseModel):
+    """Meta health and diversity metrics."""
+    format: str
+    snapshot_date: date
+    diversity_score: float  # 0-100, higher = more diverse
+    top_deck_share: float  # % of meta held by top deck
+    top_3_share: float  # % of meta held by top 3 decks
+    total_archetypes: int
+    health_rating: str  # "Healthy", "Moderate", "Unhealthy"
+    assessment: str  # Brief text assessment

@@ -57,6 +57,7 @@ class SimulationRun(Base):
     # Progress tracking
     games_completed = Column(Integer, nullable=False, default=0)
     current_game_turn = Column(Integer, nullable=True)
+    current_game_turns = Column(JSONB, nullable=True)  # Live turns from in-progress game
 
     # Results (populated when completed)
     your_wins = Column(Integer, nullable=True)  # 2-player wins or 1st place finishes
@@ -112,6 +113,7 @@ class SimulationRun(Base):
             "include_sideboard_games": bool(self.include_sideboard_games),
             "games_completed": self.games_completed,
             "current_game_turn": self.current_game_turn,
+            "current_game_turns": self.current_game_turns,
             "your_wins": self.your_wins,
             "opponent_wins": self.opponent_wins,
             # Multiplayer results

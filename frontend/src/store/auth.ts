@@ -55,9 +55,15 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: state.refreshToken,
         isAuthenticated: state.isAuthenticated,
       }),
-      onRehydrateStorage: () => (state) => {
-        // Called when hydration is complete
-        state?.setHydrated(true);
+      onRehydrateStorage: () => (state, _error) => {
+        // Called when hydration is complete (whether successful or not)
+        // Always set hydrated to true, even if there's no stored data
+        if (state) {
+          state.setHydrated(true);
+        } else {
+          // Fallback: directly update the store if state is undefined
+          useAuthStore.setState({ isHydrated: true });
+        }
       },
     }
   )

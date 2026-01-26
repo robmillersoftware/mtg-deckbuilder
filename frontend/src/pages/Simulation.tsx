@@ -1,8 +1,234 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { decksApi, simulationApi } from '@/services/api';
-import { Deck, SimulationRun, GameResult } from '@/types';
+import { Deck, SimulationRun, GameResult, TurnAction } from '@/types';
 import toast from 'react-hot-toast';
+
+// Live feed entry combining game info with turn data
+interface LiveFeedEntry {
+  gameNumber: number;
+  turn: TurnAction;
+  isNewGame: boolean;
+  gameWinner?: string;
+}
+
+// Component for displaying live game feed during simulation
+function LiveGameFeed({
+  games,
+  currentGameTurns,
+  currentGameNumber,
+  isRunning
+}: {
+  games: GameResult[];
+  currentGameTurns?: TurnAction[];
+  currentGameNumber: number;
+  isRunning: boolean;
+}) {
+  const feedRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+
+  // Build feed entries from all completed games + current game's live turns
+  const feedEntries = useMemo(() => {
+    const entries: LiveFeedEntry[] = [];
+
+    // Add completed games
+    games.forEach((game) => {
+      if (game.transcript && game.transcript.length > 0) {
+        game.transcript.forEach((turn, idx) => {
+          entries.push({
+            gameNumber: game.game_number,
+            turn,
+            isNewGame: idx === 0,
+            gameWinner: idx === game.transcript!.length - 1 ? game.winner : undefined,
+          });
+        });
+      } else {
+        // If no transcript, show key moments as a summary
+        entries.push({
+          gameNumber: game.game_number,
+          turn: {
+            turn_number: 0,
+            active_player: game.winner,
+            life_totals: { you: game.your_life, opponent: game.opponent_life },
+            actions: game.key_moments.length > 0
+              ? game.key_moments
+              : [`Game ended in ${game.turns} turns - ${game.winner === 'you' ? 'Victory!' : 'Defeat'}`],
+          },
+          isNewGame: true,
+          gameWinner: game.winner,
+        });
+      }
+    });
+
+    // Add current game's live turns (if any)
+    if (currentGameTurns && currentGameTurns.length > 0) {
+      currentGameTurns.forEach((turn, idx) => {
+        entries.push({
+          gameNumber: currentGameNumber,
+          turn,
+          isNewGame: idx === 0,
+          gameWinner: undefined, // Game not finished yet
+        });
+      });
+    }
+
+    return entries;
+  }, [games, currentGameTurns, currentGameNumber]);
+
+  // Auto-scroll to bottom when new entries arrive
+  useEffect(() => {
+    if (autoScroll && feedRef.current) {
+      feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    }
+  }, [feedEntries, autoScroll]);
+
+  // Detect manual scroll to disable auto-scroll
+  const handleScroll = () => {
+    if (feedRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = feedRef.current;
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+      setAutoScroll(isAtBottom);
+    }
+  };
+
+  if (feedEntries.length === 0) {
+    return (
+      <div className="bg-gray-800 rounded-lg p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-white">Live Game Feed</h2>
+          {isRunning && (
+            <span className="flex items-center text-xs text-green-400">
+              <span className="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse" />
+              Live
+            </span>
+          )}
+        </div>
+        <div className="text-center text-gray-400 py-8">
+          <div className="flex flex-col items-center space-y-3">
+            <div className="flex space-x-1">
+              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" />
+              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
+              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
+            </div>
+            <p>Starting Game {currentGameNumber}...</p>
+            <p className="text-xs text-gray-500">Turns will appear here as they happen</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gray-800 rounded-lg p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold text-white">Live Game Feed</h2>
+        <div className="flex items-center space-x-4">
+          {!autoScroll && (
+            <button
+              onClick={() => {
+                setAutoScroll(true);
+                if (feedRef.current) {
+                  feedRef.current.scrollTop = feedRef.current.scrollHeight;
+                }
+              }}
+              className="text-xs text-indigo-400 hover:text-indigo-300"
+            >
+              Jump to latest
+            </button>
+          )}
+          {isRunning && (
+            <span className="flex items-center text-xs text-green-400">
+              <span className="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse" />
+              Live
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div
+        ref={feedRef}
+        onScroll={handleScroll}
+        className="space-y-2 max-h-96 overflow-y-auto pr-2 scroll-smooth"
+      >
+        {feedEntries.map((entry, idx) => (
+          <div key={idx}>
+            {/* Game header */}
+            {entry.isNewGame && (
+              <div className="flex items-center space-x-2 py-2 mt-2 first:mt-0">
+                <div className="flex-1 h-px bg-gray-600" />
+                <span className="text-xs font-medium text-gray-400 px-2">
+                  Game {entry.gameNumber}
+                </span>
+                <div className="flex-1 h-px bg-gray-600" />
+              </div>
+            )}
+
+            {/* Turn entry */}
+            <div
+              className={`rounded-lg p-3 border-l-4 ${
+                entry.turn.active_player === 'you'
+                  ? 'bg-blue-900/20 border-blue-500'
+                  : 'bg-red-900/20 border-red-500'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-white font-medium text-sm">
+                  {entry.turn.turn_number > 0 ? `Turn ${entry.turn.turn_number}` : 'Summary'}
+                  <span className={`ml-2 text-xs ${
+                    entry.turn.active_player === 'you' ? 'text-blue-400' : 'text-red-400'
+                  }`}>
+                    ({entry.turn.active_player.replace('_', ' ')})
+                  </span>
+                </span>
+                {/* Life totals */}
+                <div className="flex items-center space-x-3 text-xs">
+                  {Object.entries(entry.turn.life_totals).map(([player, life]) => (
+                    <span
+                      key={player}
+                      className={player === 'you' ? 'text-blue-400' : 'text-red-400'}
+                    >
+                      {player.replace('_', ' ')}: {life as number}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="space-y-0.5">
+                {entry.turn.actions.map((action, actionIdx) => (
+                  <p key={actionIdx} className="text-gray-300 text-sm pl-2 border-l border-gray-600">
+                    {action}
+                  </p>
+                ))}
+              </div>
+
+              {/* Game result indicator */}
+              {entry.gameWinner && (
+                <div className={`mt-2 pt-2 border-t border-gray-600 text-sm font-medium ${
+                  entry.gameWinner === 'you' ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {entry.gameWinner === 'you' ? '🎉 Victory!' : '💀 Defeat'}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {/* Simulating indicator */}
+        {isRunning && (
+          <div className="flex items-center space-x-2 py-4 text-gray-400">
+            <div className="flex space-x-1">
+              <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" />
+              <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
+              <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
+            </div>
+            <span className="text-xs">Simulating next game...</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function SimulationPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -30,6 +256,7 @@ export function SimulationPage() {
 
   // UI state
   const [expandedGame, setExpandedGame] = useState<number | null>(null);
+  const [expandedTranscript, setExpandedTranscript] = useState<number | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
 
   // Load decks and runs on mount
@@ -79,7 +306,7 @@ export function SimulationPage() {
       if (selectedRun && (selectedRun.status === 'running' || selectedRun.status === 'pending')) {
         loadRun(selectedRun.id);
       }
-    }, 3000);
+    }, 1500);  // Poll every 1.5 seconds for more real-time updates
 
     return () => clearInterval(interval);
   }, [runs, selectedRun]);
@@ -440,7 +667,7 @@ export function SimulationPage() {
                     </div>
                     <div className="text-gray-400 text-xs">
                       vs {(run.num_players ?? 2) > 2
-                        ? `${run.num_players - 1} opponents`
+                        ? `${(run.num_players ?? 2) - 1} opponents`
                         : run.opponent_archetype || run.opponent_deck_name
                       }
                       {(run.num_players ?? 2) > 2 && <span className="ml-1 text-indigo-400">(Commander)</span>}
@@ -468,35 +695,48 @@ export function SimulationPage() {
               <p className="text-gray-400">Select a simulation from the history or start a new one</p>
             </div>
           ) : selectedRun.status === 'pending' || selectedRun.status === 'running' ? (
-            <div className="bg-gray-800 rounded-lg p-8">
-              <div className="text-center">
-                <svg className="animate-spin mx-auto h-8 w-8 text-indigo-500 mb-4" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <h3 className="text-white font-semibold mb-2">
-                  {selectedRun.status === 'pending' ? 'Starting simulation...' : 'Simulating games...'}
-                </h3>
-                <p className="text-gray-400">
-                  {selectedRun.your_deck_name} vs {
-                    (selectedRun.num_players ?? 2) > 2
-                      ? selectedRun.opponent_archetypes?.join(', ') || selectedRun.opponent_deck_name
-                      : selectedRun.opponent_archetype || selectedRun.opponent_deck_name
-                  }
-                </p>
-                {(selectedRun.num_players ?? 2) > 2 && (
-                  <p className="text-gray-500 text-sm mt-1">{selectedRun.num_players}-player Commander game</p>
-                )}
-                <p className="text-gray-500 mt-2">
-                  {selectedRun.games_completed} / {selectedRun.num_games} games completed
-                </p>
-                <div className="w-full bg-gray-700 rounded-full h-2 mt-4">
+            <div className="space-y-6">
+              {/* Progress Header */}
+              <div className="bg-gray-800 rounded-lg p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">
+                      {selectedRun.your_deck_name}
+                    </h2>
+                    <p className="text-sm text-gray-400">
+                      vs {(selectedRun.num_players ?? 2) > 2
+                        ? selectedRun.opponent_archetypes?.join(', ') || selectedRun.opponent_deck_name
+                        : selectedRun.opponent_archetype || selectedRun.opponent_deck_name}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-2xl font-bold">
+                      <span className="text-green-400">{selectedRun.your_wins || 0}</span>
+                      <span className="text-gray-500 mx-2">-</span>
+                      <span className="text-red-400">{selectedRun.opponent_wins || 0}</span>
+                    </div>
+                    <p className="text-xs text-gray-400">
+                      Game {selectedRun.games_completed + 1} of {selectedRun.num_games}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                <div className="w-full bg-gray-700 rounded-full h-2">
                   <div
-                    className="bg-indigo-500 h-2 rounded-full transition-all"
+                    className="bg-indigo-500 h-2 rounded-full transition-all duration-500"
                     style={{ width: `${(selectedRun.games_completed / selectedRun.num_games) * 100}%` }}
                   />
                 </div>
               </div>
+
+              {/* Live Game Feed */}
+              <LiveGameFeed
+                games={selectedRun.games || []}
+                currentGameTurns={selectedRun.current_game_turns}
+                currentGameNumber={selectedRun.games_completed + 1}
+                isRunning={selectedRun.status === 'running'}
+              />
             </div>
           ) : selectedRun.status === 'failed' ? (
             <div className="bg-gray-800 rounded-lg p-8">
@@ -805,6 +1045,79 @@ export function SimulationPage() {
                                     <span className="text-red-400 ml-4">Out: </span>
                                     <span className="text-white">{game.sideboard_out.join(', ')}</span>
                                   </>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Game Transcript */}
+                            {game.transcript && game.transcript.length > 0 && (
+                              <div className="mt-4 pt-4 border-t border-gray-600">
+                                <button
+                                  onClick={() => setExpandedTranscript(
+                                    expandedTranscript === game.game_number ? null : game.game_number
+                                  )}
+                                  className="flex items-center justify-between w-full text-left"
+                                >
+                                  <h4 className="text-sm font-medium text-indigo-400">
+                                    View Full Transcript ({game.transcript.length} turns)
+                                  </h4>
+                                  <svg
+                                    className={`w-4 h-4 text-indigo-400 transform transition-transform ${
+                                      expandedTranscript === game.game_number ? 'rotate-180' : ''
+                                    }`}
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                  >
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </button>
+
+                                {expandedTranscript === game.game_number && (
+                                  <div className="mt-4 space-y-3 max-h-96 overflow-y-auto">
+                                    {game.transcript.map((turn: TurnAction, turnIdx: number) => (
+                                      <div
+                                        key={turnIdx}
+                                        className={`rounded-lg p-3 border-l-4 ${
+                                          turn.active_player === 'you'
+                                            ? 'bg-blue-900/20 border-blue-500'
+                                            : 'bg-red-900/20 border-red-500'
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between mb-2">
+                                          <span className="text-white font-medium text-sm">
+                                            Turn {turn.turn_number}
+                                            <span className={`ml-2 text-xs ${
+                                              turn.active_player === 'you' ? 'text-blue-400' : 'text-red-400'
+                                            }`}>
+                                              ({turn.active_player.replace('_', ' ')})
+                                            </span>
+                                          </span>
+                                          {/* Life totals */}
+                                          <div className="flex items-center space-x-3 text-xs">
+                                            {Object.entries(turn.life_totals).map(([player, life]) => (
+                                              <span
+                                                key={player}
+                                                className={`${
+                                                  player === 'you' ? 'text-blue-400' : 'text-red-400'
+                                                }`}
+                                              >
+                                                {player.replace('_', ' ')}: {life as number}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        </div>
+                                        {/* Actions */}
+                                        <ul className="space-y-1">
+                                          {turn.actions.map((action: string, actionIdx: number) => (
+                                            <li key={actionIdx} className="text-gray-300 text-sm pl-2 border-l border-gray-600">
+                                              {action}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    ))}
+                                  </div>
                                 )}
                               </div>
                             )}

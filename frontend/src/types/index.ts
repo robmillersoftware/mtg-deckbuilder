@@ -188,6 +188,37 @@ export interface CooccurrenceData {
   cooccurrence_count: number;
 }
 
+export interface ArchetypeTrend {
+  name: string;
+  current_percentage: number;
+  previous_percentage: number;
+  change: number;
+  change_percent: number;
+  sample_size: number;
+  key_cards: string[];
+}
+
+export interface MetaTrendsResponse {
+  format: string;
+  current_date: string;
+  comparison_date: string;
+  rising: ArchetypeTrend[];
+  falling: ArchetypeTrend[];
+  new_archetypes: MetaArchetype[];
+  disappeared: string[];
+}
+
+export interface MetaHealthResponse {
+  format: string;
+  snapshot_date: string;
+  diversity_score: number;
+  top_deck_share: number;
+  top_3_share: number;
+  total_archetypes: number;
+  health_rating: 'Healthy' | 'Moderate' | 'Concentrated' | 'Unhealthy' | 'Unknown';
+  assessment: string;
+}
+
 // Auth types
 export interface AuthTokens {
   access_token: string;
@@ -209,6 +240,14 @@ export interface RegisterRequest {
 }
 
 // Simulation types
+export interface TurnAction {
+  turn_number: number;
+  active_player: string; // "you" or "opponent" (or "opponent_1", etc. for multiplayer)
+  life_totals: Record<string, number>;
+  actions: string[];
+  board_state?: Record<string, any>;
+}
+
 export interface GameResult {
   game_number: number;
   winner: string; // 'you', 'opponent', or 'opponent_1', 'opponent_2', etc. for multiplayer
@@ -225,6 +264,7 @@ export interface GameResult {
   opponent_key_cards_by_player?: Record<string, string[]>; // Per-opponent in multiplayer
   sideboard_in?: string[];
   sideboard_out?: string[];
+  transcript?: TurnAction[]; // Full turn-by-turn game data
 }
 
 export interface KeyCardAnalysis {
@@ -274,6 +314,7 @@ export interface SimulationRun {
   include_sideboard_games: boolean;
   games_completed: number;
   current_game_turn?: number;
+  current_game_turns?: TurnAction[];  // Live turns from in-progress game
 
   // Results (when completed)
   your_wins?: number;
