@@ -732,6 +732,8 @@ Return the complete game as JSON."""
 
     def _parse_game_response(self, response_text: str) -> Dict[str, Any]:
         """Parse the LLM's game response into structured data."""
+        from app.services.ai.json_helpers import repair_json
+
         # Try to extract JSON from the response
         try:
             # Look for JSON block
@@ -750,7 +752,13 @@ Return the complete game as JSON."""
             else:
                 json_str = response_text
 
-            return json.loads(json_str)
+            # Try direct parse first
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                # Try repairing common JSON issues
+                repaired = repair_json(json_str)
+                return json.loads(repaired)
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse game JSON: {e}")
             # Return a default result
