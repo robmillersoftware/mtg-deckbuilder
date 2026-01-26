@@ -45,13 +45,13 @@ class DeckValidationMixin:
                         if land_fits:
                             filtered.append(entry)
                         else:
-                            print(f"[AI-SERVICE] Removed off-color land: {card_name} (color_identity: {card_color_identity})")
+                            logger.debug(f"[AI-SERVICE] Removed off-color land: {card_name} (color_identity: {card_color_identity})")
                     elif is_colorless:
                         filtered.append(entry)
                     elif all(c in colors_upper for c in card_color_identity):
                         filtered.append(entry)
                     else:
-                        print(f"[AI-SERVICE] Removed off-color card: {card_name} (color_identity: {card_color_identity})")
+                        logger.debug(f"[AI-SERVICE] Removed off-color card: {card_name} (color_identity: {card_color_identity})")
                 else:
                     filtered.append(entry)
 

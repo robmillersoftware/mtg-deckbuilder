@@ -214,7 +214,7 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
                         tool_name = content.name
                         tool_input = content.input
 
-                        print(f"[CHAT-SERVICE] Claude called tool: {tool_name} with input: {tool_input}")
+                        logger.debug(f"[CHAT-SERVICE] Claude called tool: {tool_name} with input: {tool_input}")
 
                         if tool_name == "generate_best_meta_deck":
                             return await self._handle_meta_deck_generation(
