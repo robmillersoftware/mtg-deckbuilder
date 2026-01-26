@@ -8,13 +8,26 @@ export function Layout() {
   const { user, isAuthenticated, isLoading, isHydrated, logout } = useAuth();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Show loading state while hydrating or fetching user
-  const isLoadingAuth = !isHydrated || (isAuthenticated && !user && isLoading);
+  const isLoadingAuth = !isHydrated || (isAuthenticated && !user && isLoading && !loadingTimedOut);
 
-  // Detect broken auth state: authenticated but no user and not loading
-  const isBrokenAuthState = isHydrated && isAuthenticated && !user && !isLoading;
+  // Detect broken auth state: authenticated but no user and not loading (or timed out)
+  const isBrokenAuthState = isHydrated && isAuthenticated && !user && (!isLoading || loadingTimedOut);
+
+  // Timeout for loading state - if stuck for 10 seconds, show recovery UI
+  useEffect(() => {
+    if (isAuthenticated && !user && isLoading) {
+      const timeout = setTimeout(() => {
+        setLoadingTimedOut(true);
+      }, 10000);
+      return () => clearTimeout(timeout);
+    } else {
+      setLoadingTimedOut(false);
+    }
+  }, [isAuthenticated, user, isLoading]);
 
   // Close menu when clicking outside
   useEffect(() => {

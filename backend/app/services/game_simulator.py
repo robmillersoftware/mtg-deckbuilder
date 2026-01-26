@@ -843,14 +843,29 @@ Return the complete game as JSON."""
                 f"Your key cards: {key_cards}. Opponent's key cards: {opp_cards}."
             )
 
-        # Get full decklist for better recommendations
-        main_deck_cards = [e.get('card_name', '') for e in your_deck.get('main_deck', [])]
+        # Get full decklist with mana costs for better recommendations
+        cards_info = your_deck.get('cards', {})
+        main_deck_with_costs = []
+        for e in your_deck.get('main_deck', []):
+            card_name = e.get('card_name', '')
+            card_info = cards_info.get(card_name, {})
+            mana_cost = card_info.get('mana_cost', '')
+            if mana_cost:
+                main_deck_with_costs.append(f"{card_name} ({mana_cost})")
+            else:
+                main_deck_with_costs.append(card_name)
+
         sideboard_cards = [e.get('card_name', '') for e in your_deck.get('sideboard', [])]
+
+        deck_format = your_deck.get('format', 'standard').lower()
 
         prompt = f"""Analyze this Magic: The Gathering matchup and provide strategic advice AND deck improvement recommendations.
 
+FORMAT: {deck_format.upper()}
+IMPORTANT: All card recommendations MUST be legal in {deck_format}. Do not suggest cards from other formats.
+
 YOUR DECK: {your_deck.get('name')}
-Full main deck: {', '.join(main_deck_cards)}
+Full main deck (with mana costs): {', '.join(main_deck_with_costs)}
 Sideboard: {', '.join(sideboard_cards) if sideboard_cards else 'None'}
 
 OPPONENT DECK: {opponent_deck.get('name')}
@@ -868,6 +883,7 @@ Based on the simulation results, provide:
    - Types of effects the deck lacks (removal, card draw, threats, etc.)
    - Cards the opponent played that were hard to answer
    - Mana curve or color issues observed
+   - IMPORTANT: When suggesting cards are "too slow" or "high cost", verify their actual mana cost first
 
 Return as JSON:
 {{
