@@ -117,17 +117,21 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
                 template_decks = await self._find_decks_with_cards(specific_cards, format=format)
                 logger.debug(f"[AI-SERVICE] Found {len(template_decks)} tournament decks with specific cards")
                 if template_decks:
+                    template_colors = self._extract_colors_from_decks(template_decks)
                     if not preserve_colors:
-                        template_colors = self._extract_colors_from_decks(template_decks)
                         if template_colors:
                             logger.debug(f"[AI-SERVICE] Overriding colors from {colors} to {template_colors} based on tournament decks")
                             colors = template_colors
+                        template_cards = self._extract_cards_from_decks(template_decks)
                     else:
-                        # Log that we're preserving user-specified colors
-                        template_colors = self._extract_colors_from_decks(template_decks)
-                        if template_colors and set(template_colors) != set(colors):
-                            logger.info(f"[AI-SERVICE] Preserving user-specified colors {colors} (tournament decks suggested {template_colors})")
-                    template_cards = self._extract_cards_from_decks(template_decks)
+                        # Preserving user colors - only use template if colors match
+                        if template_colors and set(template_colors) == set(colors):
+                            logger.info(f"[AI-SERVICE] Using tournament template (colors match: {colors})")
+                            template_cards = self._extract_cards_from_decks(template_decks)
+                        else:
+                            # Colors don't match - don't use this template, it will produce garbage
+                            logger.info(f"[AI-SERVICE] Ignoring tournament template (user wants {colors}, template is {template_colors})")
+                            template_decks = []  # Clear so we don't use these
                 elif format != "cedh":
                     # Theme detection only for 60-card formats, not cEDH
                     # cEDH builds around commander + combos, not casual themes
@@ -145,18 +149,22 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
                 strategy_decks = await self._get_archetype_decklists(archetype, [], strategy, limit=5, format=format)
                 if strategy_decks:
                     logger.debug(f"[AI-SERVICE] Found {len(strategy_decks)} tournament decks matching strategy '{strategy}'")
+                    strategy_colors = self._extract_colors_from_decks(strategy_decks)
                     if not preserve_colors:
-                        strategy_colors = self._extract_colors_from_decks(strategy_decks)
                         if strategy_colors:
                             logger.debug(f"[AI-SERVICE] Overriding colors from {colors} to {strategy_colors} based on strategy-matched decks")
                             colors = strategy_colors
+                        template_decks = strategy_decks
+                        template_cards = self._extract_cards_from_decks(strategy_decks)
                     else:
-                        # Log that we're preserving user-specified colors
-                        strategy_colors = self._extract_colors_from_decks(strategy_decks)
-                        if strategy_colors and set(strategy_colors) != set(colors):
-                            logger.info(f"[AI-SERVICE] Preserving user-specified colors {colors} (strategy-matched decks suggested {strategy_colors})")
-                    template_decks = strategy_decks
-                    template_cards = self._extract_cards_from_decks(strategy_decks)
+                        # Preserving user colors - only use template if colors match
+                        if strategy_colors and set(strategy_colors) == set(colors):
+                            logger.info(f"[AI-SERVICE] Using strategy template (colors match: {colors})")
+                            template_decks = strategy_decks
+                            template_cards = self._extract_cards_from_decks(strategy_decks)
+                        else:
+                            # Colors don't match - don't use this template
+                            logger.info(f"[AI-SERVICE] Ignoring strategy template (user wants {colors}, template is {strategy_colors})")
 
             # Phase 2: Run independent queries in parallel
             parallel_tasks = {
