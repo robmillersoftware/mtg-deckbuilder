@@ -73,14 +73,20 @@ class DeckGenerator:
         parsed_request = await self.ai_service.parse_deck_request(prompt)
 
         # Use explicit colors if provided, otherwise use parsed colors
-        if colors is None:
+        # Track if colors were user-specified (to prevent tournament data from overriding)
+        colors_specified = False
+        if colors is not None:
+            # Colors were passed explicitly to this function
+            colors_specified = True
+        else:
             colors = parsed_request.get("colors", [])
+            colors_specified = parsed_request.get("colors_specified", False)
 
         # Use explicit specific_cards if provided, otherwise use parsed specific_cards
         if specific_cards is None:
             specific_cards = parsed_request.get("specific_cards", [])
 
-        logger.info(f"[DECK-GEN] Format: {format}, Colors: {colors}, Specific cards: {specific_cards}")
+        logger.info(f"[DECK-GEN] Format: {format}, Colors: {colors}, Colors specified: {colors_specified}, Specific cards: {specific_cards}")
 
         # For cEDH/Commander: look up commander color identity from specific cards
         # Only do this if colors weren't explicitly provided (i.e., came from parsing)
@@ -107,6 +113,7 @@ class DeckGenerator:
             )
 
         # Generate the deck
+        # Preserve colors if user explicitly specified them (prevents tournament data override)
         deck_data = await self.ai_service.generate_deck(
             archetype=parsed_request.get("archetype", ""),
             colors=colors,
@@ -116,6 +123,7 @@ class DeckGenerator:
             specific_cards=specific_cards,
             archetype_template=archetype_template,
             format=format,
+            preserve_colors=colors_specified,
         )
 
         # Validate all cards exist and are legal

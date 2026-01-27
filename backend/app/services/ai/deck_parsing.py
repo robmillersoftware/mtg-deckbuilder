@@ -19,6 +19,7 @@ async def parse_deck_request(prompt: str, db: AsyncSession) -> Dict[str, Any]:
     - Colors
     - Strategy focus
     - Specific card requests
+    - colors_specified: Whether the user explicitly wanted specific colors for their deck
 
     Uses Haiku for fast parsing (~0.5s vs 2-3s with Sonnet).
     """
@@ -34,10 +35,20 @@ async def parse_deck_request(prompt: str, db: AsyncSession) -> Dict[str, Any]:
             model="claude-3-5-haiku-20241022",
             max_tokens=512,
             system="""Parse MTG deck request into JSON:
-{"archetype": "aggro|control|midrange|combo|tempo", "colors": ["W","U","B","R","G"], "strategy": "brief description", "specific_cards": ["card names mentioned"]}
+{"archetype": "aggro|control|midrange|combo|tempo", "colors": ["W","U","B","R","G"], "colors_specified": true|false, "strategy": "brief description", "specific_cards": ["card names mentioned"]}
 
 Color codes: W=White, U=Blue, B=Black, R=Red, G=Green
-Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, Izzet=UR, Golgari=BG, Boros=RW, Simic=GU""",
+Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, Izzet=UR, Golgari=BG, Boros=RW, Simic=GU
+
+IMPORTANT for colors_specified:
+- Set to TRUE only if the user explicitly wants their deck to be certain colors
+- Set to FALSE if colors are only mentioned as opponents/matchups (e.g., "beat mono-red", "good against blue decks")
+- Set to FALSE if no colors are mentioned
+- Examples:
+  - "black aggro deck" -> colors_specified: true (user wants black)
+  - "beat mono-red" -> colors_specified: false (red is the opponent, not their deck)
+  - "Dimir control" -> colors_specified: true (user wants UB)
+  - "aggro deck" -> colors_specified: false (no color preference stated)""",
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -46,7 +57,11 @@ Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, 
             if "{" in content:
                 json_start = content.index("{")
                 json_end = content.rindex("}") + 1
-                return json.loads(content[json_start:json_end])
+                result = json.loads(content[json_start:json_end])
+                # Ensure colors_specified is present (default to False if LLM didn't include it)
+                if "colors_specified" not in result:
+                    result["colors_specified"] = False
+                return result
 
     except Exception as e:
         logger.warning(f"Haiku parse failed, using fallback: {e}")
@@ -66,6 +81,7 @@ async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
         "black": "B", "swamp": "B",
         "red": "R", "mountain": "R",
         "green": "G", "forest": "G",
+        # Guild names (2-color)
         "azorius": ["W", "U"],
         "dimir": ["U", "B"],
         "rakdos": ["B", "R"],
@@ -76,20 +92,59 @@ async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
         "golgari": ["B", "G"],
         "boros": ["R", "W"],
         "simic": ["G", "U"],
+        # Shard names (3-color)
+        "esper": ["W", "U", "B"],
+        "grixis": ["U", "B", "R"],
+        "jund": ["B", "R", "G"],
+        "naya": ["R", "G", "W"],
+        "bant": ["G", "W", "U"],
+        # Wedge names (3-color)
+        "abzan": ["W", "B", "G"],
+        "jeskai": ["U", "R", "W"],
+        "sultai": ["B", "G", "U"],
+        "mardu": ["R", "W", "B"],
+        "temur": ["G", "U", "R"],
+        # Mono-color
         "mono-red": ["R"],
         "mono-white": ["W"],
         "mono-blue": ["U"],
         "mono-black": ["B"],
         "mono-green": ["G"],
+        "monored": ["R"],
+        "monowhite": ["W"],
+        "monoblue": ["U"],
+        "monoblack": ["B"],
+        "monogreen": ["G"],
     }
+
+    # Track if colors were mentioned in a "build this" context vs "beat this" context
+    colors_specified = False
+    negative_context_patterns = ["beat", "against", "counter", "hate", "matchup", "versus", "vs"]
+    has_negative_context = any(pattern in prompt_lower for pattern in negative_context_patterns)
 
     for keyword, color in color_keywords.items():
         if keyword in prompt_lower:
-            if isinstance(color, list):
-                colors.extend(color)
-            else:
-                colors.append(color)
+            # Check if this color mention is in a negative context
+            # Simple heuristic: if "beat/against/etc" appears before the color, it's likely the opponent's color
+            keyword_pos = prompt_lower.find(keyword)
+            in_negative_context = False
+            for pattern in negative_context_patterns:
+                pattern_pos = prompt_lower.find(pattern)
+                if pattern_pos != -1 and pattern_pos < keyword_pos:
+                    in_negative_context = True
+                    break
+
+            if not in_negative_context:
+                if isinstance(color, list):
+                    colors.extend(color)
+                else:
+                    colors.append(color)
+                colors_specified = True  # At least one color is in positive context
+
     colors = list(set(colors))
+    # If all color mentions were in negative context, colors_specified should be False
+    if not colors:
+        colors_specified = False
 
     # Detect archetype
     archetype = "midrange"
@@ -108,6 +163,7 @@ async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
     return {
         "archetype": archetype,
         "colors": colors or ["R"],
+        "colors_specified": colors_specified,  # True if colors were mentioned in positive context
         "strategy": prompt,
         "specific_cards": specific_cards,
         "budget": "competitive",

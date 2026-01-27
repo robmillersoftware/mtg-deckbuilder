@@ -78,6 +78,7 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
         specific_cards: List[str] = None,
         archetype_template: Dict[str, Any] = None,
         format: str = "standard",
+        preserve_colors: bool = False,
     ) -> Dict[str, Any]:
         """
         Generate a complete deck using AI with constrained card selection.
@@ -89,6 +90,7 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
             - avg_nonlands: average nonland count
             - role_distribution: {role: avg_count} targets
         format: Game format (standard, historic, modern, legacy, cedh)
+        preserve_colors: If True, don't override colors based on tournament data (user explicitly specified colors)
         """
         specific_cards = specific_cards or []
 
@@ -103,10 +105,12 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
 
             # Phase 1: Handle specific cards and strategy-based archetype matching (may change colors)
             # NOTE: For cEDH, colors come from the commander's color identity and should NOT be overridden
+            # Also preserve colors if user explicitly specified them (e.g., "black aggro deck")
             template_decks = []
             template_cards = []
             detected_themes = []
-            preserve_colors = format == "cedh"  # Commander color identity must be preserved
+            preserve_colors = preserve_colors or format == "cedh"  # User-specified or commander identity
+            logger.info(f"[AI-SERVICE] Starting deck generation - Colors: {colors}, preserve_colors: {preserve_colors}")
             logger.debug(f"[AI-SERVICE] Specific cards from parse: {specific_cards}")
             logger.debug(f"[AI-SERVICE] Format: {format}, preserve_colors: {preserve_colors}")
             if specific_cards:
@@ -118,6 +122,11 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
                         if template_colors:
                             logger.debug(f"[AI-SERVICE] Overriding colors from {colors} to {template_colors} based on tournament decks")
                             colors = template_colors
+                    else:
+                        # Log that we're preserving user-specified colors
+                        template_colors = self._extract_colors_from_decks(template_decks)
+                        if template_colors and set(template_colors) != set(colors):
+                            logger.info(f"[AI-SERVICE] Preserving user-specified colors {colors} (tournament decks suggested {template_colors})")
                     template_cards = self._extract_cards_from_decks(template_decks)
                 elif format != "cedh":
                     # Theme detection only for 60-card formats, not cEDH
@@ -131,6 +140,7 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
             # Phase 1b: If no specific cards, try to find archetype decklists based on strategy
             # This allows strategy keywords like "graveyard" to find "Reanimator" decks and use their colors
             # NOTE: Skip color override for cEDH - commander color identity is fixed
+            # NOTE: Also skip if user explicitly specified colors
             if not template_decks and strategy:
                 strategy_decks = await self._get_archetype_decklists(archetype, [], strategy, limit=5, format=format)
                 if strategy_decks:
@@ -140,6 +150,11 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
                         if strategy_colors:
                             logger.debug(f"[AI-SERVICE] Overriding colors from {colors} to {strategy_colors} based on strategy-matched decks")
                             colors = strategy_colors
+                    else:
+                        # Log that we're preserving user-specified colors
+                        strategy_colors = self._extract_colors_from_decks(strategy_decks)
+                        if strategy_colors and set(strategy_colors) != set(colors):
+                            logger.info(f"[AI-SERVICE] Preserving user-specified colors {colors} (strategy-matched decks suggested {strategy_colors})")
                     template_decks = strategy_decks
                     template_cards = self._extract_cards_from_decks(strategy_decks)
 
