@@ -309,20 +309,20 @@ async def calculate_cooccurrence(
     """Calculate card co-occurrence from recent decklists."""
     cutoff = datetime.utcnow() - timedelta(days=days)
 
-    # Get all recent decklists
+    # Only select the column we need (avoids issues with missing columns)
     result = await db.execute(
-        select(Decklist)
+        select(Decklist.main_deck)
         .join(Event, Decklist.event_id == Event.id)
         .where(Event.format == format)
         .where(Event.date >= cutoff.date())
     )
-    decklists = result.scalars().all()
+    main_decks = result.scalars().all()
 
     # Count co-occurrences
     cooccurrence = defaultdict(int)
 
-    for decklist in decklists:
-        cards = [e.get("card_name") for e in (decklist.main_deck or [])]
+    for main_deck in main_decks:
+        cards = [e.get("card_name") for e in (main_deck or [])]
         cards = [c for c in cards if c]
 
         # Count pairs (sorted to avoid duplicates)
@@ -346,6 +346,10 @@ async def update_meta_snapshots(
     format: str = "standard",
 ) -> int:
     """Update meta snapshot records."""
+    if not archetypes:
+        logger.info(f"No archetypes found for {format}, skipping meta snapshot update")
+        return 0
+
     # Delete old snapshots for this format (keep only latest)
     await db.execute(
         delete(MetaSnapshot).where(MetaSnapshot.format == format)
@@ -353,20 +357,20 @@ async def update_meta_snapshots(
 
     # Get key cards for each archetype
     for archetype, data in archetypes.items():
-        # Get most common cards in this archetype
+        # Only select the columns we need (avoids issues with missing columns)
         result = await db.execute(
-            select(Decklist)
+            select(Decklist.main_deck)
             .join(Event, Decklist.event_id == Event.id)
             .where(Decklist.archetype == archetype)
             .where(Event.format == format)
             .limit(10)
         )
-        decklists = result.scalars().all()
+        main_decks = result.scalars().all()
 
         # Count card occurrences
         card_counts = defaultdict(int)
-        for decklist in decklists:
-            for entry in decklist.main_deck or []:
+        for main_deck in main_decks:
+            for entry in main_deck or []:
                 card_name = entry.get("card_name")
                 if card_name:
                     card_counts[card_name] += entry.get("quantity", 1)
@@ -386,6 +390,7 @@ async def update_meta_snapshots(
         db.add(snapshot)
 
     await db.commit()
+    logger.info(f"Updated {len(archetypes)} meta snapshots for {format}")
     return len(archetypes)
 
 
@@ -601,11 +606,22 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
             total_archetypes = 0
             total_cooccurrences = 0
             for format_name in formats:
-                archetypes = await calculate_meta_percentages(db, format=format_name)
-                total_archetypes += await update_meta_snapshots(db, archetypes, format=format_name)
+                config = FORMAT_CONFIG.get(format_name, {})
+                days = config.get("days", 14)
+                try:
+                    archetypes = await calculate_meta_percentages(db, format=format_name, days=days)
+                    logger.info(f"Meta calculation for {format_name} (last {days} days): {len(archetypes)} archetypes found")
+                    total_archetypes += await update_meta_snapshots(db, archetypes, format=format_name)
 
-                cooccurrence = await calculate_cooccurrence(db, format=format_name)
-                total_cooccurrences += await update_cooccurrence_data(db, cooccurrence, format=format_name)
+                    cooccurrence = await calculate_cooccurrence(db, format=format_name, days=days)
+                    logger.info(f"Co-occurrence for {format_name}: {len(cooccurrence)} pairs found")
+                    total_cooccurrences += await update_cooccurrence_data(db, cooccurrence, format=format_name)
+                except Exception as e:
+                    error_detail = f"{type(e).__name__}: {e}" if str(e) else repr(e)
+                    logger.error(f"Meta calculation failed for {format_name}: {error_detail}")
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    stats["errors"].append(f"Meta calc error ({format_name}): {error_detail}")
+                    await db.rollback()  # Recover session for next format
 
             stats["archetypes_updated"] = total_archetypes
             stats["cooccurrences_updated"] = total_cooccurrences
