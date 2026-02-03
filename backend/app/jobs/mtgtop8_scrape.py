@@ -344,6 +344,7 @@ async def update_meta_snapshots(
     db: AsyncSession,
     archetypes: Dict[str, Dict[str, Any]],
     format: str = "standard",
+    archetype_aliases: Optional[Dict[str, List[str]]] = None,
 ) -> int:
     """Update meta snapshot records."""
     if not archetypes:
@@ -361,11 +362,13 @@ async def update_meta_snapshots(
 
     # Get key cards for each archetype
     for archetype, data in archetypes.items():
-        # Only select the columns we need (avoids issues with missing columns)
+        # For merged archetypes, query decklists from all names in the group
+        names_to_query = (archetype_aliases or {}).get(archetype, [archetype])
+
         result = await db.execute(
             select(Decklist.main_deck)
             .join(Event, Decklist.event_id == Event.id)
-            .where(Decklist.archetype == archetype)
+            .where(Decklist.archetype.in_(names_to_query))
             .where(Event.format == format)
             .limit(10)
         )
@@ -615,7 +618,16 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
                 try:
                     archetypes = await calculate_meta_percentages(db, format=format_name, days=days)
                     logger.info(f"Meta calculation for {format_name} (last {days} days): {len(archetypes)} archetypes found")
-                    total_archetypes += await update_meta_snapshots(db, archetypes, format=format_name)
+
+                    # Merge similar archetypes before creating snapshots
+                    from app.jobs.archetype_dedup import merge_similar_archetypes
+                    archetypes, archetype_aliases = await merge_similar_archetypes(
+                        db, archetypes, format=format_name, days=days,
+                    )
+
+                    total_archetypes += await update_meta_snapshots(
+                        db, archetypes, format=format_name, archetype_aliases=archetype_aliases,
+                    )
 
                     cooccurrence = await calculate_cooccurrence(db, format=format_name, days=days)
                     logger.info(f"Co-occurrence for {format_name}: {len(cooccurrence)} pairs found")
