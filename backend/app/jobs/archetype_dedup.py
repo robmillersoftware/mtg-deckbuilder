@@ -6,16 +6,17 @@ Merges archetype names that represent functionally the same deck
 their core card signatures using Jaccard similarity.
 """
 
+import asyncio
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import delete, distinct, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.card import Card
-from app.models.meta import Decklist, Event
+from app.models.meta import Decklist, Event, MetaSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -59,21 +60,26 @@ async def _build_archetype_signatures(
     days: int,
     min_decklists: int = 3,
     core_threshold: float = 0.5,
+    reference_date: Optional[date] = None,
 ) -> Dict[str, Set[str]]:
     """Build core card signatures per archetype.
 
     For each archetype, finds cards appearing in >= core_threshold fraction
     of its decklists (by presence, not quantity). Lands are excluded.
     Archetypes with fewer than min_decklists are skipped.
+
+    reference_date: if provided, the date window is computed relative to this
+    date instead of today. Used for backfilling historical snapshots.
     """
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    ref = reference_date or datetime.utcnow().date()
+    cutoff = ref - timedelta(days=days)
 
     # Single query: all decklists for this format/date range
     result = await db.execute(
         select(Decklist.archetype, Decklist.main_deck)
         .join(Event, Decklist.event_id == Event.id)
         .where(Event.format == format)
-        .where(Event.date >= cutoff.date())
+        .where(Event.date >= cutoff)
     )
     rows = result.all()
 
@@ -170,8 +176,13 @@ async def merge_similar_archetypes(
     threshold: float = 0.7,
     min_decklists: int = 3,
     core_threshold: float = 0.5,
+    reference_date: Optional[date] = None,
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[str]]]:
     """Main entry point: merge archetypes with similar card signatures.
+
+    Args:
+        reference_date: if provided, the date window is computed relative to
+            this date instead of today. Used for backfilling historical snapshots.
 
     Returns:
         (merged_archetypes, aliases) where:
@@ -185,6 +196,7 @@ async def merge_similar_archetypes(
     signatures = await _build_archetype_signatures(
         db, archetypes, land_names, format, days,
         min_decklists=min_decklists, core_threshold=core_threshold,
+        reference_date=reference_date,
     )
 
     merge_groups = _compute_merge_groups(signatures, archetypes, threshold)
@@ -215,3 +227,169 @@ async def merge_similar_archetypes(
     logger.info(f"Dedup reduced {original_count} archetypes to {merged_count} for {format}")
 
     return merged, aliases
+
+
+FORMAT_DAYS = {
+    "standard": 14,
+    "cedh": 30,
+    "duel_commander": 30,
+    "modern": 14,
+    "pioneer": 14,
+    "legacy": 30,
+    "vintage": 30,
+    "pauper": 14,
+}
+
+
+async def backfill_dedup_snapshots(
+    formats: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Re-run archetype dedup on all historical MetaSnapshot rows.
+
+    For each (format, snapshot_date) pair, reconstructs archetypes from the
+    stored snapshot rows, runs dedup using the correct historical date window,
+    and rewrites the snapshot rows with merged data.
+
+    Returns stats dict with counts of dates processed and snapshots rewritten.
+    """
+    from app.db.session import async_session_factory
+
+    stats: Dict[str, Any] = {"dates_processed": 0, "snapshots_before": 0, "snapshots_after": 0}
+
+    async with async_session_factory() as db:
+        # Get all distinct (format, snapshot_date) pairs
+        query = select(
+            MetaSnapshot.format,
+            MetaSnapshot.snapshot_date,
+        ).distinct()
+        if formats:
+            query = query.where(MetaSnapshot.format.in_(formats))
+        query = query.order_by(MetaSnapshot.format, MetaSnapshot.snapshot_date)
+
+        result = await db.execute(query)
+        date_pairs = result.all()
+
+        if not date_pairs:
+            logger.info("No historical snapshots found to backfill")
+            return stats
+
+        logger.info(f"Backfilling dedup for {len(date_pairs)} (format, date) pairs")
+        land_names = await _get_land_names(db)
+
+        for fmt, snap_date in date_pairs:
+            # Reconstruct archetypes dict from existing snapshot rows
+            result = await db.execute(
+                select(MetaSnapshot)
+                .where(MetaSnapshot.format == fmt)
+                .where(MetaSnapshot.snapshot_date == snap_date)
+            )
+            snapshots = result.scalars().all()
+            if not snapshots:
+                continue
+
+            archetypes = {}
+            for s in snapshots:
+                archetypes[s.archetype] = {
+                    "count": s.sample_size or 0,
+                    "percentage": float(s.meta_percentage or 0),
+                }
+
+            stats["snapshots_before"] += len(archetypes)
+
+            if len(archetypes) < 2:
+                stats["snapshots_after"] += len(archetypes)
+                stats["dates_processed"] += 1
+                continue
+
+            days = FORMAT_DAYS.get(fmt, 14)
+
+            # Build signatures using the historical date window
+            signatures = await _build_archetype_signatures(
+                db, archetypes, land_names, fmt, days,
+                reference_date=snap_date,
+            )
+            merge_groups = _compute_merge_groups(signatures, archetypes)
+
+            if not merge_groups:
+                stats["snapshots_after"] += len(archetypes)
+                stats["dates_processed"] += 1
+                continue
+
+            # Apply merges
+            total_count = sum(d["count"] for d in archetypes.values())
+            merged = dict(archetypes)
+            aliases: Dict[str, List[str]] = {}
+
+            for primary, members in merge_groups.items():
+                combined_count = sum(archetypes[name]["count"] for name in members)
+                merged[primary] = {
+                    "count": combined_count,
+                    "percentage": (combined_count / total_count) * 100 if total_count > 0 else 0,
+                }
+                aliases[primary] = members
+                for name in members:
+                    if name != primary:
+                        merged.pop(name, None)
+
+            # Delete old snapshots for this date/format and write new ones
+            await db.execute(
+                delete(MetaSnapshot)
+                .where(MetaSnapshot.format == fmt)
+                .where(MetaSnapshot.snapshot_date == snap_date)
+            )
+
+            for archetype, data in merged.items():
+                # Compute key cards from all aliased names
+                names_to_query = aliases.get(archetype, [archetype])
+                cutoff = snap_date - timedelta(days=days)
+
+                kc_result = await db.execute(
+                    select(Decklist.main_deck)
+                    .join(Event, Decklist.event_id == Event.id)
+                    .where(Decklist.archetype.in_(names_to_query))
+                    .where(Event.format == fmt)
+                    .where(Event.date >= cutoff)
+                    .limit(10)
+                )
+                main_decks = kc_result.scalars().all()
+
+                card_counts: Dict[str, int] = defaultdict(int)
+                for main_deck in main_decks:
+                    for entry in main_deck or []:
+                        card_name = entry.get("card_name")
+                        if card_name:
+                            card_counts[card_name] += entry.get("quantity", 1)
+
+                key_cards = [c for c, _ in sorted(card_counts.items(), key=lambda x: -x[1])[:10]]
+
+                snapshot = MetaSnapshot(
+                    format=fmt,
+                    archetype=archetype,
+                    meta_percentage=data["percentage"],
+                    sample_size=data["count"],
+                    key_cards=key_cards,
+                    snapshot_date=snap_date,
+                )
+                db.add(snapshot)
+
+            await db.commit()
+            stats["snapshots_after"] += len(merged)
+            stats["dates_processed"] += 1
+
+            logger.info(
+                f"Backfill {fmt} {snap_date}: {len(archetypes)} -> {len(merged)} archetypes"
+            )
+
+    logger.info(
+        f"Backfill complete: {stats['dates_processed']} dates, "
+        f"{stats['snapshots_before']} -> {stats['snapshots_after']} total snapshots"
+    )
+    return stats
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    import sys
+    formats = sys.argv[1:] or None
+    result = asyncio.run(backfill_dedup_snapshots(formats=formats))
+    print(f"Done: {result}")
