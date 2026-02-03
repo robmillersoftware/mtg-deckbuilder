@@ -7,6 +7,7 @@ from sqlalchemy import select, desc, func, distinct
 
 from app.db.session import get_db
 from app.models.meta import MetaSnapshot, CardCooccurrence
+from app.models.card import Card
 from app.schemas.meta import (
     MetaSnapshotResponse,
     MetaDashboardResponse,
@@ -57,13 +58,27 @@ async def get_meta_dashboard(
     )
     snapshots = result.scalars().all()
 
+    # Collect all key card names to filter out lands
+    all_key_cards = set()
+    for s in snapshots:
+        all_key_cards.update(s.key_cards or [])
+
+    land_names = set()
+    if all_key_cards:
+        land_result = await db.execute(
+            select(Card.name)
+            .where(Card.name.in_(all_key_cards))
+            .where(Card.type_line.ilike("%Land%"))
+        )
+        land_names = {row.name for row in land_result.all()}
+
     archetypes = [
         ArchetypeEntry(
             name=s.archetype,
             meta_percentage=float(s.meta_percentage) if s.meta_percentage else 0.0,
             sample_size=s.sample_size or 0,
             avg_finish=float(s.avg_finish) if s.avg_finish else 0.0,
-            key_cards=s.key_cards or [],
+            key_cards=[c for c in (s.key_cards or []) if c not in land_names],
         )
         for s in snapshots
     ]

@@ -350,9 +350,13 @@ async def update_meta_snapshots(
         logger.info(f"No archetypes found for {format}, skipping meta snapshot update")
         return 0
 
-    # Delete old snapshots for this format (keep only latest)
+    # Delete only snapshots for today's date so re-runs are idempotent
+    # (preserves historical snapshots for trend tracking)
+    today = datetime.utcnow().date()
     await db.execute(
-        delete(MetaSnapshot).where(MetaSnapshot.format == format)
+        delete(MetaSnapshot)
+        .where(MetaSnapshot.format == format)
+        .where(MetaSnapshot.snapshot_date == today)
     )
 
     # Get key cards for each archetype
