@@ -30,6 +30,8 @@ class DeckValidationMixin:
             filtered = []
             for entry in card_list:
                 card_name = entry.get("card_name", "")
+                user_requested = entry.get("user_requested", False)
+
                 query = select(Card).where(func.lower(Card.name) == card_name.lower()).limit(1)
                 result = await self.db.execute(query)
                 card = result.scalar_one_or_none()
@@ -44,16 +46,29 @@ class DeckValidationMixin:
                         land_fits = len(card_color_identity) == 0 or all(c in colors_upper for c in card_color_identity)
                         if land_fits:
                             filtered.append(entry)
+                        elif user_requested:
+                            # User explicitly requested this card - keep it even if off-color
+                            logger.info(f"[COLOR-FILTER] Keeping user-requested off-color land: {card_name}")
+                            filtered.append(entry)
                         else:
-                            logger.debug(f"[AI-SERVICE] Removed off-color land: {card_name} (color_identity: {card_color_identity})")
+                            logger.info(f"[COLOR-FILTER] Removed off-color land: {card_name} (identity: {card_color_identity}, deck wants: {colors_upper})")
                     elif is_colorless:
                         filtered.append(entry)
                     elif all(c in colors_upper for c in card_color_identity):
                         filtered.append(entry)
+                    elif user_requested:
+                        # User explicitly requested this card - keep it even if off-color
+                        logger.info(f"[COLOR-FILTER] Keeping user-requested off-color card: {card_name} (identity: {card_color_identity})")
+                        filtered.append(entry)
                     else:
-                        logger.debug(f"[AI-SERVICE] Removed off-color card: {card_name} (color_identity: {card_color_identity})")
+                        logger.info(f"[COLOR-FILTER] Removed off-color card: {card_name} (identity: {card_color_identity}, deck wants: {colors_upper})")
                 else:
-                    filtered.append(entry)
+                    # Card not found in database - reject it (unless user explicitly requested it)
+                    if user_requested:
+                        logger.warning(f"[COLOR-FILTER] User-requested card not in DB, keeping anyway: {card_name}")
+                        filtered.append(entry)
+                    else:
+                        logger.info(f"[COLOR-FILTER] Removed unknown card (not in DB): {card_name}")
 
             return filtered
 

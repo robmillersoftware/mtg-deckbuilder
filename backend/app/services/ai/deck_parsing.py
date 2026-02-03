@@ -40,6 +40,15 @@ async def parse_deck_request(prompt: str, db: AsyncSession) -> Dict[str, Any]:
 Color codes: W=White, U=Blue, B=Black, R=Red, G=Green
 Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, Izzet=UR, Golgari=BG, Boros=RW, Simic=GU
 
+IMPORTANT for specific_cards:
+- Extract ANY card names mentioned in the request (e.g., "Moonshadow", "Lightning Bolt", "Atraxa")
+- Include the card name exactly as mentioned
+- If the request says "using X" or "with X" or "around X", X is likely a card name
+- Examples:
+  - "Build a deck using Moonshadow" -> specific_cards: ["Moonshadow"]
+  - "Red deck with Lightning Bolt" -> specific_cards: ["Lightning Bolt"]
+  - "Atraxa commander deck" -> specific_cards: ["Atraxa"]
+
 IMPORTANT for colors_specified:
 - Set to TRUE only if the user explicitly wants their deck to be certain colors
 - Set to FALSE if colors are only mentioned as opponents/matchups (e.g., "beat mono-red", "good against blue decks")

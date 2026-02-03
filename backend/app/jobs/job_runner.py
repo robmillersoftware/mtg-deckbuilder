@@ -144,7 +144,7 @@ class JobRunner:
                 }
 
             except Exception as e:
-                error_message = str(e)
+                error_message = f"{type(e).__name__}: {e}" if str(e) else f"{type(e).__name__}: {repr(e)}"
                 error_stack = traceback.format_exc()
 
                 # Update failure status

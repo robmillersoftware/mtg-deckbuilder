@@ -254,31 +254,218 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
             else:
                 land_recommendations = "No specific land data available - use appropriate dual lands and basics."
 
-            # Build specific cards requirement
+            # Build specific cards requirement with full card details
             specific_cards_text = ""
             if specific_cards:
+                # Look up oracle text and card details for requested cards
+                from app.models.card import Card
+                from sqlalchemy import func as sqlfunc
+
+                card_details = []
+                for requested_card in specific_cards:
+                    # Try exact match first
+                    query = select(Card.name, Card.oracle_text, Card.type_line, Card.mana_cost).where(
+                        sqlfunc.lower(Card.name) == requested_card.lower()
+                    ).limit(1)
+                    result = await self.db.execute(query)
+                    row = result.first()
+
+                    # If no exact match, try partial match
+                    if not row:
+                        query = select(Card.name, Card.oracle_text, Card.type_line, Card.mana_cost).where(
+                            sqlfunc.lower(Card.name).like(f"%{requested_card.lower()}%")
+                        ).limit(1)
+                        result = await self.db.execute(query)
+                        row = result.first()
+
+                    if row:
+                        name, oracle_text, type_line, mana_cost = row
+                        card_details.append({
+                            "name": name,
+                            "oracle_text": oracle_text or "No text",
+                            "type_line": type_line or "Unknown type",
+                            "mana_cost": mana_cost or "Unknown cost",
+                        })
+                        logger.info(f"[AI-SERVICE] Found card details for '{requested_card}': {name} - {oracle_text[:100] if oracle_text else 'no text'}...")
+                    else:
+                        card_details.append({
+                            "name": requested_card,
+                            "oracle_text": "Card details not found",
+                            "type_line": "Unknown type",
+                            "mana_cost": "Unknown cost",
+                        })
+                        logger.warning(f"[AI-SERVICE] Could not find card details for '{requested_card}'")
+
+                # Analyze oracle text to detect synergies and generate explicit recommendations
+                def detect_synergies(oracle_text: str) -> tuple[List[str], List[str]]:
+                    """Analyze oracle text to detect what mechanics the card synergizes with.
+                    Returns (synergy_descriptions, search_keywords)."""
+                    synergies = []
+                    keywords = []  # Keywords to search for in the database
+                    oracle_lower = (oracle_text or "").lower()
+
+                    # Graveyard synergies
+                    if any(kw in oracle_lower for kw in ["graveyard", "put into your graveyard", "cards in your graveyard", "dies"]):
+                        synergies.append("GRAVEYARD SYNERGY - Include cards that put permanents into your graveyard: mill effects, discard outlets, sacrifice effects, and self-sacrificing permanents")
+                        keywords.extend(["mill", "discard", "sacrifice a", "surveil"])
+
+                    # Counter synergies
+                    if "+1/+1 counter" in oracle_lower:
+                        synergies.append("+1/+1 COUNTER SYNERGY - Include cards that add or benefit from +1/+1 counters")
+                        keywords.extend(["+1/+1 counter", "put a counter"])
+                    if "-1/-1 counter" in oracle_lower:
+                        synergies.append("-1/-1 COUNTER SYNERGY - Include cards that manipulate -1/-1 counters")
+                        keywords.append("-1/-1 counter")
+
+                    # ETB synergies
+                    if any(kw in oracle_lower for kw in ["enters the battlefield", "enters", "when ~ enters"]):
+                        synergies.append("ETB SYNERGY - Include cards with enters-the-battlefield effects or that trigger on creatures entering")
+                        keywords.extend(["enters the battlefield", "when a creature enters"])
+
+                    # Discard synergies
+                    if "discard" in oracle_lower:
+                        synergies.append("DISCARD SYNERGY - Include discard effects and cards that benefit from discarding")
+                        keywords.extend(["discard", "madness"])
+
+                    # Mill synergies
+                    if "mill" in oracle_lower or "library into" in oracle_lower:
+                        synergies.append("MILL SYNERGY - Include mill effects and graveyard payoffs")
+                        keywords.extend(["mill", "cards from the top"])
+
+                    # Sacrifice synergies
+                    if any(kw in oracle_lower for kw in ["sacrifice", "when this creature dies", "dying"]):
+                        synergies.append("SACRIFICE SYNERGY - Include sacrifice outlets and death triggers")
+                        keywords.extend(["sacrifice a", "when this creature dies", "when a creature dies"])
+
+                    # Token synergies
+                    if "token" in oracle_lower:
+                        synergies.append("TOKEN SYNERGY - Include token generators")
+                        keywords.append("create a")
+
+                    # Lifegain synergies
+                    if "gain life" in oracle_lower or "lifelink" in oracle_lower:
+                        synergies.append("LIFEGAIN SYNERGY - Include lifegain cards and payoffs")
+                        keywords.extend(["gain life", "lifelink", "whenever you gain life"])
+
+                    return synergies, keywords
+
+                # Format card details for the prompt
+                cards_with_details = []
+                all_synergies = []
+                all_keywords = []
+                for card in card_details:
+                    card_synergies, card_keywords = detect_synergies(card['oracle_text'])
+                    all_synergies.extend(card_synergies)
+                    all_keywords.extend(card_keywords)
+
+                    cards_with_details.append(
+                        f"- {card['name']} ({card['mana_cost']}) - {card['type_line']}\n"
+                        f"  Abilities: {card['oracle_text']}"
+                    )
+
+                # Query database for cards that enable the detected synergies
+                synergy_cards_text = ""
+                if all_keywords:
+                    unique_keywords = list(dict.fromkeys(all_keywords))
+                    from app.models.card import Card
+                    from app.services.card_service import get_format_legality_condition
+                    from sqlalchemy import or_
+
+                    # Build conditions for each keyword
+                    keyword_conditions = [Card.oracle_text.ilike(f"%{kw}%") for kw in unique_keywords]
+
+                    # Also filter by colors
+                    colors_upper = [c.upper() for c in colors]
+                    synergy_query = select(Card.name, Card.oracle_text, Card.type_line, Card.mana_cost).where(
+                        or_(*keyword_conditions),
+                        get_format_legality_condition(format),
+                        # Color filter: colorless OR matches deck colors
+                        or_(
+                            Card.colors == [],
+                            Card.color_identity.op('<@')(colors_upper)  # color identity subset of deck colors
+                        )
+                    ).limit(50)
+
+                    synergy_result = await self.db.execute(synergy_query)
+                    synergy_rows = synergy_result.all()
+
+                    if synergy_rows:
+                        synergy_card_list = []
+                        for name, oracle, type_line, mana in synergy_rows[:30]:
+                            # Summarize what the card does
+                            oracle_short = (oracle or "")[:80] + "..." if oracle and len(oracle) > 80 else oracle
+                            synergy_card_list.append(f"- {name} ({mana}): {oracle_short}")
+
+                        synergy_cards_text = f"""
+*** RECOMMENDED SYNERGY CARDS (from database) ***
+These cards in Standard directly enable the synergies you need - USE THESE:
+
+{chr(10).join(synergy_card_list)}
+"""
+                        logger.info(f"[AI-SERVICE] Found {len(synergy_rows)} synergy cards for keywords: {unique_keywords[:5]}")
+
+                # Build synergy requirements section
+                synergy_requirements = ""
+                if all_synergies:
+                    unique_synergies = list(dict.fromkeys(all_synergies))  # Remove duplicates, preserve order
+                    synergy_requirements = f"""
+*** MANDATORY SYNERGY REQUIREMENTS ***
+Based on the requested cards' abilities, you MUST include cards that enable these synergies:
+
+{chr(10).join(f"• {syn}" for syn in unique_synergies)}
+{synergy_cards_text}
+AT LEAST 50% of your non-land cards should directly support these synergies. Generic "good stuff" cards are NOT acceptable if they don't synergize with the build-around cards.
+"""
+
                 specific_cards_text = f"""
-REQUIRED CARDS - The user specifically requested these cards be included:
-{chr(10).join(f"- {card}" for card in specific_cards)}
-You MUST include these cards in the deck (use 4 copies unless the card is legendary or there's a good reason for fewer).
+REQUIRED CARDS - The user specifically requested these cards be included.
+You MUST build the deck around these cards and their abilities.
+
+{chr(10).join(cards_with_details)}
+{synergy_requirements}
+**CRITICAL**: This is a BUILD-AROUND deck. Every card should either:
+1. Directly enable the build-around card's abilities (e.g., mill/discard/sacrifice for graveyard triggers)
+2. Benefit from the same synergies (e.g., other graveyard payoffs)
+3. Provide essential interaction/removal
+
+Do NOT include generic "good cards" that don't synergize with the build-around. Use 4 copies unless legendary.
 """
 
             # Format full decklist examples (already fetched in parallel)
+            # Note: If we detected synergies for specific cards, don't let tournament templates override
             decklist_examples_text = ""
-            if example_decklists:
+            has_synergy_requirements = specific_cards and 'synergy_requirements' in dir() and synergy_requirements
+            if example_decklists and not has_synergy_requirements:
                 decklist_examples_text = f"""
 WINNING TOURNAMENT DECKLISTS - Study and emulate these actual winning decklists:
 {self._format_decklists_as_examples(example_decklists)}
 
 Use these decklists as your primary reference. Copy their card choices and quantities.
 """
+            elif example_decklists and has_synergy_requirements:
+                # With synergy requirements, tournament lists are only a secondary reference
+                decklist_examples_text = f"""
+REFERENCE DECKLISTS (for inspiration only - prioritize synergies above):
+{self._format_decklists_as_examples(example_decklists)}
+
+Note: These are reference decklists, but your primary goal is enabling the SYNERGY REQUIREMENTS above.
+"""
 
             # Build format-aware prompt sections from the queried data
             # All queries are now format-aware, so they return data for the specified format
             meta_cards_text = ""
             if template_cards and template_decks:
-                # We found tournament decks with the requested cards - use them as strong guidance
-                meta_cards_text = f"""
+                # We found tournament decks with the requested cards
+                if has_synergy_requirements:
+                    # With synergy requirements, tournament data is secondary
+                    meta_cards_text = f"""
+TOURNAMENT CARDS FOR REFERENCE - These cards appear in tournament decks (but prioritize synergy requirements):
+{chr(10).join(f"- {c['name']}: {c['recommended_quantity']} copies" for c in template_cards[:30])}
+
+Note: Use these ONLY if they support the synergy requirements above. Synergy is more important than raw power.
+"""
+                else:
+                    meta_cards_text = f"""
 TOURNAMENT DECK TEMPLATE - These cards are played in {len(template_decks)} tournament decks that use the same cards you requested:
 {chr(10).join(f"- {c['name']}: typically {c['recommended_quantity']} copies (played in {c['frequency']}/{len(template_decks)} decks)" for c in template_cards[:60])}
 
@@ -521,12 +708,43 @@ Colors: {', '.join(colors)}"""
 7. For {len(colors)}-color decks: {"Use mostly basic lands. Fetch lands and fixing are unnecessary." if len(colors) == 1 else "Use appropriate dual lands for fixing."}
 8. EVERY card must have a clear purpose - if you can't explain why it's in the deck, don't include it"""
 
-                format_json = """Return JSON with reasoning for key cards:
+                # Build analysis instructions based on what the user requested
+                analysis_step = """
+*** CRITICAL: ANALYZE BEFORE BUILDING ***
+
+Before generating the deck, you MUST analyze the user's request:
+
+1. UNDERSTAND THE GOAL: What is the user trying to achieve? What's the win condition?
+
+2. IF BUILD-AROUND CARDS ARE SPECIFIED:
+   - Read the card's ability CAREFULLY, word by word
+   - Does it say "one or more" (triggers once per event) or "for each" (triggers per card)?
+   - Does it care about specific card TYPES (creatures, permanents, instants)?
+   - What EXACTLY triggers it? What's the optimal way to trigger it repeatedly?
+   - Example: "Whenever one or more permanent cards are put into your graveyard"
+     → Triggers ONCE per event, so multiple small triggers (surveil 1 five times) beats one big trigger (mill 5 once)
+     → Only PERMANENT cards count, so instants/sorceries in graveyard don't help
+     → Strategy: maximize permanents, use repeated small mill/surveil effects
+
+3. IDENTIFY OPTIMAL ENABLERS:
+   - What effects/mechanics best enable this strategy?
+   - Should the deck be permanent-heavy or spell-heavy?
+   - What's the ideal mana curve for this strategy?
+
+4. BUILD THE DECK based on your analysis, not generic "good cards"
+
+Your deck should reflect your analysis. Every card should serve the identified strategy.
+"""
+
+                format_json = f"""{analysis_step}
+
+Return JSON with your analysis and reasoning:
 {{
+    "analysis": "Your strategic analysis of the user's request and any build-around cards (2-4 sentences explaining your reasoning about how to best enable the strategy)",
     "name": "Deck Name",
-    "strategy_summary": "2-3 sentence strategy description",
+    "strategy_summary": "2-3 sentence strategy description based on your analysis",
     "main_deck": [
-        {{"card_name": "Card Name", "quantity": 4, "reason": "Why this card"}}
+        {{"card_name": "Card Name", "quantity": 4, "reason": "Why this card supports the analyzed strategy"}}
     ],
     "sideboard": [
         {{"card_name": "Card Name", "quantity": 3, "reason": "What matchups"}}
@@ -675,7 +893,44 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
                 deck_data["main_deck"] = filtered_main
                 deck_data["sideboard"] = filtered_sideboard
 
+                # FIRST: Ensure user-requested specific cards are in the deck
+                # Do this BEFORE color filtering so they're included even if AI forgot them
+                logger.info(f"[AI-SERVICE] Processing specific_cards: {specific_cards}")
+                if specific_cards:
+                    from sqlalchemy import func as sqlfunc
+                    from app.models.card import Card
+                    main_deck = deck_data.get("main_deck", [])
+                    existing_cards = {entry.get("card_name", "").lower() for entry in main_deck}
+
+                    for requested_card in specific_cards:
+                        # Look up the card to get the canonical name
+                        valid_name = await find_valid_card(requested_card)
+                        if not valid_name:
+                            logger.warning(f"[AI-SERVICE] User-requested card not found in DB: {requested_card}")
+                            continue
+
+                        # Determine expected quantity based on format
+                        # Commander/cEDH are singleton (1 copy), other formats allow 4
+                        if format in ["commander", "cedh"]:
+                            expected_qty = 1
+                        else:
+                            expected_qty = 4
+
+                        # Remove any existing copies of this card (AI might have wrong quantity)
+                        main_deck = [
+                            entry for entry in main_deck
+                            if entry.get("card_name", "").lower() != valid_name.lower()
+                            and entry.get("card_name", "").lower() != requested_card.lower()
+                        ]
+
+                        # Add the card with correct quantity
+                        main_deck.append({"card_name": valid_name, "quantity": expected_qty, "user_requested": True})
+                        logger.info(f"[AI-SERVICE] Ensured user-requested card: {expected_qty}x {valid_name}")
+
+                    deck_data["main_deck"] = main_deck
+
                 # Filter out cards that don't match the deck's colors
+                # Note: user_requested cards are preserved even if off-color
                 deck_data = await self._filter_by_color(deck_data, colors)
 
                 # Fix mana base - cEDH needs special handling for fetches/duals
@@ -695,7 +950,7 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
                 main_count = sum(e.get("quantity", 0) for e in deck_data.get("main_deck", []))
                 side_count = sum(e.get("quantity", 0) for e in deck_data.get("sideboard", []))
 
-                logger.debug(f"[AI-SERVICE] Generated deck after fixing: {main_count} main, {side_count} sideboard")
+                logger.info(f"[AI-SERVICE] Generated deck after fixing: {main_count} main, {side_count} sideboard")
 
                 # Enrich deck entries with card type information for frontend categorization
                 deck_data = await self._enrich_deck_with_card_data(deck_data)
@@ -1336,12 +1591,16 @@ Return modifications as JSON:
                 land_entries.append({"card_name": primary_basic, "quantity": lands_to_add})
 
             # Trim non-land cards to make room (remove from cards with highest quantities first)
+            # BUT protect user_requested cards from being trimmed
             non_land_entries.sort(key=lambda x: x.get("quantity", 0), reverse=True)
             remaining_to_trim = lands_to_add
             while remaining_to_trim > 0 and non_land_entries:
                 # Find a card we can trim (prefer trimming 4-ofs to 3-ofs, etc.)
+                # Skip user_requested cards - they should keep their quantity
                 trimmed = False
                 for entry in non_land_entries:
+                    if entry.get("user_requested"):
+                        continue  # Never trim user-requested cards
                     if entry.get("quantity", 0) > 1:
                         trim_amount = min(entry["quantity"] - 1, remaining_to_trim)
                         entry["quantity"] -= trim_amount
@@ -1352,10 +1611,20 @@ Return modifications as JSON:
                             break
                 if not trimmed:
                     # Remove entire cards if we can't trim quantities
-                    if non_land_entries:
-                        removed = non_land_entries.pop()
+                    # Find a non-user-requested card to remove
+                    removed_idx = None
+                    for i in range(len(non_land_entries) - 1, -1, -1):
+                        if not non_land_entries[i].get("user_requested"):
+                            removed_idx = i
+                            break
+                    if removed_idx is not None:
+                        removed = non_land_entries.pop(removed_idx)
                         remaining_to_trim -= removed.get("quantity", 0)
                         logger.debug(f"[AI-SERVICE] Removed {removed.get('card_name')} to make room for lands")
+                    else:
+                        # Only user-requested cards left, can't trim anymore
+                        logger.warning(f"[AI-SERVICE] Cannot trim more cards - only user-requested cards remain")
+                        break
 
             # Rebuild main_deck with lands first, then non-lands
             main_deck = land_entries + [e for e in non_land_entries if e.get("quantity", 0) > 0]
@@ -1494,23 +1763,80 @@ Return modifications as JSON:
                             deficit -= 1
                             logger.debug(f"[AI-SERVICE] Added cEDH staple: {valid_name}")
 
-            # If still short, add from available cards (non-cEDH formats only)
-            # For cEDH, we skip this and add lands instead - the available_cards pool can have garbage
+            # If still short, add from tournament decklists (non-cEDH formats)
+            # Query cards from tournament decks that match our colors and archetype
             if deficit > 0 and format != "cedh":
-                available_nonlands = [
-                    c for c in available_cards
-                    if c.get("name", "").lower() not in existing_cards
-                    and not (c.get("type_line") or "").lower().startswith("land")
-                    and "land" not in (c.get("type_line") or "").lower().split(" — ")[0].lower()
-                ]
+                from app.models.meta import Decklist, Event
+                from app.models.card import Card
+                from app.services.card_service import get_format_legality_condition
+                from sqlalchemy import func
+                from collections import Counter
 
-                for card in available_nonlands:
+                logger.info(f"[AI-SERVICE] Need {deficit} filler cards, querying tournament data...")
+
+                # Normalize deck colors for comparison
+                deck_colors = {c.upper() for c in colors} if colors else set()
+
+                # Query cards from tournament decklists in this format
+                decklist_query = (
+                    select(Decklist.main_deck)
+                    .join(Event, Decklist.event_id == Event.id)
+                    .where(Event.format == format)
+                    .order_by(Event.date.desc())
+                    .limit(100)  # Sample recent decklists
+                )
+                decklist_result = await self.db.execute(decklist_query)
+                decklists = decklist_result.scalars().all()
+
+                # Count card frequencies across tournament decks
+                card_frequency = Counter()
+                for decklist in decklists:
+                    if decklist:
+                        for entry in decklist:
+                            card_name = entry.get("card_name", "")
+                            if card_name:
+                                card_frequency[card_name] += 1
+
+                # Sort by frequency (most played first) and filter to valid cards
+                cards_added = 0
+                for card_name, freq in card_frequency.most_common():
                     if deficit <= 0:
                         break
+                    if card_name.lower() in existing_cards:
+                        continue
+
+                    # Verify card exists, is legal, and matches our colors
+                    query = select(Card.name, Card.color_identity, Card.type_line).where(
+                        func.lower(Card.name) == card_name.lower(),
+                        get_format_legality_condition(format)
+                    ).limit(1)
+                    result = await self.db.execute(query)
+                    row = result.first()
+
+                    if not row:
+                        continue
+
+                    valid_name, card_color_identity, type_line = row
+
+                    # Skip lands (we handle those separately)
+                    if type_line and "land" in type_line.lower():
+                        continue
+
+                    # Check color identity matches deck colors
+                    if card_color_identity:
+                        card_colors = {c.upper() for c in card_color_identity}
+                        if not card_colors.issubset(deck_colors):
+                            continue
+
+                    # Add the card
                     qty_to_add = min(max_copies, deficit)
-                    main_deck.append({"card_name": card["name"], "quantity": qty_to_add})
+                    main_deck.append({"card_name": valid_name, "quantity": qty_to_add})
+                    existing_cards.add(valid_name.lower())
                     deficit -= qty_to_add
-                    logger.debug(f"[AI-SERVICE] Added {qty_to_add}x {card['name']} to fill deck")
+                    cards_added += 1
+                    logger.info(f"[AI-SERVICE] Added {qty_to_add}x {valid_name} from tournament data (played in {freq} decks)")
+
+                logger.info(f"[AI-SERVICE] Added {cards_added} cards from tournament decklists")
 
             # If still short, add basic lands as last resort
             if deficit > 0:
@@ -1527,17 +1853,30 @@ Return modifications as JSON:
 
         elif main_count > target_main:
             # Remove cards from the end (typically less important)
+            # BUT protect user_requested cards
             excess = main_count - target_main
             while excess > 0 and main_deck:
-                last_entry = main_deck[-1]
-                qty = last_entry.get("quantity", 1)
+                # Find a non-user-requested card from the end to remove
+                remove_idx = None
+                for i in range(len(main_deck) - 1, -1, -1):
+                    if not main_deck[i].get("user_requested"):
+                        remove_idx = i
+                        break
+
+                if remove_idx is None:
+                    # Only user-requested cards left, can't trim
+                    logger.warning(f"[AI-SERVICE] Cannot trim more - only user-requested cards remain, deck has {main_count - target_main + excess} extra cards")
+                    break
+
+                entry = main_deck[remove_idx]
+                qty = entry.get("quantity", 1)
                 if qty <= excess:
                     excess -= qty
-                    main_deck.pop()
-                    logger.debug(f"[AI-SERVICE] Removed {qty}x {last_entry.get('card_name')} to reduce main deck")
+                    main_deck.pop(remove_idx)
+                    logger.debug(f"[AI-SERVICE] Removed {qty}x {entry.get('card_name')} to reduce main deck")
                 else:
-                    last_entry["quantity"] -= excess
-                    logger.debug(f"[AI-SERVICE] Reduced {last_entry.get('card_name')} by {excess} to reach {target_main}")
+                    entry["quantity"] -= excess
+                    logger.debug(f"[AI-SERVICE] Reduced {entry.get('card_name')} by {excess} to reach {target_main}")
                     excess = 0
 
         # Fix sideboard to target size

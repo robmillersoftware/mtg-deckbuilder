@@ -692,12 +692,13 @@ class GameSimulator:
             )
 
         except Exception as e:
-            logger.error(f"Error simulating game: {e}")
+            logger.error(f"Error simulating game: {e}", exc_info=True)
             # Clear current_game_turns on error
             if sim_run:
                 sim_run.current_game_turns = None
                 await self.db.commit()
-            return self._mock_game_result(game_number)
+            # Re-raise the error - don't return fake results
+            raise
 
     async def _simulate_multiplayer_game(
         self,
@@ -861,12 +862,13 @@ class GameSimulator:
             )
 
         except Exception as e:
-            logger.error(f"Error simulating multiplayer game: {e}")
+            logger.error(f"Error simulating multiplayer game: {e}", exc_info=True)
             # Clear current_game_turns on error
             if sim_run:
                 sim_run.current_game_turns = None
                 await self.db.commit()
-            return self._mock_multiplayer_result(game_number, num_players)
+            # Re-raise the error - don't return fake results
+            raise
 
     def _build_multiplayer_prompt(
         self,
@@ -895,6 +897,16 @@ Decklist:
 """
 
         prompt += """
+*** CRITICAL RULES - READ CAREFULLY ***
+- Cards can ONLY do what their RULES text says. Do NOT invent abilities.
+- If a card has no rules text, it's a vanilla creature with no abilities.
+- Targeting restrictions are STRICT:
+  - "Target non-creature spell" (like Negate) CANNOT target creatures
+  - "Target creature" CANNOT target players or planeswalkers
+  - "Target opponent" CANNOT target yourself
+- Power/toughness only change if a card explicitly grants +X/+Y or sets P/T
+- Do NOT assume cards have abilities based on their names - only use printed rules
+
 COMMANDER GAME RULES:
 - Starting life: 40 per player
 - Commander damage tracked separately (21 from one commander = elimination)
@@ -907,6 +919,7 @@ Simulate this Commander game from start to finish:
 3. Players make politically-aware decisions
 4. Track eliminations as players are knocked out
 5. Game ends when one player remains
+6. ONLY use abilities that are explicitly written in each card's RULES text above
 
 Return the complete game as JSON with elimination_order showing who died in what order."""
 
@@ -977,11 +990,22 @@ Include "sideboard_in" and "sideboard_out" arrays for player 1 in your response.
 """
 
         prompt += """
+*** CRITICAL RULES - READ CAREFULLY ***
+- Cards can ONLY do what their RULES text says. Do NOT invent abilities.
+- If a card has no rules text, it's a vanilla creature with no abilities.
+- Targeting restrictions are STRICT:
+  - "Target non-creature spell" (like Negate) CANNOT target creatures
+  - "Target creature" CANNOT target players or planeswalkers
+  - "Target opponent" CANNOT target yourself
+- Power/toughness only change if a card explicitly grants +X/+Y or sets P/T
+- Do NOT assume cards have abilities based on their names - only use printed rules
+
 Simulate this game from start to finish. Both players:
 1. Shuffle and draw 7 cards
 2. Mulligan if hand is bad (land ratio, curve, matchup-specific keeps)
 3. Play optimally given the cards drawn
 4. Consider sequencing, holding interaction, bluffing, etc.
+5. ONLY use abilities that are explicitly written in each card's RULES text above
 
 Return the complete game as JSON."""
 
@@ -1005,13 +1029,10 @@ Return the complete game as JSON."""
                 if card_info.get("power") and card_info.get("toughness"):
                     pt = f" [{card_info['power']}/{card_info['toughness']}]"
 
-                # Truncate oracle text if too long
-                if oracle and len(oracle) > 100:
-                    oracle = oracle[:100] + "..."
-
+                # Include full oracle text - accuracy is more important than brevity
                 lines.append(f"{qty}x {name} {mana} - {type_line}{pt}")
                 if oracle:
-                    lines.append(f"   {oracle}")
+                    lines.append(f"   RULES: {oracle}")
             else:
                 lines.append(f"{qty}x {name}")
 
@@ -1056,16 +1077,10 @@ Return the complete game as JSON."""
                 repaired = repair_json(json_str)
                 return json.loads(repaired)
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse game JSON: {e}")
-            # Return a default result
-            return {
-                "winner": "player1" if random.random() > 0.5 else "player2",
-                "win_condition": "damage",
-                "total_turns": 8,
-                "final_life": {"player1": 5, "player2": 0},
-                "key_moments": ["Game simulation parsing failed, result randomized"],
-                "mvp_cards": {"player1": [], "player2": []},
-            }
+            logger.error(f"Failed to parse game JSON: {e}")
+            logger.error(f"Raw response was: {response_text[:500]}")
+            # Raise the error - don't fake results
+            raise ValueError(f"Game simulation failed: could not parse AI response. Error: {e}")
 
     def _mock_game_result(self, game_number: int) -> GameResult:
         """Generate a mock game result for testing without API."""

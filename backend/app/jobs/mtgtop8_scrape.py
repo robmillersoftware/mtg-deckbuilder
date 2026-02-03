@@ -9,6 +9,7 @@ Updates meta snapshots and card co-occurrence data.
 import asyncio
 import logging
 import re
+import traceback
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
@@ -47,8 +48,21 @@ FORMAT_CONFIG = {
 async def fetch_page(client: httpx.AsyncClient, url: str) -> str:
     """Fetch a page with rate limiting."""
     await asyncio.sleep(REQUEST_DELAY)
-    response = await client.get(url, follow_redirects=True)
-    response.raise_for_status()
+    try:
+        response = await client.get(url, follow_redirects=True)
+    except httpx.ConnectError as e:
+        raise RuntimeError(f"Connection failed for {url}: {type(e).__name__}: {e}") from e
+    except httpx.TimeoutException as e:
+        raise RuntimeError(f"Request timed out for {url}: {type(e).__name__}: {e}") from e
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"HTTP error for {url}: {type(e).__name__}: {e}") from e
+
+    if response.status_code != 200:
+        body_preview = response.text[:500] if response.text else "(empty)"
+        raise RuntimeError(
+            f"HTTP {response.status_code} from {url}. "
+            f"Response: {body_preview}"
+        )
     return response.text
 
 
@@ -452,9 +466,35 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
             async with httpx.AsyncClient(
                 timeout=30.0,
                 headers={
-                    "User-Agent": "Spellbook-MTG-Deckbuilder/1.0 (Educational Project)"
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                 },
             ) as client:
+                # Connectivity check before starting full scrape
+                try:
+                    test_response = await client.get(
+                        f"{MTGTOP8_BASE_URL}/format?f=ST",
+                        follow_redirects=True,
+                    )
+                    logger.info(
+                        f"mtgtop8 connectivity check: HTTP {test_response.status_code}, "
+                        f"content length: {len(test_response.text)}"
+                    )
+                    if test_response.status_code != 200:
+                        raise RuntimeError(
+                            f"mtgtop8 returned HTTP {test_response.status_code}. "
+                            f"Body: {test_response.text[:500]}"
+                        )
+                    if len(test_response.text) < 1000:
+                        raise RuntimeError(
+                            f"mtgtop8 returned suspiciously short response "
+                            f"({len(test_response.text)} bytes). "
+                            f"Possible blocking/CAPTCHA. Body: {test_response.text[:500]}"
+                        )
+                except httpx.HTTPError as e:
+                    raise RuntimeError(
+                        f"mtgtop8 connectivity check failed: {type(e).__name__}: {e}"
+                    ) from e
+
                 # Scrape recent events for each format
                 all_events = []
                 for format_name in formats:
@@ -544,14 +584,17 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
                                 stats["decklists_scraped"] += 1
 
                             except Exception as e:
-                                logger.warning(f"Error scraping decklist: {e}")
-                                stats["errors"].append(f"Decklist error: {e}")
+                                error_detail = f"{type(e).__name__}: {e}" if str(e) else repr(e)
+                                logger.warning(f"Error scraping decklist: {error_detail}")
+                                stats["errors"].append(f"Decklist error: {error_detail}")
 
                         await db.commit()
 
                     except Exception as e:
-                        logger.warning(f"Error scraping event {event_data.get('mtgtop8_id')}: {e}")
-                        stats["errors"].append(f"Event error: {e}")
+                        error_detail = f"{type(e).__name__}: {e}" if str(e) else repr(e)
+                        logger.warning(f"Error scraping event {event_data.get('mtgtop8_id')}: {error_detail}")
+                        logger.warning(f"Event scrape traceback: {traceback.format_exc()}")
+                        stats["errors"].append(f"Event error: {error_detail}")
                         await db.rollback()  # Rollback to recover from error
 
             # Calculate and update meta percentages for each format
@@ -568,9 +611,11 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
             stats["cooccurrences_updated"] = total_cooccurrences
 
         except Exception as e:
-            logger.error(f"mtgtop8 scrape failed: {e}")
-            stats["errors"].append(str(e))
-            raise
+            error_detail = f"{type(e).__name__}: {e}" if str(e) else f"{type(e).__name__}: {repr(e)}"
+            logger.error(f"mtgtop8 scrape failed: {error_detail}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            stats["errors"].append(error_detail)
+            raise RuntimeError(error_detail) from e
 
     # Compute archetype templates from the updated decklists
     try:
@@ -579,8 +624,9 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
         stats["archetype_templates_updated"] = template_stats.get("templates_saved", 0)
         logger.info(f"Updated {stats['archetype_templates_updated']} archetype templates")
     except Exception as e:
-        logger.warning(f"Failed to compute archetype templates: {e}")
-        stats["errors"].append(f"Archetype templates error: {e}")
+        error_detail = f"{type(e).__name__}: {e}" if str(e) else repr(e)
+        logger.warning(f"Failed to compute archetype templates: {error_detail}")
+        stats["errors"].append(f"Archetype templates error: {error_detail}")
 
     stats["completed_at"] = datetime.utcnow().isoformat()
     return stats
