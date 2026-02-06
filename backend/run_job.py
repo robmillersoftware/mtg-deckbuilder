@@ -3,9 +3,10 @@
 CLI script to manually run scraper jobs.
 
 Usage:
-    python run_job.py scryfall_sync    # Run Scryfall card sync
-    python run_job.py mtgtop8_scrape   # Run mtgtop8 meta scrape
-    python run_job.py --list           # List available jobs
+    python run_job.py scryfall_sync        # Run Scryfall card sync
+    python run_job.py mtgtop8_scrape       # Run mtgtop8 meta scrape
+    python run_job.py card_meta_stats      # Compute per-card meta representation
+    python run_job.py --list               # List available jobs
 """
 
 import asyncio
@@ -40,6 +41,16 @@ async def run_mtgtop8():
     return result
 
 
+async def run_card_meta_stats():
+    """Compute per-card meta representation from tournament decklists."""
+    from app.jobs.compute_card_meta_stats import compute_card_meta_stats
+
+    logger.info("Starting card meta stats computation...")
+    result = await compute_card_meta_stats()
+    logger.info(f"Card meta stats complete: {result}")
+    return result
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] in ["-h", "--help"]:
         print(__doc__)
@@ -47,13 +58,14 @@ def main():
 
     if sys.argv[1] == "--list":
         print("Available jobs:")
-        print("  scryfall_sync  - Sync cards from Scryfall API")
-        print("  mtgtop8_scrape - Scrape tournament data from mtgtop8.com")
+        print("  scryfall_sync    - Sync cards from Scryfall API")
+        print("  mtgtop8_scrape   - Scrape tournament data from mtgtop8.com")
+        print("  card_meta_stats  - Compute per-card meta representation")
         sys.exit(0)
 
     job_name = sys.argv[1]
 
-    valid_jobs = ["scryfall_sync", "mtgtop8_scrape"]
+    valid_jobs = ["scryfall_sync", "mtgtop8_scrape", "card_meta_stats"]
     if job_name not in valid_jobs:
         print(f"Error: Unknown job '{job_name}'")
         print(f"Valid jobs: {', '.join(valid_jobs)}")
@@ -64,6 +76,8 @@ def main():
             result = asyncio.run(run_scryfall())
         elif job_name == "mtgtop8_scrape":
             result = asyncio.run(run_mtgtop8())
+        elif job_name == "card_meta_stats":
+            result = asyncio.run(run_card_meta_stats())
 
         print("\n" + "="*50)
         print("Job completed successfully!")
