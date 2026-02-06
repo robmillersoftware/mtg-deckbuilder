@@ -10,6 +10,7 @@ from app.jobs.compute_archetype_templates import (
     get_archetype_template,
     get_all_archetype_templates,
 )
+from app.jobs.compute_card_meta_stats import compute_card_meta_stats
 
 __all__ = [
     "sync_scryfall_cards",
@@ -19,4 +20,5 @@ __all__ = [
     "compute_archetype_templates",
     "get_archetype_template",
     "get_all_archetype_templates",
+    "compute_card_meta_stats",
 ]
