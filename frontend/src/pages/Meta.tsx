@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { metaApi, usersApi } from '@/services/api';
-import { MetaArchetype, MetaTrendsResponse, MetaHealthResponse, ArchetypeTrend } from '@/types';
+import { MetaArchetype, MetaTrendsResponse, MetaHealthResponse, ArchetypeTrend, CardMetaStatsEntry, CardTrend, CardTrendsResponse } from '@/types';
 import { CardTooltip } from '@/components/CardTooltip';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import clsx from 'clsx';
@@ -55,6 +55,16 @@ export function MetaPage() {
   // History chart data
   const [historyData, setHistoryData] = useState<HistoryDataPoint[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Tab: "archetypes" or "cards"
+  const [activeTab, setActiveTab] = useState<'archetypes' | 'cards'>('archetypes');
+
+  // Card meta stats
+  const [cardStats, setCardStats] = useState<CardMetaStatsEntry[]>([]);
+  const [cardStatsLoading, setCardStatsLoading] = useState(false);
+  const [selectedCard, setSelectedCard] = useState<CardMetaStatsEntry | null>(null);
+  const [sideboardOnly, setSideboardOnly] = useState(false);
+  const [cardTrends, setCardTrends] = useState<CardTrendsResponse | null>(null);
 
   useEffect(() => {
     loadPreferencesAndMeta();
@@ -144,9 +154,44 @@ export function MetaPage() {
     }
   };
 
+  // Load card stats when tab or format changes
+  useEffect(() => {
+    if (activeTab === 'cards') {
+      loadCardStats(format, sideboardOnly);
+    }
+  }, [activeTab, format, sideboardOnly]);
+
+  const loadCardStats = async (selectedFormat: string, sbOnly: boolean) => {
+    setCardStatsLoading(true);
+    try {
+      const [statsRes, trendsRes] = await Promise.allSettled([
+        metaApi.getCardStats(selectedFormat, 50, 0, sbOnly),
+        metaApi.getCardTrends(selectedFormat, 7),
+      ]);
+
+      if (statsRes.status === 'fulfilled') {
+        setCardStats(statsRes.value.data.cards || []);
+      } else {
+        setCardStats([]);
+      }
+
+      if (trendsRes.status === 'fulfilled') {
+        setCardTrends(trendsRes.value.data);
+      } else {
+        setCardTrends(null);
+      }
+    } catch (error) {
+      console.error('Failed to load card stats:', error);
+      setCardStats([]);
+    } finally {
+      setCardStatsLoading(false);
+    }
+  };
+
   const handleFormatChange = (newFormat: string) => {
     setFormat(newFormat);
     setSelectedArchetype(null);
+    setSelectedCard(null);
     loadMetaData(newFormat);
   };
 
@@ -229,13 +274,273 @@ export function MetaPage() {
         </div>
       )}
 
-      {archetypes.length === 0 ? (
+      {/* Tab Switcher */}
+      <div className="flex gap-1 bg-gray-900 rounded-lg p-1 w-fit">
+        <button
+          onClick={() => setActiveTab('archetypes')}
+          className={clsx(
+            'px-4 py-2 rounded-md text-sm font-medium transition-colors',
+            activeTab === 'archetypes'
+              ? 'bg-gray-700 text-white'
+              : 'text-gray-400 hover:text-gray-200'
+          )}
+        >
+          {isCommanderFormat(format) ? 'Commanders' : 'Archetypes'}
+        </button>
+        <button
+          onClick={() => setActiveTab('cards')}
+          className={clsx(
+            'px-4 py-2 rounded-md text-sm font-medium transition-colors',
+            activeTab === 'cards'
+              ? 'bg-gray-700 text-white'
+              : 'text-gray-400 hover:text-gray-200'
+          )}
+        >
+          Most Played Cards
+        </button>
+      </div>
+
+      {/* Cards Tab */}
+      {activeTab === 'cards' && (
+        <div className="flex flex-col lg:flex-row gap-6">
+          <div className="flex-1 lg:flex-[2] space-y-6 order-1">
+            {/* Card List */}
+            <div className="bg-gray-900 rounded-lg overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-white">Card Representation</h2>
+                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sideboardOnly}
+                    onChange={(e) => setSideboardOnly(e.target.checked)}
+                    className="rounded bg-gray-700 border-gray-600 text-primary-600 focus:ring-primary-500"
+                  />
+                  Sideboard staples
+                </label>
+              </div>
+
+              {cardStatsLoading ? (
+                <div className="p-8 text-center text-gray-400">Loading card stats...</div>
+              ) : cardStats.length === 0 ? (
+                <div className="p-8 text-center text-gray-400">
+                  No card meta data available yet. Run the card meta stats job after scraping.
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-800 max-h-[400px] overflow-y-auto">
+                  {cardStats.map((card, index) => (
+                    <button
+                      key={card.card_name}
+                      onClick={() => setSelectedCard(card)}
+                      className={clsx(
+                        'w-full px-4 py-3 flex items-center justify-between hover:bg-gray-800 transition-colors text-left',
+                        selectedCard?.card_name === card.card_name && 'bg-gray-800'
+                      )}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <span className="text-gray-500 text-sm w-6">#{index + 1}</span>
+                        <div className="w-20 hidden sm:block">
+                          <div
+                            className="h-2 rounded-full bg-primary-600"
+                            style={{ width: `${Math.min(card.meta_percentage, 100)}%` }}
+                          />
+                        </div>
+                        <div>
+                          <CardTooltip cardName={card.card_name}>
+                            <span className="text-white font-medium cursor-pointer hover:text-primary-300">
+                              {card.card_name}
+                            </span>
+                          </CardTooltip>
+                          <span className="text-gray-500 text-sm ml-2 hidden sm:inline">
+                            {card.deck_count}/{card.total_decks} decks
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-primary-400 font-medium whitespace-nowrap">
+                        {card.meta_percentage.toFixed(1)}%
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Card Trends */}
+            <div className="bg-gray-900 rounded-lg overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-800">
+                <h2 className="text-lg font-semibold text-white">Card Trends</h2>
+                {cardTrends && (
+                  <p className="text-sm text-gray-400 mt-1">
+                    Comparing to {new Date(cardTrends.comparison_date).toLocaleDateString()}
+                  </p>
+                )}
+              </div>
+
+              {cardStatsLoading ? (
+                <div className="p-4 text-center text-gray-400">Loading trends...</div>
+              ) : cardTrends ? (
+                <div className="p-4 space-y-6">
+                  {/* Rising Cards */}
+                  {cardTrends.rising.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-green-400 mb-3 flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M5.293 9.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L11 7.414V15a1 1 0 11-2 0V7.414L6.707 9.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Rising
+                      </h3>
+                      <div className="space-y-2">
+                        {cardTrends.rising.map((trend) => (
+                          <CardTrendCard key={trend.card_name} trend={trend} isRising={true} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Falling Cards */}
+                  {cardTrends.falling.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-red-400 mb-3 flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M14.707 10.293a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 12.586V5a1 1 0 012 0v7.586l2.293-2.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Falling
+                      </h3>
+                      <div className="space-y-2">
+                        {cardTrends.falling.map((trend) => (
+                          <CardTrendCard key={trend.card_name} trend={trend} isRising={false} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* New Cards */}
+                  {cardTrends.new_cards.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-blue-400 mb-3 flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" />
+                        </svg>
+                        New to Meta
+                      </h3>
+                      <div className="flex flex-wrap gap-2">
+                        {cardTrends.new_cards.map((card) => (
+                          <CardTooltip key={card.card_name} cardName={card.card_name}>
+                            <span className="px-3 py-1 bg-blue-900/30 text-blue-300 rounded-full text-sm cursor-pointer">
+                              {card.card_name} ({card.meta_percentage.toFixed(1)}%)
+                            </span>
+                          </CardTooltip>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Disappeared Cards */}
+                  {cardTrends.disappeared.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                        </svg>
+                        Fallen Off
+                      </h3>
+                      <div className="flex flex-wrap gap-2">
+                        {cardTrends.disappeared.map((name) => (
+                          <span
+                            key={name}
+                            className="px-3 py-1 bg-gray-800 text-gray-400 rounded-full text-sm line-through"
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* No Trends */}
+                  {cardTrends.rising.length === 0 &&
+                    cardTrends.falling.length === 0 &&
+                    cardTrends.new_cards.length === 0 &&
+                    cardTrends.disappeared.length === 0 && (
+                      <p className="text-gray-400 text-center py-4">
+                        No significant changes in card representation this week.
+                      </p>
+                    )}
+                </div>
+              ) : (
+                <div className="p-4 text-center text-gray-400">
+                  Not enough historical data to show card trends.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Column: Selected Card Details */}
+          <div className="lg:flex-1 order-2">
+            {selectedCard ? (
+              <div className="bg-gray-900 rounded-lg p-4 lg:sticky lg:top-4">
+                <CardTooltip cardName={selectedCard.card_name}>
+                  <h2 className="text-lg font-semibold text-white mb-4 cursor-pointer hover:text-primary-300">
+                    {selectedCard.card_name}
+                  </h2>
+                </CardTooltip>
+
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-sm text-gray-400">Meta Share</span>
+                      <p className="text-2xl font-bold text-primary-400">
+                        {selectedCard.meta_percentage.toFixed(1)}%
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-sm text-gray-400">Avg Copies</span>
+                      <p className="text-lg text-white">{selectedCard.avg_copies.toFixed(1)}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-sm text-gray-400">Main Deck</span>
+                      <p className="text-lg text-white">{selectedCard.main_deck_count} decks</p>
+                    </div>
+                    <div>
+                      <span className="text-sm text-gray-400">Sideboard</span>
+                      <p className="text-lg text-white">{selectedCard.sideboard_count} decks</p>
+                    </div>
+                  </div>
+
+                  {selectedCard.archetypes.length > 0 && (
+                    <div>
+                      <span className="text-sm text-gray-400 block mb-2">Played In</span>
+                      <div className="space-y-2">
+                        {selectedCard.archetypes.map((arch) => (
+                          <div key={arch.name} className="flex items-center justify-between text-sm">
+                            <span className="text-gray-300">{arch.name}</span>
+                            <span className="text-gray-500">{arch.count} decks ({arch.percentage}%)</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-gray-900 rounded-lg p-4 text-center text-gray-400">
+                <p>Select a card to see details</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Archetypes Tab */}
+      {activeTab === 'archetypes' && archetypes.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-gray-400">
             No meta data available yet. Check back after tournament data is synced.
           </p>
         </div>
-      ) : (
+      ) : activeTab === 'archetypes' && (
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Left Column: Archetype List + Trends */}
           <div className="flex-1 lg:flex-[2] space-y-6 order-1">
@@ -511,7 +816,7 @@ export function MetaPage() {
   );
 }
 
-// Trend Card Component
+// Trend Card Component (Archetypes)
 function TrendCard({ trend, isRising }: { trend: ArchetypeTrend; isRising: boolean }) {
   return (
     <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
@@ -519,6 +824,31 @@ function TrendCard({ trend, isRising }: { trend: ArchetypeTrend; isRising: boole
         <span className="text-white font-medium">{trend.name}</span>
         <div className="text-sm text-gray-400">
           {trend.previous_percentage.toFixed(1)}% → {trend.current_percentage.toFixed(1)}%
+        </div>
+      </div>
+      <div className={clsx(
+        'text-sm font-medium px-2 py-1 rounded',
+        isRising ? 'text-green-400 bg-green-900/30' : 'text-red-400 bg-red-900/30'
+      )}>
+        {isRising ? '+' : ''}{trend.change.toFixed(1)}%
+      </div>
+    </div>
+  );
+}
+
+// Trend Card Component (Cards)
+function CardTrendCard({ trend, isRising }: { trend: CardTrend; isRising: boolean }) {
+  return (
+    <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+      <div>
+        <CardTooltip cardName={trend.card_name}>
+          <span className="text-white font-medium cursor-pointer hover:text-primary-300">
+            {trend.card_name}
+          </span>
+        </CardTooltip>
+        <div className="text-sm text-gray-400">
+          {trend.previous_percentage.toFixed(1)}% → {trend.current_percentage.toFixed(1)}%
+          <span className="ml-2 text-gray-500">({trend.current_deck_count} decks)</span>
         </div>
       </div>
       <div className={clsx(

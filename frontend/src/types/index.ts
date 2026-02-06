@@ -219,6 +219,50 @@ export interface MetaHealthResponse {
   assessment: string;
 }
 
+export interface CardArchetypeBreakdown {
+  name: string;
+  count: number;
+  percentage: number;
+}
+
+export interface CardMetaStatsEntry {
+  card_name: string;
+  deck_count: number;
+  total_decks: number;
+  meta_percentage: number;
+  main_deck_count: number;
+  sideboard_count: number;
+  avg_copies: number;
+  archetypes: CardArchetypeBreakdown[];
+}
+
+export interface CardMetaStatsResponse {
+  format: string;
+  snapshot_date: string;
+  total_cards: number;
+  cards: CardMetaStatsEntry[];
+}
+
+export interface CardTrend {
+  card_name: string;
+  current_percentage: number;
+  previous_percentage: number;
+  change: number;
+  change_percent: number;
+  current_deck_count: number;
+  avg_copies: number;
+}
+
+export interface CardTrendsResponse {
+  format: string;
+  current_date: string;
+  comparison_date: string;
+  rising: CardTrend[];
+  falling: CardTrend[];
+  new_cards: CardMetaStatsEntry[];
+  disappeared: string[];
+}
+
 // Auth types
 export interface AuthTokens {
   access_token: string;

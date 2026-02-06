@@ -258,6 +258,15 @@ export const metaApi = {
 
   getHealth: (format?: string) =>
     api.get('/meta/health', { params: { format } }),
+
+  getCardStats: (format?: string, limit?: number, offset?: number, sideboardOnly?: boolean) =>
+    api.get('/meta/cards', { params: { format, limit, offset, sideboard_only: sideboardOnly } }),
+
+  getCardDetail: (cardName: string, format?: string) =>
+    api.get(`/meta/cards/${encodeURIComponent(cardName)}`, { params: { format } }),
+
+  getCardTrends: (format?: string, daysBack?: number) =>
+    api.get('/meta/cards/trends', { params: { format, days_back: daysBack } }),
 };
 
 // Simulation API

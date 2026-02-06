@@ -91,3 +91,55 @@ class MetaHealthResponse(BaseModel):
     total_archetypes: int
     health_rating: str  # "Healthy", "Moderate", "Unhealthy"
     assessment: str  # Brief text assessment
+
+
+class CardArchetypeBreakdown(BaseModel):
+    """Which archetype uses a card and how often."""
+    name: str
+    count: int
+    percentage: float
+
+
+class CardMetaStatsEntry(BaseModel):
+    """Per-card metagame representation stats."""
+    card_name: str
+    deck_count: int
+    total_decks: int
+    meta_percentage: float
+    main_deck_count: int
+    sideboard_count: int
+    avg_copies: float
+    archetypes: List[CardArchetypeBreakdown]
+
+    class Config:
+        from_attributes = True
+
+
+class CardMetaStatsResponse(BaseModel):
+    """Response for the card meta stats endpoint."""
+    format: str
+    snapshot_date: date
+    total_cards: int
+    cards: List[CardMetaStatsEntry]
+
+
+class CardTrend(BaseModel):
+    """A card with its trend data (rising/falling)."""
+    card_name: str
+    current_percentage: float
+    previous_percentage: float
+    change: float  # Percentage point change
+    change_percent: float  # Relative change percentage
+    current_deck_count: int
+    avg_copies: float
+
+
+class CardTrendsResponse(BaseModel):
+    """Response containing rising and falling cards."""
+    format: str
+    current_date: date
+    comparison_date: date
+    rising: List[CardTrend]
+    falling: List[CardTrend]
+    new_cards: List[CardMetaStatsEntry]
+    disappeared: List[str]
