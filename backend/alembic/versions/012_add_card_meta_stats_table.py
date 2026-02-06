@@ -1,7 +1,7 @@
 """Add card_meta_stats table for individual card representation tracking
 
 Revision ID: 012
-Revises: f243f38bb0ca
+Revises: 011
 Create Date: 2026-02-06
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 # revision identifiers, used by Alembic.
 revision = '012'
-down_revision = 'f243f38bb0ca'
+down_revision = '011'
 branch_labels = None
 depends_on = None
 
