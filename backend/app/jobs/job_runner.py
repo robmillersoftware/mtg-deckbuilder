@@ -299,12 +299,23 @@ def create_mtgtop8_runner(run_id: Optional[str] = None) -> JobRunner:
     )
 
 
+def create_card_meta_stats_runner(run_id: Optional[str] = None) -> JobRunner:
+    """Create a job runner for card meta stats computation."""
+    from app.jobs.compute_card_meta_stats import compute_card_meta_stats
+
+    return JobRunner(
+        job_name="card_meta_stats",
+        job_func=compute_card_meta_stats,
+        run_id=run_id,
+    )
+
+
 async def run_job_with_retry(job_name: str, run_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Run a job by name with full retry logic.
 
     Args:
-        job_name: Name of the job ("scryfall_sync" or "mtgtop8_scrape")
+        job_name: Name of the job ("scryfall_sync", "mtgtop8_scrape", or "card_meta_stats")
         run_id: Optional run ID to use (for tracking jobs triggered via API)
 
     Returns:
@@ -314,6 +325,8 @@ async def run_job_with_retry(job_name: str, run_id: Optional[str] = None) -> Dic
         runner = create_scryfall_runner(run_id=run_id)
     elif job_name == "mtgtop8_scrape":
         runner = create_mtgtop8_runner(run_id=run_id)
+    elif job_name == "card_meta_stats":
+        runner = create_card_meta_stats_runner(run_id=run_id)
     else:
         raise ValueError(f"Unknown job: {job_name}")
 
