@@ -121,3 +121,25 @@ class CardMetaStatsResponse(BaseModel):
     snapshot_date: date
     total_cards: int
     cards: List[CardMetaStatsEntry]
+
+
+class CardTrend(BaseModel):
+    """A card with its trend data (rising/falling)."""
+    card_name: str
+    current_percentage: float
+    previous_percentage: float
+    change: float  # Percentage point change
+    change_percent: float  # Relative change percentage
+    current_deck_count: int
+    avg_copies: float
+
+
+class CardTrendsResponse(BaseModel):
+    """Response containing rising and falling cards."""
+    format: str
+    current_date: date
+    comparison_date: date
+    rising: List[CardTrend]
+    falling: List[CardTrend]
+    new_cards: List[CardMetaStatsEntry]
+    disappeared: List[str]

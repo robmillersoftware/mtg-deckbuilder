@@ -264,6 +264,9 @@ export const metaApi = {
 
   getCardDetail: (cardName: string, format?: string) =>
     api.get(`/meta/cards/${encodeURIComponent(cardName)}`, { params: { format } }),
+
+  getCardTrends: (format?: string, daysBack?: number) =>
+    api.get('/meta/cards/trends', { params: { format, days_back: daysBack } }),
 };
 
 // Simulation API

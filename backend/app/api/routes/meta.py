@@ -20,6 +20,8 @@ from app.schemas.meta import (
     CardMetaStatsEntry,
     CardMetaStatsResponse,
     CardArchetypeBreakdown,
+    CardTrend,
+    CardTrendsResponse,
 )
 
 router = APIRouter()
@@ -499,6 +501,135 @@ async def get_card_meta_stats(
         snapshot_date=latest_date,
         total_cards=total_cards,
         cards=cards,
+    )
+
+
+@router.get("/cards/trends", response_model=CardTrendsResponse)
+async def get_card_trends(
+    format: str = "standard",
+    days_back: int = Query(7, ge=1, le=30, description="Days to look back for comparison"),
+    min_percentage: float = Query(1.0, ge=0, description="Minimum meta % to include"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get rising and falling cards by comparing current card meta stats to a previous snapshot.
+    """
+    # Get the two most recent distinct snapshot dates
+    result = await db.execute(
+        select(distinct(CardMetaStats.snapshot_date))
+        .where(CardMetaStats.format == format)
+        .order_by(desc(CardMetaStats.snapshot_date))
+        .limit(10)
+    )
+    dates = [row[0] for row in result.fetchall()]
+
+    if len(dates) < 2:
+        return CardTrendsResponse(
+            format=format,
+            current_date=dates[0] if dates else date.today(),
+            comparison_date=dates[0] if dates else date.today(),
+            rising=[],
+            falling=[],
+            new_cards=[],
+            disappeared=[],
+        )
+
+    current_date = dates[0]
+    target_date = current_date - timedelta(days=days_back)
+    comparison_date = min(dates[1:], key=lambda d: abs((d - target_date).days))
+
+    # Fetch both snapshots
+    result = await db.execute(
+        select(CardMetaStats)
+        .where(CardMetaStats.format == format, CardMetaStats.snapshot_date == current_date)
+    )
+    current_cards = {r.card_name: r for r in result.scalars().all()}
+
+    result = await db.execute(
+        select(CardMetaStats)
+        .where(CardMetaStats.format == format, CardMetaStats.snapshot_date == comparison_date)
+    )
+    old_cards = {r.card_name: r for r in result.scalars().all()}
+
+    # Filter out basic lands
+    all_names = set(current_cards.keys()) | set(old_cards.keys())
+    land_names = set()
+    if all_names:
+        land_result = await db.execute(
+            select(Card.name)
+            .where(Card.name.in_(all_names))
+            .where(Card.type_line.ilike("%Basic Land%"))
+        )
+        land_names = {row.name for row in land_result.all()}
+
+    rising = []
+    falling = []
+    new_cards = []
+
+    for card_name, current in current_cards.items():
+        if card_name in land_names:
+            continue
+        cur_pct = float(current.meta_percentage)
+        if cur_pct < min_percentage:
+            continue
+
+        if card_name in old_cards:
+            old_pct = float(old_cards[card_name].meta_percentage)
+            change = cur_pct - old_pct
+
+            if old_pct > 0:
+                change_percent = (change / old_pct) * 100
+            else:
+                change_percent = 100.0 if cur_pct > 0 else 0.0
+
+            if abs(change) >= 0.5:
+                trend = CardTrend(
+                    card_name=card_name,
+                    current_percentage=cur_pct,
+                    previous_percentage=old_pct,
+                    change=change,
+                    change_percent=change_percent,
+                    current_deck_count=current.deck_count,
+                    avg_copies=float(current.avg_copies),
+                )
+                if change > 0:
+                    rising.append(trend)
+                else:
+                    falling.append(trend)
+        else:
+            # Newly appeared card
+            new_cards.append(CardMetaStatsEntry(
+                card_name=card_name,
+                deck_count=current.deck_count,
+                total_decks=current.total_decks,
+                meta_percentage=cur_pct,
+                main_deck_count=current.main_deck_count,
+                sideboard_count=current.sideboard_count,
+                avg_copies=float(current.avg_copies),
+                archetypes=[
+                    CardArchetypeBreakdown(**a) for a in (current.archetypes or [])
+                ],
+            ))
+
+    # Disappeared cards (were above threshold in old, gone from current)
+    disappeared = [
+        name for name, old in old_cards.items()
+        if name not in current_cards
+        and name not in land_names
+        and float(old.meta_percentage) >= min_percentage
+    ]
+
+    rising.sort(key=lambda x: x.change, reverse=True)
+    falling.sort(key=lambda x: x.change)
+
+    return CardTrendsResponse(
+        format=format,
+        current_date=current_date,
+        comparison_date=comparison_date,
+        rising=rising[:10],
+        falling=falling[:10],
+        new_cards=new_cards[:10],
+        disappeared=disappeared[:10],
     )
 
 

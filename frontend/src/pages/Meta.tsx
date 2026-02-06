@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { metaApi, usersApi } from '@/services/api';
-import { MetaArchetype, MetaTrendsResponse, MetaHealthResponse, ArchetypeTrend, CardMetaStatsEntry } from '@/types';
+import { MetaArchetype, MetaTrendsResponse, MetaHealthResponse, ArchetypeTrend, CardMetaStatsEntry, CardTrend, CardTrendsResponse } from '@/types';
 import { CardTooltip } from '@/components/CardTooltip';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import clsx from 'clsx';
@@ -64,6 +64,7 @@ export function MetaPage() {
   const [cardStatsLoading, setCardStatsLoading] = useState(false);
   const [selectedCard, setSelectedCard] = useState<CardMetaStatsEntry | null>(null);
   const [sideboardOnly, setSideboardOnly] = useState(false);
+  const [cardTrends, setCardTrends] = useState<CardTrendsResponse | null>(null);
 
   useEffect(() => {
     loadPreferencesAndMeta();
@@ -163,8 +164,22 @@ export function MetaPage() {
   const loadCardStats = async (selectedFormat: string, sbOnly: boolean) => {
     setCardStatsLoading(true);
     try {
-      const response = await metaApi.getCardStats(selectedFormat, 50, 0, sbOnly);
-      setCardStats(response.data.cards || []);
+      const [statsRes, trendsRes] = await Promise.allSettled([
+        metaApi.getCardStats(selectedFormat, 50, 0, sbOnly),
+        metaApi.getCardTrends(selectedFormat, 7),
+      ]);
+
+      if (statsRes.status === 'fulfilled') {
+        setCardStats(statsRes.value.data.cards || []);
+      } else {
+        setCardStats([]);
+      }
+
+      if (trendsRes.status === 'fulfilled') {
+        setCardTrends(trendsRes.value.data);
+      } else {
+        setCardTrends(null);
+      }
     } catch (error) {
       console.error('Failed to load card stats:', error);
       setCardStats([]);
@@ -288,7 +303,8 @@ export function MetaPage() {
       {/* Cards Tab */}
       {activeTab === 'cards' && (
         <div className="flex flex-col lg:flex-row gap-6">
-          <div className="flex-1 lg:flex-[2] order-1">
+          <div className="flex-1 lg:flex-[2] space-y-6 order-1">
+            {/* Card List */}
             <div className="bg-gray-900 rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
                 <h2 className="text-lg font-semibold text-white">Card Representation</h2>
@@ -310,7 +326,7 @@ export function MetaPage() {
                   No card meta data available yet. Run the card meta stats job after scraping.
                 </div>
               ) : (
-                <div className="divide-y divide-gray-800 max-h-[600px] overflow-y-auto">
+                <div className="divide-y divide-gray-800 max-h-[400px] overflow-y-auto">
                   {cardStats.map((card, index) => (
                     <button
                       key={card.card_name}
@@ -344,6 +360,115 @@ export function MetaPage() {
                       </span>
                     </button>
                   ))}
+                </div>
+              )}
+            </div>
+
+            {/* Card Trends */}
+            <div className="bg-gray-900 rounded-lg overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-800">
+                <h2 className="text-lg font-semibold text-white">Card Trends</h2>
+                {cardTrends && (
+                  <p className="text-sm text-gray-400 mt-1">
+                    Comparing to {new Date(cardTrends.comparison_date).toLocaleDateString()}
+                  </p>
+                )}
+              </div>
+
+              {cardStatsLoading ? (
+                <div className="p-4 text-center text-gray-400">Loading trends...</div>
+              ) : cardTrends ? (
+                <div className="p-4 space-y-6">
+                  {/* Rising Cards */}
+                  {cardTrends.rising.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-green-400 mb-3 flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M5.293 9.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L11 7.414V15a1 1 0 11-2 0V7.414L6.707 9.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Rising
+                      </h3>
+                      <div className="space-y-2">
+                        {cardTrends.rising.map((trend) => (
+                          <CardTrendCard key={trend.card_name} trend={trend} isRising={true} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Falling Cards */}
+                  {cardTrends.falling.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-red-400 mb-3 flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M14.707 10.293a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 12.586V5a1 1 0 012 0v7.586l2.293-2.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Falling
+                      </h3>
+                      <div className="space-y-2">
+                        {cardTrends.falling.map((trend) => (
+                          <CardTrendCard key={trend.card_name} trend={trend} isRising={false} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* New Cards */}
+                  {cardTrends.new_cards.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-blue-400 mb-3 flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" />
+                        </svg>
+                        New to Meta
+                      </h3>
+                      <div className="flex flex-wrap gap-2">
+                        {cardTrends.new_cards.map((card) => (
+                          <CardTooltip key={card.card_name} cardName={card.card_name}>
+                            <span className="px-3 py-1 bg-blue-900/30 text-blue-300 rounded-full text-sm cursor-pointer">
+                              {card.card_name} ({card.meta_percentage.toFixed(1)}%)
+                            </span>
+                          </CardTooltip>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Disappeared Cards */}
+                  {cardTrends.disappeared.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                        </svg>
+                        Fallen Off
+                      </h3>
+                      <div className="flex flex-wrap gap-2">
+                        {cardTrends.disappeared.map((name) => (
+                          <span
+                            key={name}
+                            className="px-3 py-1 bg-gray-800 text-gray-400 rounded-full text-sm line-through"
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* No Trends */}
+                  {cardTrends.rising.length === 0 &&
+                    cardTrends.falling.length === 0 &&
+                    cardTrends.new_cards.length === 0 &&
+                    cardTrends.disappeared.length === 0 && (
+                      <p className="text-gray-400 text-center py-4">
+                        No significant changes in card representation this week.
+                      </p>
+                    )}
+                </div>
+              ) : (
+                <div className="p-4 text-center text-gray-400">
+                  Not enough historical data to show card trends.
                 </div>
               )}
             </div>
@@ -691,7 +816,7 @@ export function MetaPage() {
   );
 }
 
-// Trend Card Component
+// Trend Card Component (Archetypes)
 function TrendCard({ trend, isRising }: { trend: ArchetypeTrend; isRising: boolean }) {
   return (
     <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
@@ -699,6 +824,31 @@ function TrendCard({ trend, isRising }: { trend: ArchetypeTrend; isRising: boole
         <span className="text-white font-medium">{trend.name}</span>
         <div className="text-sm text-gray-400">
           {trend.previous_percentage.toFixed(1)}% → {trend.current_percentage.toFixed(1)}%
+        </div>
+      </div>
+      <div className={clsx(
+        'text-sm font-medium px-2 py-1 rounded',
+        isRising ? 'text-green-400 bg-green-900/30' : 'text-red-400 bg-red-900/30'
+      )}>
+        {isRising ? '+' : ''}{trend.change.toFixed(1)}%
+      </div>
+    </div>
+  );
+}
+
+// Trend Card Component (Cards)
+function CardTrendCard({ trend, isRising }: { trend: CardTrend; isRising: boolean }) {
+  return (
+    <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+      <div>
+        <CardTooltip cardName={trend.card_name}>
+          <span className="text-white font-medium cursor-pointer hover:text-primary-300">
+            {trend.card_name}
+          </span>
+        </CardTooltip>
+        <div className="text-sm text-gray-400">
+          {trend.previous_percentage.toFixed(1)}% → {trend.current_percentage.toFixed(1)}%
+          <span className="ml-2 text-gray-500">({trend.current_deck_count} decks)</span>
         </div>
       </div>
       <div className={clsx(
