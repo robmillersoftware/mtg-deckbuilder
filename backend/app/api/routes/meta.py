@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, distinct
 
 from app.db.session import get_db
-from app.models.meta import MetaSnapshot, CardCooccurrence
+from app.models.meta import MetaSnapshot, CardCooccurrence, CardMetaStats
 from app.models.card import Card
 from app.schemas.meta import (
     MetaSnapshotResponse,
@@ -17,6 +17,9 @@ from app.schemas.meta import (
     ArchetypeTrend,
     MetaTrendsResponse,
     MetaHealthResponse,
+    CardMetaStatsEntry,
+    CardMetaStatsResponse,
+    CardArchetypeBreakdown,
 )
 
 router = APIRouter()
@@ -397,4 +400,141 @@ async def get_meta_health(
         total_archetypes=total_archetypes,
         health_rating=health_rating,
         assessment=assessment,
+    )
+
+
+@router.get("/cards", response_model=CardMetaStatsResponse)
+async def get_card_meta_stats(
+    format: str = "standard",
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    sideboard_only: bool = Query(False, description="Only show cards primarily in sideboards"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get the most-played individual cards in the current meta.
+
+    Returns cards ranked by meta representation percentage (how many tournament
+    decks include the card). Optionally filter to sideboard-only staples.
+    """
+    # Find the latest snapshot date for card meta stats
+    result = await db.execute(
+        select(CardMetaStats.snapshot_date)
+        .where(CardMetaStats.format == format)
+        .order_by(desc(CardMetaStats.snapshot_date))
+        .limit(1)
+    )
+    latest_date = result.scalar_one_or_none()
+
+    if latest_date is None:
+        return CardMetaStatsResponse(
+            format=format,
+            snapshot_date=date.today(),
+            total_cards=0,
+            cards=[],
+        )
+
+    # Build query
+    query = (
+        select(CardMetaStats)
+        .where(
+            CardMetaStats.format == format,
+            CardMetaStats.snapshot_date == latest_date,
+        )
+    )
+
+    if sideboard_only:
+        query = query.where(CardMetaStats.sideboard_count > CardMetaStats.main_deck_count)
+
+    # Get total count for pagination
+    count_result = await db.execute(
+        select(func.count())
+        .select_from(CardMetaStats)
+        .where(
+            CardMetaStats.format == format,
+            CardMetaStats.snapshot_date == latest_date,
+        )
+    )
+    total_cards = count_result.scalar() or 0
+
+    # Fetch page
+    result = await db.execute(
+        query
+        .order_by(desc(CardMetaStats.meta_percentage))
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = result.scalars().all()
+
+    # Filter out basic lands
+    land_names = set()
+    card_names = [r.card_name for r in rows]
+    if card_names:
+        land_result = await db.execute(
+            select(Card.name)
+            .where(Card.name.in_(card_names))
+            .where(Card.type_line.ilike("%Basic Land%"))
+        )
+        land_names = {row.name for row in land_result.all()}
+
+    cards = [
+        CardMetaStatsEntry(
+            card_name=r.card_name,
+            deck_count=r.deck_count,
+            total_decks=r.total_decks,
+            meta_percentage=float(r.meta_percentage),
+            main_deck_count=r.main_deck_count,
+            sideboard_count=r.sideboard_count,
+            avg_copies=float(r.avg_copies),
+            archetypes=[
+                CardArchetypeBreakdown(**a) for a in (r.archetypes or [])
+            ],
+        )
+        for r in rows
+        if r.card_name not in land_names
+    ]
+
+    return CardMetaStatsResponse(
+        format=format,
+        snapshot_date=latest_date,
+        total_cards=total_cards,
+        cards=cards,
+    )
+
+
+@router.get("/cards/{card_name}", response_model=CardMetaStatsEntry)
+async def get_card_meta_detail(
+    card_name: str,
+    format: str = "standard",
+    db: AsyncSession = Depends(get_db),
+):
+    """Get meta representation stats for a specific card."""
+    result = await db.execute(
+        select(CardMetaStats)
+        .where(
+            CardMetaStats.format == format,
+            CardMetaStats.card_name == card_name,
+        )
+        .order_by(desc(CardMetaStats.snapshot_date))
+        .limit(1)
+    )
+    row = result.scalar_one_or_none()
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No meta stats found for card '{card_name}'",
+        )
+
+    return CardMetaStatsEntry(
+        card_name=row.card_name,
+        deck_count=row.deck_count,
+        total_decks=row.total_decks,
+        meta_percentage=float(row.meta_percentage),
+        main_deck_count=row.main_deck_count,
+        sideboard_count=row.sideboard_count,
+        avg_copies=float(row.avg_copies),
+        archetypes=[
+            CardArchetypeBreakdown(**a) for a in (row.archetypes or [])
+        ],
     )

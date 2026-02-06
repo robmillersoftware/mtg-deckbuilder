@@ -91,3 +91,33 @@ class MetaHealthResponse(BaseModel):
     total_archetypes: int
     health_rating: str  # "Healthy", "Moderate", "Unhealthy"
     assessment: str  # Brief text assessment
+
+
+class CardArchetypeBreakdown(BaseModel):
+    """Which archetype uses a card and how often."""
+    name: str
+    count: int
+    percentage: float
+
+
+class CardMetaStatsEntry(BaseModel):
+    """Per-card metagame representation stats."""
+    card_name: str
+    deck_count: int
+    total_decks: int
+    meta_percentage: float
+    main_deck_count: int
+    sideboard_count: int
+    avg_copies: float
+    archetypes: List[CardArchetypeBreakdown]
+
+    class Config:
+        from_attributes = True
+
+
+class CardMetaStatsResponse(BaseModel):
+    """Response for the card meta stats endpoint."""
+    format: str
+    snapshot_date: date
+    total_cards: int
+    cards: List[CardMetaStatsEntry]

@@ -140,6 +140,47 @@ class ArchetypeTemplate(Base):
     )
 
 
+class CardMetaStats(Base):
+    """
+    Per-card metagame statistics computed from tournament decklists.
+    Tracks how frequently each card appears across the meta, average copies,
+    and which archetypes use it.
+    """
+
+    __tablename__ = "card_meta_stats"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    card_name = Column(String(255), nullable=False)
+    card_id = Column(UUID(as_uuid=True), nullable=True)  # Optional FK to cards table
+    format = Column(String(50), nullable=False, default="standard")
+    snapshot_date = Column(Date, nullable=False)
+
+    # How many tournament decklists include this card (main + sideboard)
+    deck_count = Column(Integer, nullable=False, default=0)
+    # Total decklists analyzed for the period
+    total_decks = Column(Integer, nullable=False, default=0)
+    # deck_count / total_decks * 100
+    meta_percentage = Column(Numeric(5, 2), nullable=False, default=0)
+
+    # Breakdown: how many decks run it in main vs sideboard
+    main_deck_count = Column(Integer, nullable=False, default=0)
+    sideboard_count = Column(Integer, nullable=False, default=0)
+
+    # Average number of copies when present
+    avg_copies = Column(Numeric(3, 1), nullable=False, default=0)
+
+    # Top archetypes that play this card: [{name, count, percentage}]
+    archetypes = Column(JSONB, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("card_name", "format", "snapshot_date", name="uq_card_meta_stats"),
+        Index("idx_card_meta_stats_format_date", "format", "snapshot_date"),
+        Index("idx_card_meta_stats_percentage", "format", "snapshot_date", "meta_percentage"),
+    )
+
+
 class CardCooccurrence(Base):
     """
     Card co-occurrence matrix for synergy recommendations.
