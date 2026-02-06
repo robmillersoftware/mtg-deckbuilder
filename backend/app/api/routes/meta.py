@@ -468,14 +468,14 @@ async def get_card_meta_stats(
     )
     rows = result.scalars().all()
 
-    # Filter out basic lands
+    # Filter out lands
     land_names = set()
     card_names = [r.card_name for r in rows]
     if card_names:
         land_result = await db.execute(
             select(Card.name)
             .where(Card.name.in_(card_names))
-            .where(Card.type_line.ilike("%Basic Land%"))
+            .where(Card.type_line.ilike("%Land%"))
         )
         land_names = {row.name for row in land_result.all()}
 
@@ -551,14 +551,14 @@ async def get_card_trends(
     )
     old_cards = {r.card_name: r for r in result.scalars().all()}
 
-    # Filter out basic lands
+    # Filter out lands
     all_names = set(current_cards.keys()) | set(old_cards.keys())
     land_names = set()
     if all_names:
         land_result = await db.execute(
             select(Card.name)
             .where(Card.name.in_(all_names))
-            .where(Card.type_line.ilike("%Basic Land%"))
+            .where(Card.type_line.ilike("%Land%"))
         )
         land_names = {row.name for row in land_result.all()}
 
