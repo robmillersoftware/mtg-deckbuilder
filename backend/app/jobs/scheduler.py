@@ -32,6 +32,11 @@ async def run_mtgtop8_with_retry():
     return await run_job_with_retry("mtgtop8_scrape")
 
 
+async def run_card_meta_stats_with_retry():
+    """Wrapper to run card meta stats computation with retry logic."""
+    return await run_job_with_retry("card_meta_stats")
+
+
 def configure_scheduler() -> AsyncIOScheduler:
     """Configure and return the scheduler with all jobs."""
 
@@ -56,6 +61,17 @@ def configure_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
     logger.info("Scheduled mtgtop8 scrape job: Sunday at 06:00 UTC (with retry)")
+
+    # Card meta stats - Sunday 8:00 AM UTC (after mtgtop8 scrape completes)
+    scheduler.add_job(
+        run_card_meta_stats_with_retry,
+        trigger=CronTrigger(day_of_week="sun", hour=8, minute=0, timezone="UTC"),
+        id="card_meta_stats",
+        name="Card Meta Stats Computation",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("Scheduled card meta stats job: Sunday at 08:00 UTC (with retry)")
 
     return scheduler
 
@@ -92,7 +108,7 @@ async def run_job_manually(job_id: str) -> dict:
     Manually trigger a job to run immediately with retry logic.
 
     Args:
-        job_id: The job ID to run ("scryfall_sync" or "mtgtop8_scrape")
+        job_id: The job ID to run ("scryfall_sync", "mtgtop8_scrape", or "card_meta_stats")
 
     Returns:
         Job execution result with retry metadata
