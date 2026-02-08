@@ -73,6 +73,7 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
   };
 
   const handleMouseLeave = () => {
+    if (isTouchDevice()) return;
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
