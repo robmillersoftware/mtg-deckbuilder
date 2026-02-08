@@ -158,11 +158,28 @@ export interface Conversation {
   updated_at: string;
 }
 
+export interface CardSuggestionItem {
+  card_name: string;
+  quantity: number;
+  mana_cost?: string;
+  type_line?: string;
+  image_uri?: string;
+  reasoning?: string;
+}
+
+export interface CardSuggestionGroup {
+  group_name: string;
+  role: string;
+  cards: CardSuggestionItem[];
+  is_batch: boolean;
+}
+
 export interface ChatResponse {
   response: string;
   conversation_id: string;
   deck?: Partial<Deck>;
   suggestions?: string[];
+  card_suggestions?: CardSuggestionGroup[];
 }
 
 export interface CardExplanationResponse {

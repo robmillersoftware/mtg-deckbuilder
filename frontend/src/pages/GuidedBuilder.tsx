@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { guidedBuildApi } from '@/services/api';
 import { DeckList } from '@/components/DeckList';
 import { DeckActions } from '@/components/DeckActions';
+import { CardSuggestions } from '@/components/CardSuggestions';
 import { Message } from '@/types';
 import ReactMarkdown, { Components } from 'react-markdown';
 import { CardTooltip } from '@/components/CardTooltip';
@@ -20,11 +21,11 @@ const FORMAT_OPTIONS = [
 
 const STARTER_PROMPTS = [
   { label: 'Build around a card', prompt: "I want to build around ", incomplete: true },
-  { label: "What's good right now?", prompt: "What decks are performing well in the current meta?" },
-  { label: 'Aggressive deck', prompt: "Build me a fast aggressive deck that can win quickly" },
-  { label: 'Control deck', prompt: "Build me a control deck with lots of answers and card draw" },
-  { label: 'Pick for me', prompt: "Build me the best deck for the current meta. Surprise me." },
-  { label: 'Combo deck', prompt: "Build me a combo deck with a powerful win condition" },
+  { label: "What's strong right now?", prompt: "What decks are performing well in the current meta?" },
+  { label: 'Aggressive deck', prompt: "I want to build an aggressive deck. What colors and strategies work best?" },
+  { label: 'Control deck', prompt: "I want to play control. What are my best options?" },
+  { label: 'Just build me a deck', prompt: "Just build me the best deck for the current meta. Skip the suggestions and build the whole thing." },
+  { label: 'Help me tune a list', prompt: "I have a deck started, help me improve it" },
 ];
 
 const PROGRESS_MESSAGES = [
@@ -65,6 +66,7 @@ export function GuidedBuilderPage() {
     messages,
     isLoading,
     suggestions,
+    cardSuggestions,
     format,
     setFormat,
     sendMessage,
@@ -80,7 +82,7 @@ export function GuidedBuilderPage() {
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, cardSuggestions]);
 
   // Progress message rotation
   useEffect(() => {
@@ -215,9 +217,20 @@ export function GuidedBuilderPage() {
               </div>
             </div>
           ) : (
-            messages.map((message, index) => (
-              <MessageBubble key={index} message={message} />
-            ))
+            <>
+              {messages.map((message, index) => (
+                <MessageBubble key={index} message={message} />
+              ))}
+
+              {/* Card Suggestions - rendered after the last assistant message */}
+              {cardSuggestions && cardSuggestions.length > 0 && !isLoading && (
+                <div className="flex justify-start">
+                  <div className="max-w-[90%]">
+                    <CardSuggestions groups={cardSuggestions} />
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {isLoading && (
@@ -236,30 +249,19 @@ export function GuidedBuilderPage() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Quick Actions (when deck exists) */}
-        {currentDeck && !isLoading && (
+        {/* Quick Actions */}
+        {hasMessages && !isLoading && suggestions.length > 0 && (
           <div className="px-4 py-2 border-t border-gray-700">
             <div className="flex flex-wrap gap-2">
-              {suggestions.length > 0
-                ? suggestions.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => sendMessage(s)}
-                      className="px-3 py-1 text-xs rounded-full bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
-                    >
-                      {s}
-                    </button>
-                  ))
-                : ['Add more removal', 'Optimize the mana base', 'Build the sideboard', 'Make it faster'].map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => sendMessage(s)}
-                      className="px-3 py-1 text-xs rounded-full bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
-                    >
-                      {s}
-                    </button>
-                  ))
-              }
+              {suggestions.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => sendMessage(s)}
+                  className="px-3 py-1 text-xs rounded-full bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+                >
+                  {s}
+                </button>
+              ))}
             </div>
           </div>
         )}

@@ -7,8 +7,10 @@ color distribution, role coverage gaps, and card suggestions.
 
 from typing import Optional, List, Dict, Any
 import logging
+import math
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
 
 from app.services.card_service import CardService
 
@@ -199,6 +201,152 @@ class DeckAnalyzer:
             })
 
         return results
+
+    async def suggest_cards_for_strategy(
+        self,
+        strategy: str,
+        colors: List[str],
+        roles: List[str],
+        existing_cards: List[str],
+        format: str = "standard",
+        cards_per_role: int = 8,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Suggest cards grouped by role for a given strategy.
+        Returns {role: [card_data, ...]} with rich metadata.
+        Used by suggest_core and suggest_package handlers.
+        """
+        existing_lower = {n.lower() for n in existing_cards}
+        results: Dict[str, List[Dict[str, Any]]] = {}
+
+        for role in roles:
+            query = f"{role} {strategy} cards for {''.join(colors)} deck"
+            try:
+                cards = await self.card_service.semantic_search(
+                    query=query,
+                    colors=colors if colors else None,
+                    format=format,
+                    limit=cards_per_role * 4,
+                )
+            except Exception:
+                cards = await self.card_service.search(
+                    colors=colors if colors else None,
+                    standard_only=(format == "standard"),
+                    format=format,
+                    limit=cards_per_role * 4,
+                )
+
+            role_cards = []
+            for card in cards:
+                if card.name.lower() in existing_lower:
+                    continue
+                if len(role_cards) >= cards_per_role:
+                    break
+                role_cards.append({
+                    "card_name": card.name,
+                    "card_id": str(card.id),
+                    "mana_cost": card.mana_cost,
+                    "type_line": card.type_line,
+                    "oracle_text": card.oracle_text,
+                    "image_uri": card.image_uri,
+                    "image_uri_small": card.image_uri_small,
+                })
+
+            if role_cards:
+                results[role] = role_cards
+
+        return results
+
+    async def compute_mana_base(
+        self,
+        main_deck: List[Dict[str, Any]],
+        colors: List[str],
+        format: str = "standard",
+        target_total: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Compute a mana base for the current deck.
+        Returns a list of land entries with quantities.
+        """
+        from app.services.card_service import get_format_legality_condition
+        from app.models.card import Card
+
+        nonland_count = 0
+        color_pips: Dict[str, int] = {}
+        for entry in main_deck:
+            card_data = entry.get("card", {}) or {}
+            type_line = (card_data.get("type_line") or "").lower()
+            if "land" in type_line:
+                continue
+            qty = entry.get("quantity", 0)
+            nonland_count += qty
+            mana_cost = card_data.get("mana_cost", "") or ""
+            for color in ["W", "U", "B", "R", "G"]:
+                pips = mana_cost.count(f"{{{color}}}")
+                if pips > 0:
+                    color_pips[color] = color_pips.get(color, 0) + (pips * qty)
+
+        if format == "cedh":
+            target = target_total or max(34, 99 - nonland_count)
+        else:
+            target = target_total or max(20, 60 - nonland_count)
+
+        total_pips = sum(color_pips.values()) or 1
+        lands: List[Dict[str, Any]] = []
+
+        # Allocate dual/fetch lands first, then basics
+        # For now, use basics proportional to color pips
+        basic_map = {"W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest"}
+        allocated = 0
+
+        # Search for dual lands in the colors
+        if len(colors) >= 2:
+            dual_query = f"dual land {''.join(colors)}"
+            try:
+                dual_cards = await self.card_service.semantic_search(
+                    query=dual_query,
+                    format=format,
+                    limit=20,
+                )
+            except Exception:
+                dual_cards = []
+
+            dual_count = min(len(dual_cards), target // 3)
+            for card in dual_cards[:dual_count]:
+                type_line = (card.type_line or "").lower()
+                if "land" not in type_line:
+                    continue
+                lands.append({
+                    "card_name": card.name,
+                    "quantity": 1 if format == "cedh" else min(4, 2),
+                    "mana_cost": card.mana_cost,
+                    "type_line": card.type_line,
+                    "image_uri": card.image_uri,
+                })
+                allocated += lands[-1]["quantity"]
+                if allocated >= target // 3:
+                    break
+
+        # Fill remaining with basics
+        remaining = target - allocated
+        if remaining > 0 and colors:
+            for color in colors:
+                basic_name = basic_map.get(color)
+                if not basic_name:
+                    continue
+                ratio = color_pips.get(color, 1) / total_pips
+                qty = max(1, round(remaining * ratio))
+                card = await self.card_service.get_by_name(basic_name, format=format)
+                if card:
+                    lands.append({
+                        "card_name": card.name,
+                        "quantity": qty,
+                        "mana_cost": card.mana_cost,
+                        "type_line": card.type_line,
+                        "image_uri": card.image_uri,
+                    })
+
+        return lands
 
     def _estimate_cmc(self, mana_cost: str) -> int:
         """Estimate CMC from mana cost string like {2}{U}{U}."""

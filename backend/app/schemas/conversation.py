@@ -41,6 +41,23 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     conversation_id: Optional[UUID] = None
     format: Optional[str] = Field(default="standard", description="Game format (standard, historic, modern, legacy, cedh)")
+    current_deck: Optional[Dict[str, Any]] = Field(default=None, description="Current local deck state synced from frontend")
+
+
+class CardSuggestionItem(BaseModel):
+    card_name: str
+    quantity: int = 1
+    mana_cost: Optional[str] = None
+    type_line: Optional[str] = None
+    image_uri: Optional[str] = None
+    reasoning: Optional[str] = None
+
+
+class CardSuggestionGroup(BaseModel):
+    group_name: str
+    role: str
+    cards: List[CardSuggestionItem]
+    is_batch: bool = False
 
 
 class ChatResponse(BaseModel):
@@ -48,6 +65,7 @@ class ChatResponse(BaseModel):
     conversation_id: UUID
     deck: Optional[Dict[str, Any]] = None
     suggestions: Optional[List[str]] = None
+    card_suggestions: Optional[List[Dict[str, Any]]] = None
 
 
 class CardExplanationRequest(BaseModel):

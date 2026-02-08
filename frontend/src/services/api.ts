@@ -223,11 +223,12 @@ export const conversationsApi = {
 
   create: () => api.post('/conversations'),
 
-  sendMessage: (message: string, conversationId?: string, format?: string) =>
+  sendMessage: (message: string, conversationId?: string, format?: string, currentDeck?: any) =>
     api.post('/conversations/chat', {
       message,
       conversation_id: conversationId,
       format: format || 'standard',
+      current_deck: currentDeck || null,
     }),
 
   explainCard: (cardName: string, conversationId?: string) =>

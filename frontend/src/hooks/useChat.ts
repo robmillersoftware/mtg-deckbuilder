@@ -3,12 +3,13 @@ import { useConversationStore } from '@/store/conversation';
 import { useDeckStore } from '@/store/deck';
 import { usePreferencesStore } from '@/store/preferences';
 import { conversationsApi } from '@/services/api';
-import { Message, ChatResponse } from '@/types';
+import { Message, ChatResponse, CardSuggestionGroup } from '@/types';
 import toast from 'react-hot-toast';
 
 export function useChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [cardSuggestions, setCardSuggestions] = useState<CardSuggestionGroup[] | null>(null);
 
   const {
     currentConversation,
@@ -23,6 +24,8 @@ export function useChat() {
     if (!content.trim() || isLoading) return;
 
     setIsLoading(true);
+    // Clear previous card suggestions on new message
+    setCardSuggestions(null);
 
     // Add user message optimistically
     const userMessage: Message = {
@@ -36,10 +39,14 @@ export function useChat() {
       // Get the current format from conversation store (per-conversation format)
       const format = useConversationStore.getState().currentFormat;
 
+      // Get current deck state to sync with backend
+      const currentDeck = useDeckStore.getState().currentDeck;
+
       const response = await conversationsApi.sendMessage(
         content,
         currentConversation?.id,
-        format
+        format,
+        currentDeck || undefined
       );
 
       const data: ChatResponse = response.data;
@@ -68,9 +75,14 @@ export function useChat() {
       };
       addMessage(assistantMessage);
 
-      // Update deck if included in response
+      // Update deck if included in response (full deck generation / modification)
       if (data.deck) {
         setCurrentDeck(data.deck);
+      }
+
+      // Update card suggestions if included
+      if (data.card_suggestions) {
+        setCardSuggestions(data.card_suggestions);
       }
 
       // Update suggestions
@@ -133,6 +145,7 @@ export function useChat() {
     setCurrentConversation(null);
     setCurrentDeck(null);
     setSuggestions([]);
+    setCardSuggestions(null);
     // Reset format to user's default preference
     const defaultFormat = usePreferencesStore.getState().defaultFormat;
     useConversationStore.getState().setFormat(defaultFormat);
@@ -147,6 +160,7 @@ export function useChat() {
     conversationId: currentConversation?.id,
     isLoading,
     suggestions,
+    cardSuggestions,
     format: currentFormat,
     setFormat,
     sendMessage,
