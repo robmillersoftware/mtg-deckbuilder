@@ -271,21 +271,20 @@ export const metaApi = {
 
 // Guided Build API
 export const guidedBuildApi = {
-  start: (format: string = 'standard') =>
-    api.post('/guided-build/start', { format }),
-
-  advance: (sessionId: string, selections: Record<string, any>) =>
-    api.post('/guided-build/advance', {
-      session_id: sessionId,
-      selections,
+  analyze: (mainDeck: any[], sideboard: any[], format: string = 'standard') =>
+    api.post('/guided-build/analyze', {
+      main_deck: mainDeck,
+      sideboard: sideboard,
+      format,
     }),
 
-  goBack: (sessionId: string) =>
-    api.post(`/guided-build/${sessionId}/back`),
-
-  complete: (sessionId: string, deckName?: string, save: boolean = false) =>
-    api.post(`/guided-build/${sessionId}/complete`, null, {
-      params: { deck_name: deckName, save },
+  suggest: (mainDeck: any[], colors: string[], role: string, format: string = 'standard', limit: number = 6) =>
+    api.post('/guided-build/suggest', {
+      main_deck: mainDeck,
+      colors,
+      role,
+      format,
+      limit,
     }),
 };
 
