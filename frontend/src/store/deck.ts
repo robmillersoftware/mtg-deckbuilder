@@ -65,11 +65,13 @@ export const useDeckStore = create<DeckState>((set, _get) => ({
 
   addCard: (card, target) =>
     set((state) => {
-      if (!state.currentDeck) return state;
+      // Initialize a new deck if one doesn't exist yet (e.g. when adding
+      // cards from AI suggestions before a full deck has been generated)
+      const deck = state.currentDeck || { main_deck: [], sideboard: [] };
 
       const list = target === 'main'
-        ? [...(state.currentDeck.main_deck || [])]
-        : [...(state.currentDeck.sideboard || [])];
+        ? [...(deck.main_deck || [])]
+        : [...(deck.sideboard || [])];
 
       const existingIndex = list.findIndex((e) => e.card_name === card.card_name);
 
@@ -84,7 +86,7 @@ export const useDeckStore = create<DeckState>((set, _get) => ({
 
       return {
         currentDeck: {
-          ...state.currentDeck,
+          ...deck,
           [target === 'main' ? 'main_deck' : 'sideboard']: list,
         },
         isDirty: true,
