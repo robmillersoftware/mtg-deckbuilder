@@ -269,6 +269,26 @@ export const metaApi = {
     api.get('/meta/cards/trends', { params: { format, days_back: daysBack } }),
 };
 
+// Guided Build API
+export const guidedBuildApi = {
+  start: (format: string = 'standard') =>
+    api.post('/guided-build/start', { format }),
+
+  advance: (sessionId: string, selections: Record<string, any>) =>
+    api.post('/guided-build/advance', {
+      session_id: sessionId,
+      selections,
+    }),
+
+  goBack: (sessionId: string) =>
+    api.post(`/guided-build/${sessionId}/back`),
+
+  complete: (sessionId: string, deckName?: string, save: boolean = false) =>
+    api.post(`/guided-build/${sessionId}/complete`, null, {
+      params: { deck_name: deckName, save },
+    }),
+};
+
 // Simulation API
 export const simulationApi = {
   // Legacy synchronous endpoints

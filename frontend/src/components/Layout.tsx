@@ -51,6 +51,7 @@ export function Layout() {
 
   const navigation = [
     { name: 'Build', href: '/', tourId: 'build' },
+    { name: 'Guided Build', href: '/build', tourId: 'guided-build' },
     { name: 'My Decks', href: '/decks', auth: true, tourId: 'my-decks' },
     { name: 'Simulate', href: '/simulate', auth: true, tourId: 'simulate' },
     { name: 'Import', href: '/import', auth: true, tourId: 'import' },
