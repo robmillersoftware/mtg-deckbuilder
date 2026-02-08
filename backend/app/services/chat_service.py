@@ -38,31 +38,31 @@ TOOLS = [
     },
     {
         "name": "generate_deck",
-        "description": "Generate a new Magic: The Gathering deck based on SPECIFIC user requirements (colors, archetype). Only use this when the user has specified what colors or archetype they want. If the user is vague or says 'whatever is best', use generate_best_meta_deck instead.",
+        "description": "Generate a new Magic: The Gathering deck. Use this when the user specifies ANY preferences - colors, archetype, strategy, specific cards, or a card to build around. You do NOT need all fields - use whatever the user gave you and make smart defaults for the rest.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "colors": {
                     "type": "array",
                     "items": {"type": "string", "enum": ["W", "U", "B", "R", "G"]},
-                    "description": "The color(s) for the deck. W=White, U=Blue, B=Black, R=Red, G=Green"
+                    "description": "The color(s) for the deck. W=White, U=Blue, B=Black, R=Red, G=Green. If the user doesn't specify, pick colors that make sense for their request."
                 },
                 "archetype": {
                     "type": "string",
                     "enum": ["aggro", "control", "midrange", "combo", "tempo"],
-                    "description": "The deck archetype/strategy"
+                    "description": "The deck archetype/strategy. If the user doesn't specify, pick one that makes sense."
                 },
                 "strategy": {
                     "type": "string",
-                    "description": "Brief description of the deck strategy or theme"
+                    "description": "Brief description of the deck strategy or theme, including any cards to build around"
                 },
                 "specific_cards": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Specific cards the user wants included"
+                    "description": "Specific cards the user wants included in the deck"
                 }
             },
-            "required": ["colors", "archetype"]
+            "required": []
         }
     },
     {
@@ -185,18 +185,24 @@ Note: Building for {format_name} format - 60 card minimum, 4 copies max of any n
 {deck_context}
 {format_guidance}
 
-Your role:
-1. If the user wants a deck but is VAGUE about specifics (says "whatever is best", "build me something good", "analyze meta and build", "surprise me", or doesn't specify colors/archetype) - use the generate_best_meta_deck tool IMMEDIATELY. Do NOT ask clarifying questions.
-2. If the user EXPLICITLY specifies colors AND/OR archetype (like "red aggro" or "blue-white control") - use the generate_deck tool
-3. If the user asks to modify/change/adjust the current deck - use the modify_deck tool
-4. If the user asks about matchups, meta, how to beat something, or sideboard advice - use the get_matchup_info tool
-5. For general questions about MTG strategy, cards, or rules - respond directly with helpful information
+ABSOLUTE RULE: NEVER ask clarifying questions when the user wants a deck. ALWAYS use a tool and build something immediately. You can make your best guess for anything the user didn't specify. A wrong deck that exists is infinitely better than no deck and a list of questions.
 
-CRITICAL: When a user says "Whatever is best" or similar vague responses, this is NOT a request for more questions - it means "YOU decide for me". Use generate_best_meta_deck immediately.
+When to use each tool:
+1. User mentions a SPECIFIC CARD to build around (e.g. "build around Moonshadow", "I want to use Lightning Bolt") → use generate_deck with the card name in specific_cards. Pick appropriate colors and archetype yourself.
+2. User specifies colors and/or archetype (e.g. "red aggro", "blue-white control") → use generate_deck with those preferences.
+3. User is vague or says "whatever is best", "surprise me", "build me something good" → use generate_best_meta_deck immediately.
+4. User wants to modify/change/adjust the current deck → use modify_deck.
+5. User asks about matchups, meta positioning, how to beat something → use get_matchup_info.
+6. General MTG questions about strategy, cards, or rules → respond directly.
 
-IMPORTANT: Questions like "How do I beat X?" or "What's good against Y?" are strategy questions - do NOT generate a deck for these. Either use get_matchup_info if there's a current deck, or just provide strategy advice.
+CRITICAL RULES:
+- If the user mentions ANY card name, even one you don't recognize, put it in specific_cards and call generate_deck. The card database will handle validation.
+- If the user doesn't specify colors, pick colors that make sense for their request.
+- If the user doesn't specify an archetype, pick one that fits.
+- NEVER respond with "Could you clarify..." or "Which card do you mean..." or "Do you have preferences for...". Just build the deck.
+- Questions like "How do I beat X?" are strategy questions - use get_matchup_info, don't generate a deck.
 
-Be decisive and action-oriented. Focus on competitive {format_name} play."""
+Be decisive. Act first, adjust later."""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
@@ -468,11 +474,17 @@ Be decisive and action-oriented. Focus on competitive {format_name} play."""
         logger.info(f"[CHAT-SERVICE] _handle_deck_generation: format={format}, colors={colors}, specific_cards={specific_cards}")
 
         # Build a prompt from the parsed data
-        prompt = f"Build a {' '.join(colors) if colors else ''} {archetype} deck"
+        if specific_cards and not colors:
+            # Card-first build - let the generator figure out colors from the cards
+            prompt = f"Build a competitive deck around {', '.join(specific_cards)}"
+            if archetype:
+                prompt += f" using a {archetype} strategy"
+        else:
+            prompt = f"Build a {' '.join(colors) if colors else ''} {archetype} deck"
+            if specific_cards:
+                prompt += f" including {', '.join(specific_cards)}"
         if strategy:
-            prompt += f" focused on {strategy}"
-        if specific_cards:
-            prompt += f" including {', '.join(specific_cards)}"
+            prompt += f". Strategy: {strategy}"
 
         result = await self.deck_generator.generate(
             prompt=prompt,
