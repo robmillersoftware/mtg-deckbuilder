@@ -263,6 +263,10 @@ class ChatService:
         # Get current deck context
         deck = conversation.current_deck
 
+        # Ensure conversation context exists
+        if conversation.context is None:
+            conversation.context = {}
+
         # Add user message to conversation
         conversation.add_message("user", message)
 
@@ -293,6 +297,12 @@ class ChatService:
             # Build deck context string
             deck_context = self._build_deck_context(deck)
 
+            # Build conversation context string from persisted state
+            conv_context = self._build_conversation_context(conversation)
+
+            # Build conversation summary for long conversations
+            conv_summary = self._build_conversation_summary(conversation)
+
             # Format-specific guidance
             format_name = "cEDH" if format == "cedh" else format.capitalize()
             format_guidance = self._get_format_guidance(format, format_name)
@@ -300,7 +310,9 @@ class ChatService:
             system_prompt = f"""You are Spellbook, a collaborative deck building partner for {format_name} format.
 You work WITH the user, not FOR them. Suggest cards, explain choices, let them decide.
 
+{conv_context}
 {deck_context}
+{conv_summary}
 {format_guidance}
 
 FLOW:
@@ -320,7 +332,8 @@ RULES:
 - Be concise in your text responses. Focus on actionable advice.
 - Always explain your reasoning briefly when suggesting a direction.
 - NEVER ask the user to clarify which card they mean if CARD REFERENCES are provided below. The card has already been identified from the database. Proceed directly to building around it.
-- If the user names a card that IS in the CARD REFERENCES section, treat it as unambiguous and immediately proceed to suggest_core or the appropriate next step.{card_context}"""
+- If the user names a card that IS in the CARD REFERENCES section, treat it as unambiguous and immediately proceed to suggest_core or the appropriate next step.
+- IMPORTANT: When the user asks for "more support", "more help", "more options", or similar continuation requests, continue building on the CURRENT STRATEGY described in the conversation context above. Do NOT reset to a generic help menu. Suggest more cards, offer alternative approaches within the strategy, or advance to the next phase.{card_context}"""
 
             # Build conversation history - send last 20 messages for multi-turn context
             recent = conversation.messages[-20:] if conversation.messages else []
@@ -375,13 +388,93 @@ RULES:
                 return ChatResponse(
                     response=response_text,
                     conversation_id=conversation.id,
-                    suggestions=self._get_suggestions(deck),
+                    suggestions=self._get_suggestions(deck, conversation),
                 )
 
         except Exception as e:
             logger.error(f"Chat processing error: {e}", exc_info=True)
 
         return await self._fallback_response(message, conversation, user_id)
+
+    def _build_conversation_context(self, conversation: Conversation) -> str:
+        """Build a structured context string from persisted conversation state.
+
+        This ensures Claude always knows what strategy is being built,
+        what phase the conversation is in, and what key decisions have been made,
+        even if the early messages have scrolled out of the 20-message window.
+        """
+        ctx = conversation.get_context()
+        if not ctx:
+            return ""
+
+        parts = ["CONVERSATION CONTEXT (persisted state):"]
+
+        if ctx.get("strategy"):
+            parts.append(f"- Strategy: {ctx['strategy']}")
+        if ctx.get("colors"):
+            color_str = ", ".join(ctx["colors"])
+            parts.append(f"- Colors: {color_str}")
+        if ctx.get("archetype"):
+            parts.append(f"- Archetype: {ctx['archetype']}")
+        if ctx.get("build_around_cards"):
+            cards_str = ", ".join(ctx["build_around_cards"])
+            parts.append(f"- Build-around cards: {cards_str}")
+        if ctx.get("phase"):
+            parts.append(f"- Current phase: {ctx['phase']}")
+        if ctx.get("roles_suggested"):
+            roles_str = ", ".join(ctx["roles_suggested"])
+            parts.append(f"- Roles already suggested: {roles_str}")
+        if ctx.get("user_preferences"):
+            parts.append(f"- User preferences: {ctx['user_preferences']}")
+
+        if len(parts) == 1:
+            return ""
+
+        parts.append("Use this context to maintain continuity. The user expects you to remember what you're building together.")
+        return "\n".join(parts)
+
+    def _build_conversation_summary(self, conversation: Conversation) -> str:
+        """Build a summary of older messages that have scrolled out of the recent window.
+
+        When the conversation exceeds 20 messages, the earlier messages are dropped
+        from the API call. This method provides a text summary of those older messages
+        so important context isn't lost.
+        """
+        messages = conversation.messages or []
+        if len(messages) <= 20:
+            return ""
+
+        # Summarize messages that won't be in the recent window
+        older_messages = messages[:-20]
+
+        # Extract key decisions and actions from older messages
+        key_points = []
+        for msg in older_messages:
+            content = msg.get("content", "")
+            role = msg.get("role", "")
+
+            if role == "user":
+                # Capture user's stated goals and preferences
+                lower = content.lower()
+                if any(kw in lower for kw in ["i want", "build around", "focus on", "i like", "i prefer", "let's build"]):
+                    # Truncate very long messages
+                    key_points.append(f"User said: \"{content[:150]}\"")
+            elif role == "assistant":
+                # Capture key suggestions/decisions from assistant
+                if "suggestions for your" in content.lower():
+                    # This was a suggest_core response - capture the strategy
+                    idx = content.lower().find("suggestions for your")
+                    snippet = content[idx:idx+100].split("deck")[0] + "deck"
+                    key_points.append(f"Assistant provided {snippet}")
+                elif "meta:" in content.lower():
+                    key_points.append("Assistant provided meta analysis")
+
+        if not key_points:
+            return ""
+
+        summary = "EARLIER CONVERSATION SUMMARY (messages before the recent window):\n"
+        summary += "\n".join(f"- {point}" for point in key_points[:10])
+        return summary
 
     def _build_deck_context(self, deck: Optional[Dict[str, Any]]) -> str:
         """Build deck context string for the system prompt."""
@@ -477,6 +570,9 @@ RULES:
             logger.warning(f"Unknown tool: {tool_name}")
             return None
 
+        # Persist context from tool inputs so future turns remember what we're building
+        self._update_context_from_tool(tool_name, tool_input, conversation)
+
         # Handlers that need user_id
         if tool_name in ("modify_deck", "generate_full_deck"):
             return await handler(tool_input, conversation, user_id, ai_text)
@@ -484,6 +580,78 @@ RULES:
             return await handler(tool_input, conversation, ai_text)
         else:
             return await handler(tool_input, conversation, ai_text)
+
+    def _update_context_from_tool(
+        self,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+        conversation: Conversation,
+    ) -> None:
+        """Extract and persist conversation context from tool call parameters.
+
+        This is the key to maintaining context across turns. When Claude calls
+        suggest_core with strategy="Moonshadow graveyard synergy" and colors=["B","G"],
+        we persist that so the next turn's system prompt includes it.
+        """
+        if tool_name == "suggest_core":
+            conversation.update_context(
+                strategy=tool_input.get("strategy"),
+                colors=tool_input.get("colors"),
+                phase="building_core",
+            )
+            # Track roles suggested so far
+            roles = tool_input.get("roles", [])
+            existing_roles = conversation.get_context().get("roles_suggested", [])
+            all_roles = list(set(existing_roles + roles))
+            conversation.update_context(roles_suggested=all_roles)
+
+            # Track build-around cards from strategy
+            if tool_input.get("strategy"):
+                conversation.update_context(
+                    archetype=tool_input.get("strategy")
+                )
+
+        elif tool_name == "suggest_package":
+            conversation.update_context(
+                phase="filling_gaps",
+            )
+            # Update strategy/colors if provided (may refine from earlier)
+            if tool_input.get("strategy"):
+                conversation.update_context(strategy=tool_input["strategy"])
+            if tool_input.get("colors"):
+                conversation.update_context(colors=tool_input["colors"])
+            # Track additional roles
+            role = tool_input.get("role")
+            if role:
+                existing_roles = conversation.get_context().get("roles_suggested", [])
+                if role not in existing_roles:
+                    conversation.update_context(roles_suggested=existing_roles + [role])
+
+        elif tool_name == "finalize_mana_base":
+            conversation.update_context(phase="lands")
+            if tool_input.get("colors"):
+                conversation.update_context(colors=tool_input["colors"])
+
+        elif tool_name == "generate_full_deck":
+            conversation.update_context(
+                strategy=tool_input.get("strategy"),
+                colors=tool_input.get("colors"),
+                archetype=tool_input.get("archetype"),
+                phase="complete",
+            )
+            if tool_input.get("specific_cards"):
+                conversation.update_context(
+                    build_around_cards=tool_input["specific_cards"]
+                )
+
+        elif tool_name == "analyze_meta":
+            conversation.update_context(phase="exploring")
+
+        elif tool_name == "modify_deck":
+            conversation.update_context(phase="refining")
+
+        elif tool_name == "get_matchup_info":
+            conversation.update_context(phase="refining")
 
     async def _handle_analyze_meta(
         self,
@@ -573,6 +741,10 @@ RULES:
         if strategy:
             resolved = await self._resolve_card_mentions(strategy, format)
             build_around_cards = [c["name"] for c in resolved]
+
+        # Persist build-around cards to conversation context
+        if build_around_cards:
+            conversation.update_context(build_around_cards=build_around_cards)
 
         # Get co-occurrence based synergy cards if we have build-around targets
         synergy_group = None
@@ -992,10 +1164,31 @@ RULES:
             return "midrange"
         return "unknown"
 
-    def _get_suggestions(self, deck: Optional[Dict[str, Any]]) -> List[str]:
-        """Get contextual suggestions based on current state."""
+    def _get_suggestions(self, deck: Optional[Dict[str, Any]], conversation: Optional[Conversation] = None) -> List[str]:
+        """Get contextual suggestions based on current state and conversation context."""
+        ctx = conversation.get_context() if conversation else {}
+        phase = ctx.get("phase")
+        strategy = ctx.get("strategy")
+
         if deck:
-            return ["Show matchups", "Make changes", "Export deck"]
+            main_count = sum(e.get("quantity", 1) for e in deck.get("main_deck", []))
+            has_lands = any(
+                "land" in (e.get("card", {}) or {}).get("type_line", "").lower()
+                for e in deck.get("main_deck", [])
+            )
+
+            if phase == "building_core" or (main_count < 20):
+                return ["Suggest more cards", "I need removal", "I need card draw"]
+            elif phase == "filling_gaps" or (main_count < 36 and not has_lands):
+                return ["What am I missing?", "Let's add the mana base", "Show matchups"]
+            elif not has_lands:
+                return ["Let's add the mana base", "Show matchups", "Make changes"]
+            else:
+                return ["Show matchups", "Make changes", "Build the sideboard"]
+
+        if strategy:
+            return ["Continue building", "Show more options", "Start over"]
+
         return ["Build me a deck", "What's the current meta?", "Help"]
 
     async def _get_general_meta_advice(self, opponent_deck: str) -> str:
@@ -1139,16 +1332,53 @@ RULES:
         conversation: Conversation,
         user_id: Optional[UUID],
     ) -> ChatResponse:
-        """Fallback response when AI is not available."""
-        response = (
-            "I'm Spellbook, your MTG deck building partner! I can help you:\n\n"
-            "- **Explore the meta**: 'What's good right now?'\n"
-            "- **Build incrementally**: 'I want to build around [card name]'\n"
-            "- **Get a full deck**: 'Just build me the best deck'\n"
-            "- **Fill gaps**: 'I need more removal'\n"
-            "- **Analyze matchups**: 'How do I beat control?'\n\n"
-            "What would you like to do?"
-        )
+        """Fallback response when AI is not available. Context-aware."""
+        ctx = conversation.get_context()
+        strategy = ctx.get("strategy")
+        phase = ctx.get("phase")
+
+        # If we have context, provide a context-aware fallback instead of generic help
+        if strategy:
+            response = (
+                f"I'm still working with you on your **{strategy}** deck. "
+                "I had a brief hiccup processing that. Could you rephrase what you'd like?\n\n"
+            )
+            if phase in ("building_core", "filling_gaps"):
+                response += (
+                    "- **More suggestions**: 'Suggest more cards for this strategy'\n"
+                    "- **Fill a role**: 'I need more removal' or 'I need card draw'\n"
+                    "- **Add lands**: 'Let's add the mana base'\n"
+                )
+                suggestions = [
+                    "Suggest more cards",
+                    "I need more removal",
+                    "Let's add the mana base",
+                ]
+            elif phase == "lands":
+                response += (
+                    "- **Adjust**: 'Change the land count'\n"
+                    "- **Sideboard**: 'Build the sideboard'\n"
+                    "- **Matchups**: 'How do I beat aggro?'\n"
+                )
+                suggestions = ["Build the sideboard", "Show matchups", "Adjust the lands"]
+            else:
+                response += (
+                    "- **Keep building**: 'Suggest more cards'\n"
+                    "- **Matchups**: 'How does this do against control?'\n"
+                    "- **Modify**: 'I want to make changes'\n"
+                )
+                suggestions = ["Suggest more cards", "Show matchups", "Make changes"]
+        else:
+            response = (
+                "I'm Spellbook, your MTG deck building partner! I can help you:\n\n"
+                "- **Explore the meta**: 'What's good right now?'\n"
+                "- **Build incrementally**: 'I want to build around [card name]'\n"
+                "- **Get a full deck**: 'Just build me the best deck'\n"
+                "- **Fill gaps**: 'I need more removal'\n"
+                "- **Analyze matchups**: 'How do I beat control?'\n\n"
+                "What would you like to do?"
+            )
+            suggestions = ["What's good right now?", "Build around a card", "Just build me a deck"]
 
         conversation.add_message("assistant", response)
         await self.db.commit()
@@ -1156,7 +1386,7 @@ RULES:
         return ChatResponse(
             response=response,
             conversation_id=conversation.id,
-            suggestions=["What's good right now?", "Build around a card", "Just build me a deck"],
+            suggestions=suggestions,
         )
 
     async def explain_card(

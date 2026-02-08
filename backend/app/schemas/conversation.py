@@ -17,6 +17,7 @@ class ConversationResponse(BaseModel):
     summary: Optional[str]
     messages: List[Dict[str, Any]]
     current_deck: Optional[Dict[str, Any]]
+    context: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 
