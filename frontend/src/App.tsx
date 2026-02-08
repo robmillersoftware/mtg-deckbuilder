@@ -19,6 +19,7 @@ import { ConversationsPage } from '@/pages/Conversations';
 import { AdminPage } from '@/pages/Admin';
 import { VerifyEmailPage } from '@/pages/VerifyEmail';
 import { SimulationPage } from '@/pages/Simulation';
+import { GuidedBuilderPage } from '@/pages/GuidedBuilder';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -51,6 +52,7 @@ function App() {
             <Route path="import" element={<DeckImportPage />} />
             <Route path="admin" element={<AdminPage />} />
             <Route path="simulate" element={<SimulationPage />} />
+            <Route path="build" element={<GuidedBuilderPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

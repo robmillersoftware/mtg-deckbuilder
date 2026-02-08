@@ -269,6 +269,25 @@ export const metaApi = {
     api.get('/meta/cards/trends', { params: { format, days_back: daysBack } }),
 };
 
+// Guided Build API
+export const guidedBuildApi = {
+  analyze: (mainDeck: any[], sideboard: any[], format: string = 'standard') =>
+    api.post('/guided-build/analyze', {
+      main_deck: mainDeck,
+      sideboard: sideboard,
+      format,
+    }),
+
+  suggest: (mainDeck: any[], colors: string[], role: string, format: string = 'standard', limit: number = 6) =>
+    api.post('/guided-build/suggest', {
+      main_deck: mainDeck,
+      colors,
+      role,
+      format,
+      limit,
+    }),
+};
+
 // Simulation API
 export const simulationApi = {
   // Legacy synchronous endpoints
