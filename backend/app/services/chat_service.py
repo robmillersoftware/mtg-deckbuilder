@@ -1,7 +1,6 @@
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 import logging
-import json
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy import func as sqlfunc
 
 from app.models.conversation import Conversation
-from app.models.card import Card
 from app.schemas.conversation import (
     ChatResponse,
     CardExplanationResponse,
@@ -324,8 +322,8 @@ RULES:
 - NEVER ask the user to clarify which card they mean if CARD REFERENCES are provided below. The card has already been identified from the database. Proceed directly to building around it.
 - If the user names a card that IS in the CARD REFERENCES section, treat it as unambiguous and immediately proceed to suggest_core or the appropriate next step.{card_context}"""
 
-            # Build conversation history - send last 8 messages for multi-turn context
-            recent = conversation.messages[-8:] if conversation.messages else []
+            # Build conversation history - send last 20 messages for multi-turn context
+            recent = conversation.messages[-20:] if conversation.messages else []
             api_messages = []
             for m in recent:
                 role = m.get("role", "user")

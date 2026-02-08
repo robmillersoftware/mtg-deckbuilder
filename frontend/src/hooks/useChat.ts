@@ -3,19 +3,20 @@ import { useConversationStore } from '@/store/conversation';
 import { useDeckStore } from '@/store/deck';
 import { usePreferencesStore } from '@/store/preferences';
 import { conversationsApi } from '@/services/api';
-import { Message, ChatResponse, CardSuggestionGroup } from '@/types';
+import { Message, ChatResponse } from '@/types';
 import toast from 'react-hot-toast';
 
 export function useChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [cardSuggestions, setCardSuggestions] = useState<CardSuggestionGroup[] | null>(null);
 
   const {
     currentConversation,
     setCurrentConversation,
     addMessage,
     currentFormat,
+    cardSuggestions,
+    setCardSuggestions,
   } = useConversationStore();
 
   const { setCurrentDeck } = useDeckStore();
@@ -24,8 +25,6 @@ export function useChat() {
     if (!content.trim() || isLoading) return;
 
     setIsLoading(true);
-    // Clear previous card suggestions on new message
-    setCardSuggestions(null);
 
     // Add user message optimistically
     const userMessage: Message = {
@@ -80,7 +79,7 @@ export function useChat() {
         setCurrentDeck(data.deck);
       }
 
-      // Update card suggestions if included
+      // Update card suggestions if included (persisted in conversation store)
       if (data.card_suggestions) {
         setCardSuggestions(data.card_suggestions);
       }
@@ -103,7 +102,7 @@ export function useChat() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentConversation, addMessage, setCurrentConversation, setCurrentDeck, isLoading]);
+  }, [currentConversation, addMessage, setCurrentConversation, setCurrentDeck, setCardSuggestions, isLoading]);
 
   const explainCard = useCallback(async (cardName: string) => {
     if (isLoading) return;
@@ -149,7 +148,7 @@ export function useChat() {
     // Reset format to user's default preference
     const defaultFormat = usePreferencesStore.getState().defaultFormat;
     useConversationStore.getState().setFormat(defaultFormat);
-  }, [setCurrentConversation, setCurrentDeck]);
+  }, [setCurrentConversation, setCurrentDeck, setCardSuggestions]);
 
   const setFormat = useCallback((format: string) => {
     useConversationStore.getState().setFormat(format);

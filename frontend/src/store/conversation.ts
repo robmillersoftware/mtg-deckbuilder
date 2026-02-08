@@ -1,19 +1,21 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Message, Conversation } from '@/types';
+import { Message, Conversation, CardSuggestionGroup } from '@/types';
 
 interface ConversationState {
   currentConversation: Conversation | null;
   conversations: Conversation[];
   isLoading: boolean;
   currentFormat: string; // Format for current conversation
-  lastConversationId: string | null; // Persisted across refreshes
+  cardSuggestions: CardSuggestionGroup[] | null;
+  lastConversationId: string | null;
 
   setCurrentConversation: (conversation: Conversation | null) => void;
   setConversations: (conversations: Conversation[]) => void;
   addMessage: (message: Message) => void;
   setLoading: (loading: boolean) => void;
   setFormat: (format: string) => void;
+  setCardSuggestions: (suggestions: CardSuggestionGroup[] | null) => void;
   reset: () => void;
 }
 
@@ -24,6 +26,7 @@ export const useConversationStore = create<ConversationState>()(
       conversations: [],
       isLoading: false,
       currentFormat: 'standard',
+      cardSuggestions: null,
       lastConversationId: null,
 
       setCurrentConversation: (conversation) => {
@@ -64,21 +67,25 @@ export const useConversationStore = create<ConversationState>()(
 
       setFormat: (format) => set({ currentFormat: format }),
 
+      setCardSuggestions: (cardSuggestions) => set({ cardSuggestions }),
+
       reset: () =>
         set({
           currentConversation: null,
           conversations: [],
           isLoading: false,
           currentFormat: 'standard',
+          cardSuggestions: null,
           lastConversationId: null,
         }),
     }),
     {
       name: 'spellbook-conversation',
       partialize: (state) => ({
-        lastConversationId: state.lastConversationId,
         currentConversation: state.currentConversation,
         currentFormat: state.currentFormat,
+        cardSuggestions: state.cardSuggestions,
+        lastConversationId: state.lastConversationId,
       }),
     }
   )
