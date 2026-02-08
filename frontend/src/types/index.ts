@@ -148,12 +148,24 @@ export interface Message {
   timestamp?: string;
 }
 
+export interface ConversationContext {
+  strategy?: string;
+  colors?: string[];
+  phase?: string;
+  build_around_cards?: string[];
+  archetype?: string;
+  roles_suggested?: string[];
+  user_preferences?: string;
+  summary?: string;
+}
+
 export interface Conversation {
   id: string;
   user_id?: string;
   summary?: string;
   messages: Message[];
   current_deck?: Partial<Deck>;
+  context?: ConversationContext;
   created_at: string;
   updated_at: string;
 }
