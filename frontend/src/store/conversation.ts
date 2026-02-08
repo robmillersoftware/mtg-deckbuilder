@@ -77,6 +77,8 @@ export const useConversationStore = create<ConversationState>()(
       name: 'spellbook-conversation',
       partialize: (state) => ({
         lastConversationId: state.lastConversationId,
+        currentConversation: state.currentConversation,
+        currentFormat: state.currentFormat,
       }),
     }
   )
