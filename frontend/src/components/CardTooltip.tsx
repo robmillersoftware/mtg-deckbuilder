@@ -1,7 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useCardByName } from '@/hooks/useCards';
 import clsx from 'clsx';
+
+function isTouchDevice() {
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
 
 interface CardTooltipProps {
   cardName: string;
@@ -12,6 +16,7 @@ interface CardTooltipProps {
 
 export function CardTooltip({ cardName, children, className, explanation }: CardTooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
+  const [isMobileModal, setIsMobileModal] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const triggerRef = useRef<HTMLSpanElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
@@ -26,8 +31,8 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
   }
 
   const handleMouseEnter = (e: React.MouseEvent) => {
-    // Don't show tooltips on touch devices - they interfere with tapping
-    if ('ontouchstart' in window) return;
+    // Don't show hover tooltips on touch devices - tap handler covers those
+    if (isTouchDevice()) return;
 
     const rect = (e.target as HTMLElement).getBoundingClientRect();
 
@@ -59,6 +64,7 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
     }
 
     setPosition({ x, y });
+    setIsMobileModal(false);
 
     // Delay showing tooltip (200ms per spec requirement)
     timeoutRef.current = setTimeout(() => {
@@ -72,6 +78,19 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
     }
     setIsVisible(false);
   };
+
+  const handleTap = (e: React.MouseEvent) => {
+    if (!isTouchDevice()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsMobileModal(true);
+    setIsVisible(true);
+  };
+
+  const handleDismiss = useCallback(() => {
+    setIsVisible(false);
+    setIsMobileModal(false);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -87,12 +106,35 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
         ref={triggerRef}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
+        onClick={handleTap}
         className={clsx('cursor-help underline decoration-dotted', className)}
       >
         {children}
       </span>
 
-      {isVisible &&
+      {isVisible && isMobileModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            onClick={handleDismiss}
+          >
+            <div
+              className="mx-4 max-w-[300px]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <CardPreview card={card} isLoading={isLoading} explanation={explanation} />
+              <button
+                onClick={handleDismiss}
+                className="mt-2 w-full py-2 rounded-lg bg-gray-700 text-gray-300 text-sm font-medium active:bg-gray-600"
+              >
+                Close
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {isVisible && !isMobileModal &&
         createPortal(
           <div
             className="fixed z-50 pointer-events-none"
