@@ -6,13 +6,15 @@ color distribution, role coverage gaps, and card suggestions.
 """
 
 from typing import Optional, List, Dict, Any
+from collections import defaultdict
 import logging
 import math
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
-from app.services.card_service import CardService
+from app.models.meta import Decklist, Event
+from app.services.card_service import CardService, get_format_legality_condition
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +204,55 @@ class DeckAnalyzer:
 
         return results
 
+    async def _get_tournament_card_names(self, strategy: str, format: str = "standard") -> set:
+        """Get card names that appear in tournament decklists matching the strategy."""
+        query = select(Decklist).join(Event).where(Event.format == format)
+
+        # Try to match strategy to archetype
+        if strategy:
+            search_terms = [strategy]
+            # Map common strategy terms to archetype names
+            strategy_map = {
+                "graveyard": ["reanimator", "graveyard", "dredge"],
+                "reanimate": ["reanimator"],
+                "sacrifice": ["sacrifice", "aristocrats"],
+                "tokens": ["tokens", "go-wide"],
+                "ramp": ["ramp", "big mana"],
+                "control": ["control"],
+                "aggro": ["aggro", "red deck"],
+                "burn": ["burn", "red deck", "aggro"],
+                "tempo": ["tempo"],
+                "midrange": ["midrange"],
+                "combo": ["combo"],
+            }
+            for keyword, terms in strategy_map.items():
+                if keyword in strategy.lower():
+                    search_terms.extend(terms)
+
+            conditions = [Decklist.archetype.ilike(f"%{term}%") for term in search_terms]
+            query = query.where(or_(*conditions))
+
+        query = query.limit(50)
+        result = await self.db.execute(query)
+        decklists = result.scalars().all()
+
+        # If no matching archetypes, fall back to all tournament cards for format
+        if not decklists:
+            query = select(Decklist).join(Event).where(Event.format == format).limit(100)
+            result = await self.db.execute(query)
+            decklists = result.scalars().all()
+
+        tournament_cards = set()
+        card_frequency = defaultdict(int)
+        for decklist in decklists:
+            for entry in (decklist.main_deck or []):
+                card_name = entry.get("card_name", "")
+                if card_name:
+                    tournament_cards.add(card_name.lower())
+                    card_frequency[card_name.lower()] += 1
+
+        return tournament_cards
+
     async def suggest_cards_for_strategy(
         self,
         strategy: str,
@@ -214,10 +265,14 @@ class DeckAnalyzer:
         """
         Suggest cards grouped by role for a given strategy.
         Returns {role: [card_data, ...]} with rich metadata.
-        Used by suggest_core and suggest_package handlers.
+        Blends semantic search with tournament data to prioritize competitive cards.
         """
         existing_lower = {n.lower() for n in existing_cards}
         results: Dict[str, List[Dict[str, Any]]] = {}
+
+        # Get tournament-played cards for this strategy
+        tournament_cards = await self._get_tournament_card_names(strategy, format)
+        logger.info(f"Found {len(tournament_cards)} tournament cards for strategy '{strategy}' in {format}")
 
         for role in roles:
             query = f"{role} {strategy} cards for {''.join(colors)} deck"
@@ -236,13 +291,13 @@ class DeckAnalyzer:
                     limit=cards_per_role * 4,
                 )
 
-            role_cards = []
+            # Split into tournament-played and non-tournament cards
+            tournament_matches = []
+            semantic_only = []
             for card in cards:
                 if card.name.lower() in existing_lower:
                     continue
-                if len(role_cards) >= cards_per_role:
-                    break
-                role_cards.append({
+                card_data = {
                     "card_name": card.name,
                     "card_id": str(card.id),
                     "mana_cost": card.mana_cost,
@@ -250,7 +305,17 @@ class DeckAnalyzer:
                     "oracle_text": card.oracle_text,
                     "image_uri": card.image_uri,
                     "image_uri_small": card.image_uri_small,
-                })
+                }
+                if card.name.lower() in tournament_cards:
+                    tournament_matches.append(card_data)
+                else:
+                    semantic_only.append(card_data)
+
+            # Prioritize tournament-played cards, fill remainder with semantic results
+            role_cards = tournament_matches[:cards_per_role]
+            remaining = cards_per_role - len(role_cards)
+            if remaining > 0:
+                role_cards.extend(semantic_only[:remaining])
 
             if role_cards:
                 results[role] = role_cards
