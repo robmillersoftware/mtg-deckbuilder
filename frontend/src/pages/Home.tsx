@@ -1,16 +1,57 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ChatWindow } from '@/components/ChatWindow';
 import { DeckList } from '@/components/DeckList';
 import { DeckActions } from '@/components/DeckActions';
 import { ConversationList } from '@/components/ConversationList';
 import { useDeckStore } from '@/store/deck';
+import { useConversationStore } from '@/store/conversation';
 import { useAuth } from '@/hooks/useAuth';
+import { conversationsApi } from '@/services/api';
 import clsx from 'clsx';
 
 export function HomePage() {
   const { currentDeck, updateCardQuantity, addCard } = useDeckStore();
   const { isAuthenticated } = useAuth();
   const [mobileTab, setMobileTab] = useState<'chat' | 'deck'>('chat');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const restoreAttempted = useRef(false);
+
+  const {
+    currentConversation,
+    lastConversationId,
+    setCurrentConversation,
+  } = useConversationStore();
+
+  // Restore last conversation on mount (from URL param or persisted ID)
+  useEffect(() => {
+    if (restoreAttempted.current) return;
+    restoreAttempted.current = true;
+
+    const conversationParam = searchParams.get('conversation');
+    const idToRestore = conversationParam || lastConversationId;
+
+    // Clear the URL param if present
+    if (conversationParam) {
+      setSearchParams({}, { replace: true });
+    }
+
+    // Skip if we already have this conversation loaded, or no ID to restore
+    if (!idToRestore || currentConversation?.id === idToRestore) return;
+
+    // Fetch the conversation from the API
+    conversationsApi.getById(idToRestore)
+      .then((response) => {
+        setCurrentConversation(response.data);
+        if (response.data.current_deck) {
+          useDeckStore.getState().setCurrentDeck(response.data.current_deck);
+        }
+      })
+      .catch(() => {
+        // Conversation no longer exists - clear the persisted ID
+        useConversationStore.setState({ lastConversationId: null });
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleQuantityChange = (
     cardName: string,
