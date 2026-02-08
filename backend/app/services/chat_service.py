@@ -538,7 +538,7 @@ RULES:
         conversation: Conversation,
         ai_text: str = "",
     ) -> ChatResponse:
-        """Suggest core cards in role-based groups."""
+        """Suggest core cards in role-based groups, incorporating tournament data."""
         format = getattr(self, "_current_format", "standard")
         strategy = tool_input.get("strategy", "")
         colors = tool_input.get("colors", [])
@@ -547,10 +547,56 @@ RULES:
         # Get existing card names from deck
         deck = conversation.current_deck or {}
         existing = [e.get("card_name", "") for e in deck.get("main_deck", [])]
+        existing_lower = {n.lower() for n in existing}
 
         cards_per_role = 12 if format == "cedh" else 6
 
-        # Query cards grouped by role
+        # Extract card names from the strategy to find co-occurring cards
+        # (e.g., strategy="Moonshadow enchantment aggro" -> look for "Moonshadow")
+        build_around_cards = []
+        if strategy:
+            resolved = await self._resolve_card_mentions(strategy, format)
+            build_around_cards = [c["name"] for c in resolved]
+
+        # Get co-occurrence based synergy cards if we have build-around targets
+        synergy_group = None
+        if build_around_cards:
+            try:
+                cooccurrence_cards = await self.ai_service._get_cooccurrence_cards(
+                    card_names=build_around_cards,
+                    colors=colors,
+                    limit=cards_per_role,
+                    format=format,
+                )
+                if cooccurrence_cards:
+                    # Fetch full card data for co-occurrence results
+                    synergy_cards = []
+                    for cc in cooccurrence_cards:
+                        if cc["name"].lower() in existing_lower:
+                            continue
+                        card = await self.card_service.get_by_name(cc["name"], format=format)
+                        if card:
+                            synergy_cards.append({
+                                "card_name": card.name,
+                                "quantity": 1 if format == "cedh" else min(4, 3),
+                                "mana_cost": card.mana_cost,
+                                "type_line": card.type_line,
+                                "image_uri": card.image_uri,
+                                "reasoning": None,
+                            })
+                        if len(synergy_cards) >= cards_per_role:
+                            break
+                    if synergy_cards:
+                        synergy_group = {
+                            "group_name": f"Synergy with {', '.join(build_around_cards)}",
+                            "role": "synergy",
+                            "is_batch": False,
+                            "cards": synergy_cards,
+                        }
+            except Exception as e:
+                logger.warning(f"Co-occurrence lookup failed: {e}")
+
+        # Query cards grouped by role (now tournament-aware)
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
             strategy=strategy,
             colors=colors,
@@ -562,6 +608,11 @@ RULES:
 
         # Build card suggestion groups
         card_suggestions = []
+
+        # Add synergy group first if we have build-around cards
+        if synergy_group:
+            card_suggestions.append(synergy_group)
+
         for role, cards in role_cards.items():
             group = {
                 "group_name": role.replace("_", " ").title(),
@@ -574,7 +625,7 @@ RULES:
                         "mana_cost": c.get("mana_cost"),
                         "type_line": c.get("type_line"),
                         "image_uri": c.get("image_uri"),
-                        "reasoning": None,  # Could be enriched with AI reasoning in future
+                        "reasoning": None,
                     }
                     for c in cards
                 ],
