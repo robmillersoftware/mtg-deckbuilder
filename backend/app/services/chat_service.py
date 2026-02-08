@@ -6,13 +6,15 @@ import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from sqlalchemy import func as sqlfunc
+
 from app.models.conversation import Conversation
 from app.models.card import Card
 from app.schemas.conversation import (
     ChatResponse,
     CardExplanationResponse,
 )
-from app.services.card_service import CardService
+from app.services.card_service import CardService, get_format_legality_condition
 from app.services.deck_generator import DeckGenerator
 from app.services.ai_service import AIService
 from app.services.guided_builder import DeckAnalyzer
@@ -174,6 +176,71 @@ class ChatService:
         self.deck_generator = DeckGenerator(db)
         self.deck_analyzer = DeckAnalyzer(db)
 
+    async def _resolve_card_mentions(self, message: str, format: str) -> List[Dict[str, str]]:
+        """
+        Look up card names mentioned in the user's message against the database.
+        Returns a list of dicts with card details for any matches found.
+        """
+        words = message.split()
+        potential_names = []
+
+        # Build candidate card names (1-4 word combinations starting with uppercase)
+        for i in range(len(words)):
+            cleaned = words[i].strip(",.!?\"'")
+            if cleaned and cleaned[0:1].isupper():
+                potential_names.append(cleaned)
+                if i < len(words) - 1:
+                    potential_names.append(f"{cleaned} {words[i+1].strip(',.!?')}")
+                if i < len(words) - 2:
+                    potential_names.append(f"{cleaned} {words[i+1]} {words[i+2]}".strip(",.!?"))
+                if i < len(words) - 3:
+                    potential_names.append(f"{cleaned} {words[i+1]} {words[i+2]} {words[i+3]}".strip(",.!?"))
+
+        resolved = []
+        seen_names = set()
+
+        for name in potential_names:
+            if len(name) < 3:
+                continue
+
+            # Try exact match first
+            query = select(Card.name, Card.type_line, Card.oracle_text, Card.mana_cost, Card.colors).where(
+                sqlfunc.lower(Card.name) == name.lower(),
+                get_format_legality_condition(format)
+            ).limit(1)
+            result = await self.db.execute(query)
+            row = result.first()
+
+            if not row:
+                # Try partial match, but count how many distinct cards match
+                count_query = select(sqlfunc.count(sqlfunc.distinct(Card.name))).where(
+                    sqlfunc.lower(Card.name).like(f"%{name.lower()}%"),
+                    get_format_legality_condition(format)
+                )
+                count_result = await self.db.execute(count_query)
+                match_count = count_result.scalar() or 0
+
+                if match_count == 1:
+                    # Only one card matches - safe to use it
+                    query = select(Card.name, Card.type_line, Card.oracle_text, Card.mana_cost, Card.colors).where(
+                        sqlfunc.lower(Card.name).like(f"%{name.lower()}%"),
+                        get_format_legality_condition(format)
+                    ).limit(1)
+                    result = await self.db.execute(query)
+                    row = result.first()
+
+            if row and row.name not in seen_names:
+                seen_names.add(row.name)
+                resolved.append({
+                    "name": row.name,
+                    "type_line": row.type_line or "",
+                    "oracle_text": row.oracle_text or "",
+                    "mana_cost": row.mana_cost or "",
+                    "colors": row.colors or [],
+                })
+
+        return resolved
+
     async def process_message(
         self,
         message: str,
@@ -208,6 +275,23 @@ class ChatService:
             import anthropic
             client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
+            # Resolve card names mentioned in the message
+            resolved_cards = await self._resolve_card_mentions(message, format)
+
+            # Build card context if any cards were found
+            card_context = ""
+            if resolved_cards:
+                card_lines = []
+                for c in resolved_cards:
+                    card_lines.append(
+                        f"- {c['name']} {c['mana_cost']} — {c['type_line']}: {c['oracle_text'][:200]}"
+                    )
+                card_context = (
+                    "\n\nCARD REFERENCES (verified from database):\n"
+                    + "\n".join(card_lines)
+                    + "\nThese cards have been verified. Do NOT ask for clarification about them."
+                )
+
             # Build deck context string
             deck_context = self._build_deck_context(deck)
 
@@ -235,7 +319,9 @@ RULES:
 - For questions about matchups, strategy, or "how do I beat X" - use get_matchup_info or respond with text advice. Do NOT generate cards.
 - When the user says "what's good" or similar vague exploration, use analyze_meta.
 - Be concise in your text responses. Focus on actionable advice.
-- Always explain your reasoning briefly when suggesting a direction."""
+- Always explain your reasoning briefly when suggesting a direction.
+- NEVER ask the user to clarify which card they mean if CARD REFERENCES are provided below. The card has already been identified from the database. Proceed directly to building around it.
+- If the user names a card that IS in the CARD REFERENCES section, treat it as unambiguous and immediately proceed to suggest_core or the appropriate next step.{card_context}"""
 
             # Build conversation history - send last 8 messages for multi-turn context
             recent = conversation.messages[-8:] if conversation.messages else []
