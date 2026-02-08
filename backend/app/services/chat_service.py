@@ -309,12 +309,13 @@ FLOW:
 1. EXPLORE: Help settle on a direction. If vague, use analyze_meta. If they name a card/colors, move to step 2.
 2. BUILD CORE: Use suggest_core to propose key cards in role-based groups (e.g. threats, removal, card advantage, protection).
 3. FILL GAPS: After user adds cards, use suggest_package for missing roles.
-4. LANDS: When nonland count is near target, use finalize_mana_base.
+4. LANDS: When nonland count is near target, use finalize_mana_base. ONLY use finalize_mana_base for lands.
 5. REFINE: Help with cuts, sideboard, matchups using modify_deck or get_matchup_info.
 
 RULES:
 - NEVER use generate_full_deck unless user explicitly asks to skip suggestions (e.g. "just build it", "skip suggestions").
 - When using suggest_core, pick 3-5 meaningful role names for the groups.
+- NEVER include lands or mana base as a role in suggest_core or suggest_package. Lands should ONLY come from finalize_mana_base. Do not suggest land cards until the user asks for lands or the nonland count is near the target.
 - For cEDH: suggest in larger batches (10-15 per group, ~5 groups).
 - For questions about matchups, strategy, or "how do I beat X" - use get_matchup_info or respond with text advice. Do NOT generate cards.
 - When the user says "what's good" or similar vague exploration, use analyze_meta.
@@ -532,6 +533,17 @@ RULES:
             ],
         )
 
+    @staticmethod
+    def _is_land_card(card: Dict[str, Any]) -> bool:
+        """Check if a card is a land based on its type_line."""
+        type_line = (card.get("type_line") or "").lower()
+        return "land" in type_line
+
+    @staticmethod
+    def _filter_lands_from_cards(cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Remove land cards from a list of card suggestions."""
+        return [c for c in cards if not ChatService._is_land_card(c)]
+
     async def _handle_suggest_core(
         self,
         tool_input: Dict[str, Any],
@@ -543,6 +555,12 @@ RULES:
         strategy = tool_input.get("strategy", "")
         colors = tool_input.get("colors", [])
         roles = tool_input.get("roles", ["threats", "removal", "card advantage"])
+
+        # Filter out land-related roles - lands come from finalize_mana_base
+        land_role_keywords = {"land", "lands", "mana base", "manabase", "mana_base"}
+        roles = [r for r in roles if r.lower() not in land_role_keywords]
+        if not roles:
+            roles = ["threats", "removal", "card advantage"]
 
         # Get existing card names from deck
         deck = conversation.current_deck or {}
@@ -575,7 +593,7 @@ RULES:
                         if cc["name"].lower() in existing_lower:
                             continue
                         card = await self.card_service.get_by_name(cc["name"], format=format)
-                        if card:
+                        if card and "land" not in (card.type_line or "").lower():
                             synergy_cards.append({
                                 "card_name": card.name,
                                 "quantity": 1 if format == "cedh" else min(4, 3),
@@ -614,6 +632,10 @@ RULES:
             card_suggestions.append(synergy_group)
 
         for role, cards in role_cards.items():
+            # Filter out any land cards that slipped through semantic search
+            filtered_cards = self._filter_lands_from_cards(cards)
+            if not filtered_cards:
+                continue
             group = {
                 "group_name": role.replace("_", " ").title(),
                 "role": role,
@@ -627,7 +649,7 @@ RULES:
                         "image_uri": c.get("image_uri"),
                         "reasoning": None,
                     }
-                    for c in cards
+                    for c in filtered_cards
                 ],
             }
             card_suggestions.append(group)
@@ -676,6 +698,8 @@ RULES:
 
         card_suggestions = []
         cards = role_cards.get(role, [])
+        # Filter out any land cards - lands come from finalize_mana_base
+        cards = self._filter_lands_from_cards(cards)
         if cards:
             group = {
                 "group_name": role.replace("_", " ").title(),

@@ -100,9 +100,9 @@ function SuggestionCard({
   onAdd: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 group">
-      {/* Card image preview (small) */}
-      <div className="relative w-10 h-14 flex-shrink-0 rounded overflow-hidden bg-gray-700 cursor-pointer">
+    <div className="flex items-center gap-2 sm:gap-3 group">
+      {/* Card image preview (small) - hidden on mobile to prevent overflow */}
+      <div className="relative w-10 h-14 flex-shrink-0 rounded overflow-hidden bg-gray-700 cursor-pointer hidden sm:block">
         {card.image_uri ? (
           <img
             src={card.image_uri}
@@ -138,13 +138,13 @@ function SuggestionCard({
       </div>
 
       {/* Quantity + Add button */}
-      <div className="flex items-center gap-2 flex-shrink-0">
+      <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
         <span className="text-xs text-gray-500">{card.quantity}x</span>
         <button
           onClick={onAdd}
           disabled={isAdded}
           className={clsx(
-            'px-2.5 py-1 text-xs font-medium rounded transition-colors',
+            'px-2 sm:px-2.5 py-1 text-xs font-medium rounded transition-colors',
             isAdded
               ? 'bg-green-900/30 text-green-400 cursor-default'
               : 'bg-gray-700 hover:bg-primary-600 text-gray-300 hover:text-white'
