@@ -596,7 +596,7 @@ RULES:
                         if card and "land" not in (card.type_line or "").lower():
                             synergy_cards.append({
                                 "card_name": card.name,
-                                "quantity": 1 if format == "cedh" else min(4, 3),
+                                "quantity": 1 if format == "cedh" else 4,
                                 "mana_cost": card.mana_cost,
                                 "type_line": card.type_line,
                                 "image_uri": card.image_uri,
@@ -643,7 +643,7 @@ RULES:
                 "cards": [
                     {
                         "card_name": c["card_name"],
-                        "quantity": 1 if format == "cedh" else min(4, 3),
+                        "quantity": 1 if format == "cedh" else 4,
                         "mana_cost": c.get("mana_cost"),
                         "type_line": c.get("type_line"),
                         "image_uri": c.get("image_uri"),
@@ -708,7 +708,7 @@ RULES:
                 "cards": [
                     {
                         "card_name": c["card_name"],
-                        "quantity": 1 if format == "cedh" else min(4, 3),
+                        "quantity": 1 if format == "cedh" else 4,
                         "mana_cost": c.get("mana_cost"),
                         "type_line": c.get("type_line"),
                         "image_uri": c.get("image_uri"),

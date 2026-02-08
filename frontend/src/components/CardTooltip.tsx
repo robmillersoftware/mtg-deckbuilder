@@ -26,6 +26,9 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
   }
 
   const handleMouseEnter = (e: React.MouseEvent) => {
+    // Don't show tooltips on touch devices - they interfere with tapping
+    if ('ontouchstart' in window) return;
+
     const rect = (e.target as HTMLElement).getBoundingClientRect();
 
     // Position tooltip to the right of the element
@@ -35,13 +38,24 @@ export function CardTooltip({ cardName, children, className, explanation }: Card
     // Check if tooltip would go off screen
     const tooltipWidth = 250;
     const tooltipHeight = 350;
+    const padding = 8;
 
     if (x + tooltipWidth > window.innerWidth) {
       x = rect.left - tooltipWidth - 10;
     }
 
+    // Clamp x so tooltip never goes off the left edge
+    if (x < padding) {
+      x = padding;
+    }
+
     if (y + tooltipHeight > window.innerHeight) {
       y = window.innerHeight - tooltipHeight - 10;
+    }
+
+    // Clamp y so tooltip never goes off the top edge
+    if (y < padding) {
+      y = padding;
     }
 
     setPosition({ x, y });
