@@ -355,7 +355,7 @@ You work WITH the user. Suggest cards, explain choices, let them decide.
 {conv_summary}
 
 CRITICAL RULE - ALWAYS USE TOOLS TO RECOMMEND CARDS:
-When the user names a specific card, picks colors, or chooses an archetype, immediately call suggest_core. All card recommendations must go through tools so they appear in the interactive UI.
+When the user names a specific card to build around, or picks colors/an archetype, you MUST call suggest_core. Card recommendations MUST go through the tools so they appear in the interactive UI.
 
 FLOW:
 1. EXPLORE: Only if the user is truly vague (e.g. "help me", "what's good"), use analyze_meta. If they name ANY specific card, colors, or archetype, skip directly to step 2.
@@ -365,15 +365,15 @@ FLOW:
 5. REFINE: Help with cuts, sideboard, matchups using modify_deck or get_matchup_info.
 
 RULES:
-- Reserve generate_full_deck for when the user explicitly asks to skip suggestions (e.g. "just build it", "skip suggestions").
+- Only use generate_full_deck when the user explicitly asks to skip suggestions (e.g. "just build it", "skip suggestions").
 - When using suggest_core, pick 3-5 meaningful role names for the groups.
-- Use finalize_mana_base exclusively for land suggestions. Keep lands out of suggest_core and suggest_package roles.
+- Reserve all land suggestions for finalize_mana_base. Keep suggest_core and suggest_package focused on nonland cards only.
 - For cEDH: suggest in larger batches (10-15 per group, ~5 groups).
-- For matchup/strategy questions ("how do I beat X"), use get_matchup_info or text advice.
+- For questions about matchups, strategy, or "how do I beat X" - use get_matchup_info or respond with text advice only.
 - When the user says "what's good" or similar vague exploration, use analyze_meta.
-- Be concise. Focus on actionable advice.
-- If CARD REFERENCES are provided below, the card is already identified — immediately call suggest_core. Skip any preamble or follow-up questions.
-- When the user asks for "more support", "more help", or similar continuation requests, continue building on the CURRENT STRATEGY from the conversation context above.{card_context}"""
+- Be concise in your text responses. Focus on actionable advice.
+- If CARD REFERENCES are provided below, the card has already been identified from the database. Proceed directly with suggest_core using the resolved card.
+- IMPORTANT: When the user asks for "more support", "more help", "more options", or similar continuation requests, continue building on the CURRENT STRATEGY described in the conversation context above. Suggest more cards, offer alternative approaches within the strategy, or advance to the next phase.{card_context}"""
 
             # Build conversation history - send last 20 messages for multi-turn context
             recent = conversation.messages[-20:] if conversation.messages else []
@@ -392,10 +392,8 @@ RULES:
             api_messages = self._fix_message_alternation(api_messages)
 
             # When a card has been resolved from the database or the user
-            # expresses clear deck-building intent, force tool use to ensure
-            # card recommendations go through the interactive UI rather than
-            # being listed as plain text (which can hallucinate Commander
-            # concepts in non-Commander formats).
+            # expresses clear deck-building intent, force tool use so card
+            # recommendations go through the interactive UI.
             build_intent_keywords = [
                 "build around", "build with", "i want to build",
                 "i want to play", "deck with", "deck around",
@@ -413,8 +411,7 @@ RULES:
             }
             if (resolved_cards or format_illegal_cards or has_build_intent) and not deck:
                 # User named a card or expressed build intent and no deck
-                # exists yet -> force a tool call to prevent free-text
-                # Commander suggestions in non-Commander formats
+                # exists yet -> force a tool call so cards go through the UI
                 api_kwargs["tool_choice"] = {"type": "any"}
 
             response = client.messages.create(**api_kwargs)
@@ -588,8 +585,8 @@ RULES:
 - 60 card minimum main deck, 15 card sideboard.
 - Up to 4 copies of any non-basic land card.
 - Only suggest cards that are legal in {format_name}.
-- Think in terms of 4-of staples, playsets, and {format_name} metagame archetypes.
-- When a user says "build around [card]", build a 60-card {format_name} deck featuring that card as a 4-of.
+- Think in terms of 4-of playsets, curve optimization, and {format_name} metagame archetypes.
+- When a user says "build around [card]", they want a 60-card {format_name} deck featuring that card as a 4-of.
 - Target ~24 lands, ~36 nonland cards (varies by archetype)."""
 
     def _fix_message_alternation(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
