@@ -354,8 +354,8 @@ You work WITH the user, not FOR them. Suggest cards, explain choices, let them d
 {deck_context}
 {conv_summary}
 
-CRITICAL RULE - YOU MUST USE TOOLS TO RECOMMEND CARDS:
-When the user names a specific card to build around, or picks colors/an archetype, you MUST call suggest_core. Do NOT respond with only text describing the card or listing card names in your message. Card recommendations MUST go through the tools so they appear in the interactive UI. A text-only response that describes cards without calling a tool is NEVER acceptable when the user wants to build a deck.
+CRITICAL RULE - ALWAYS USE TOOLS TO RECOMMEND CARDS:
+When the user names a specific card to build around, or picks colors/an archetype, you MUST call suggest_core. Card recommendations MUST go through the tools so they appear in the interactive UI.
 
 FLOW:
 1. EXPLORE: Help settle on a direction. ONLY if the user is truly vague (e.g. "help me", "what's good"), use analyze_meta. If they name ANY specific card, colors, or archetype, skip directly to step 2.
@@ -365,16 +365,15 @@ FLOW:
 5. REFINE: Help with cuts, sideboard, matchups using modify_deck or get_matchup_info.
 
 RULES:
-- NEVER use generate_full_deck unless user explicitly asks to skip suggestions (e.g. "just build it", "skip suggestions").
+- Only use generate_full_deck when the user explicitly asks to skip suggestions (e.g. "just build it", "skip suggestions").
 - When using suggest_core, pick 3-5 meaningful role names for the groups.
-- NEVER include lands or mana base as a role in suggest_core or suggest_package. Lands should ONLY come from finalize_mana_base. Do not suggest land cards until the user asks for lands or the nonland count is near the target.
+- Reserve all land suggestions for finalize_mana_base. Keep suggest_core and suggest_package focused on nonland cards only.
 - For cEDH: suggest in larger batches (10-15 per group, ~5 groups).
-- For questions about matchups, strategy, or "how do I beat X" - use get_matchup_info or respond with text advice. Do NOT generate cards.
+- For questions about matchups, strategy, or "how do I beat X" - use get_matchup_info or respond with text advice only.
 - When the user says "what's good" or similar vague exploration, use analyze_meta.
 - Be concise in your text responses. Focus on actionable advice.
-- NEVER ask the user to clarify which card they mean if CARD REFERENCES are provided below. The card has already been identified from the database.
-- If the user names a card that IS in the CARD REFERENCES section, you MUST immediately call suggest_core. Do NOT describe the card back to the user, do NOT ask which direction they want, do NOT suggest commanders. Just call the tool.
-- IMPORTANT: When the user asks for "more support", "more help", "more options", or similar continuation requests, continue building on the CURRENT STRATEGY described in the conversation context above. Do NOT reset to a generic help menu. Suggest more cards, offer alternative approaches within the strategy, or advance to the next phase.{card_context}"""
+- If CARD REFERENCES are provided below, the card has already been identified from the database. Proceed directly with suggest_core using the resolved card.
+- IMPORTANT: When the user asks for "more support", "more help", "more options", or similar continuation requests, continue building on the CURRENT STRATEGY described in the conversation context above. Suggest more cards, offer alternative approaches within the strategy, or advance to the next phase.{card_context}"""
 
             # Build conversation history - send last 20 messages for multi-turn context
             recent = conversation.messages[-20:] if conversation.messages else []
@@ -393,10 +392,8 @@ RULES:
             api_messages = self._fix_message_alternation(api_messages)
 
             # When a card has been resolved from the database or the user
-            # expresses clear deck-building intent, force tool use to ensure
-            # card recommendations go through the interactive UI rather than
-            # being listed as plain text (which can hallucinate Commander
-            # concepts in non-Commander formats).
+            # expresses clear deck-building intent, force tool use so card
+            # recommendations go through the interactive UI.
             build_intent_keywords = [
                 "build around", "build with", "i want to build",
                 "i want to play", "deck with", "deck around",
@@ -414,8 +411,7 @@ RULES:
             }
             if (resolved_cards or format_illegal_cards or has_build_intent) and not deck:
                 # User named a card or expressed build intent and no deck
-                # exists yet -> force a tool call to prevent free-text
-                # Commander suggestions in non-Commander formats
+                # exists yet -> force a tool call so cards go through the UI
                 api_kwargs["tool_choice"] = {"type": "any"}
 
             response = client.messages.create(**api_kwargs)
@@ -585,16 +581,12 @@ RULES:
 - Suggest cards in larger batches (~10-15 per group, 5 groups)
 - Target ~34 lands, ~65 nonland cards"""
         # All non-Commander 60-card formats
-        return f"""CRITICAL FORMAT CONSTRAINT - {format_name.upper()}:
-- This is {format_name}, a 60-card constructed format. NOT Commander/EDH/cEDH.
+        return f"""FORMAT: {format_name.upper()} (60-card constructed)
 - 60 card minimum main deck, 15 card sideboard.
 - Up to 4 copies of any non-basic land card.
-- NEVER mention commanders, color identity, singleton, or EDH in any form. These concepts do not exist in {format_name}.
-- NEVER suggest picking a commander or legendary creature as a "commander". There are no commanders in {format_name}.
-- Do NOT reference Commander/EDH strategies, archetypes, or card evaluations.
 - Only suggest cards that are legal in {format_name}.
-- Think in terms of 4-of staples, playsets, and {format_name} metagame archetypes.
-- When a user says "build around [card]", they want a 60-card {format_name} deck featuring that card, NOT a Commander deck.
+- Think in terms of 4-of playsets, curve optimization, and {format_name} metagame archetypes.
+- When a user says "build around [card]", they want a 60-card {format_name} deck featuring that card as a 4-of.
 - Target ~24 lands, ~36 nonland cards (varies by archetype)."""
 
     def _fix_message_alternation(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
