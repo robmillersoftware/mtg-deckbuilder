@@ -42,6 +42,14 @@ ROLE_MAP: Dict[str, List[str]] = {
     "early threats": ["threat_cheap"],
 }
 
+# Max CMC constraints for roles that imply cheapness.
+# Prevents expensive cards (e.g. 9-mana Rise of the Dark Realms) from
+# appearing as "cheap threats" due to mis-tagged card_roles data.
+ROLE_CMC_LIMITS: Dict[str, int] = {
+    "cheap threats": 3,
+    "early threats": 3,
+}
+
 # Role targets by archetype - rough guide for what a deck "wants"
 ARCHETYPE_ROLE_TARGETS = {
     "aggro": {
@@ -236,6 +244,7 @@ class DeckAnalyzer:
         format: str = "standard",
         limit: int = 8,
         exclude: set = None,
+        max_cmc: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get cards for the given system roles, ranked by tournament frequency then efficiency.
@@ -285,6 +294,11 @@ class DeckAnalyzer:
             exclude_placeholders = ", ".join([f":excl_{i}" for i in range(len(exclude))])
             exclude_clause = f"AND LOWER(c.name) NOT IN ({exclude_placeholders})"
 
+        # Build CMC ceiling filter
+        cmc_clause = ""
+        if max_cmc is not None:
+            cmc_clause = "AND c.cmc <= :max_cmc"
+
         query_sql = f"""
             WITH tournament_freq AS (
                 SELECT
@@ -314,6 +328,7 @@ class DeckAnalyzer:
                 JOIN card_roles cr ON c.id = cr.card_id
                 WHERE cr.role IN ({role_placeholders})
                   {exclude_clause}
+                  {cmc_clause}
                 ORDER BY c.name, cr.efficiency DESC NULLS LAST
             )
             SELECT
@@ -339,6 +354,8 @@ class DeckAnalyzer:
 
         # Build params
         params: Dict[str, Any] = {"format": format, "limit": limit}
+        if max_cmc is not None:
+            params["max_cmc"] = max_cmc
         for i, term in enumerate(strategy_terms):
             params[f"strat_{i}"] = term
         for i, role in enumerate(system_roles):
@@ -397,12 +414,14 @@ class DeckAnalyzer:
 
             if system_roles:
                 # Primary path: card_roles + tournament frequency
+                cmc_limit = ROLE_CMC_LIMITS.get(role_key)
                 meta_cards = await self._get_meta_role_cards(
                     strategy=strategy,
                     colors=colors,
                     system_roles=system_roles,
                     format=format,
                     limit=cards_per_role * 3,  # fetch extra to compensate for dedup
+                    max_cmc=cmc_limit,
                     exclude=global_seen,
                 )
                 for card in meta_cards:
