@@ -432,7 +432,7 @@ RULES:
                         logger.debug(f"[CHAT-SERVICE] Claude called tool: {tool_name} with input: {tool_input}")
 
                         result = await self._dispatch_tool(
-                            tool_name, tool_input, conversation, user_id, response_text
+                            tool_name, tool_input, conversation, user_id
                         )
                         if result:
                             return result
@@ -614,7 +614,6 @@ RULES:
         tool_input: Dict[str, Any],
         conversation: Conversation,
         user_id: Optional[UUID],
-        ai_text: str = "",
     ) -> Optional[ChatResponse]:
         """Dispatch a tool call to the appropriate handler."""
         handlers = {
@@ -637,11 +636,9 @@ RULES:
 
         # Handlers that need user_id
         if tool_name in ("modify_deck", "generate_full_deck"):
-            return await handler(tool_input, conversation, user_id, ai_text)
-        elif tool_name in ("suggest_core", "suggest_package", "finalize_mana_base", "analyze_meta"):
-            return await handler(tool_input, conversation, ai_text)
+            return await handler(tool_input, conversation, user_id)
         else:
-            return await handler(tool_input, conversation, ai_text)
+            return await handler(tool_input, conversation)
 
     def _update_context_from_tool(
         self,
@@ -719,7 +716,6 @@ RULES:
         self,
         tool_input: Dict[str, Any],
         conversation: Conversation,
-        ai_text: str = "",
     ) -> ChatResponse:
         """Analyze the current metagame and recommend directions."""
         from app.models.meta import MetaSnapshot
@@ -736,8 +732,7 @@ RULES:
         snapshots = result.scalars().all()
 
         format_name = "cEDH" if format == "cedh" else format.capitalize()
-        response = ai_text + "\n\n" if ai_text else ""
-        response += f"**Current {format_name} Meta:**\n\n"
+        response = f"**Current {format_name} Meta:**\n\n"
 
         if snapshots:
             for snap in snapshots:
@@ -776,7 +771,6 @@ RULES:
         self,
         tool_input: Dict[str, Any],
         conversation: Conversation,
-        ai_text: str = "",
     ) -> ChatResponse:
         """Suggest core cards in role-based groups, incorporating tournament data."""
         format = getattr(self, "_current_format", "standard")
@@ -886,8 +880,7 @@ RULES:
             }
             card_suggestions.append(group)
 
-        response = ai_text + "\n\n" if ai_text else ""
-        response += f"Here are my suggestions for your **{strategy}** deck. Review each group and add the cards you like!"
+        response = f"Here are my suggestions for your **{strategy}** deck. Review each group and add the cards you like!"
 
         conversation.add_message("assistant", response)
         await self.db.commit()
@@ -907,7 +900,6 @@ RULES:
         self,
         tool_input: Dict[str, Any],
         conversation: Conversation,
-        ai_text: str = "",
     ) -> ChatResponse:
         """Suggest a focused package for a specific role."""
         format = getattr(self, "_current_format", "standard")
@@ -951,8 +943,7 @@ RULES:
             }
             card_suggestions.append(group)
 
-        response = ai_text + "\n\n" if ai_text else ""
-        response += f"Here are some **{role}** options for your deck:"
+        response = f"Here are some **{role}** options for your deck:"
 
         conversation.add_message("assistant", response)
         await self.db.commit()
@@ -972,7 +963,6 @@ RULES:
         self,
         tool_input: Dict[str, Any],
         conversation: Conversation,
-        ai_text: str = "",
     ) -> ChatResponse:
         """Generate mana base for the current deck."""
         format = getattr(self, "_current_format", "standard")
@@ -1008,8 +998,7 @@ RULES:
             card_suggestions.append(group)
 
         total_lands = sum(l["quantity"] for l in lands)
-        response = ai_text + "\n\n" if ai_text else ""
-        response += f"Here's a **{total_lands}-land mana base** for your deck. You can add them all at once or adjust quantities."
+        response = f"Here's a **{total_lands}-land mana base** for your deck. You can add them all at once or adjust quantities."
 
         conversation.add_message("assistant", response)
         await self.db.commit()
@@ -1030,7 +1019,6 @@ RULES:
         tool_input: Dict[str, Any],
         conversation: Conversation,
         user_id: Optional[UUID],
-        ai_text: str = "",
     ) -> ChatResponse:
         """Handle deck modification from tool call."""
         modification = tool_input.get("modification", "")
@@ -1048,8 +1036,7 @@ RULES:
             user_id=user_id,
         )
 
-        response = ai_text + "\n\n" if ai_text else ""
-        response += result.summary
+        response = result.summary
 
         return ChatResponse(
             response=response,
@@ -1069,7 +1056,6 @@ RULES:
         self,
         tool_input: Dict[str, Any],
         conversation: Conversation,
-        ai_text: str = "",
     ) -> ChatResponse:
         """Handle matchup/meta query from tool call."""
         opponent_deck = tool_input.get("opponent_deck", "")
@@ -1081,7 +1067,7 @@ RULES:
                 conversation.current_deck, opponent_deck
             )
 
-        full_response = (ai_text + "\n\n" if ai_text else "") + response
+        full_response = response
 
         conversation.add_message("assistant", full_response)
         await self.db.commit()
@@ -1097,7 +1083,6 @@ RULES:
         tool_input: Dict[str, Any],
         conversation: Conversation,
         user_id: Optional[UUID],
-        ai_text: str = "",
     ) -> ChatResponse:
         """Generate a complete deck in one shot (escape hatch)."""
         colors = tool_input.get("colors", [])
@@ -1141,8 +1126,7 @@ RULES:
             specific_cards=specific_cards if specific_cards else None,
         )
 
-        response = ai_text + "\n\n" if ai_text else ""
-        response += f"Here's your complete **{result.deck.archetype or format_display}** deck!\n\n"
+        response = f"Here's your complete **{result.deck.archetype or format_display}** deck!\n\n"
         response += result.strategy_summary or ""
 
         return ChatResponse(
