@@ -25,38 +25,67 @@ FORMAT_LEGALITY_MAP = {
 }
 
 
+def _view_exists(view_name: str) -> bool:
+    """Check if a materialized view already exists (for idempotent re-runs)."""
+    from sqlalchemy import text
+
+    conn = op.get_bind()
+    result = conn.execute(
+        text("SELECT 1 FROM pg_matviews WHERE matviewname = :name"),
+        {"name": view_name},
+    )
+    return result.scalar() is not None
+
+
+def _index_exists(index_name: str) -> bool:
+    """Check if an index already exists."""
+    from sqlalchemy import text
+
+    conn = op.get_bind()
+    result = conn.execute(
+        text("SELECT 1 FROM pg_indexes WHERE indexname = :name"),
+        {"name": index_name},
+    )
+    return result.scalar() is not None
+
+
 def upgrade() -> None:
     for view_suffix, legality_key in FORMAT_LEGALITY_MAP.items():
         view_name = f"cards_{view_suffix}"
 
-        # Create materialized view (IF NOT EXISTS for idempotent re-runs
-        # after partial failures)
-        op.execute(f"""
-            CREATE MATERIALIZED VIEW IF NOT EXISTS {view_name} AS
-            SELECT *
-            FROM cards
-            WHERE legalities->>'{legality_key}' = 'legal'
-        """)
+        # Create materialized view if it doesn't already exist
+        # (PostgreSQL has no IF NOT EXISTS for materialized views)
+        if not _view_exists(view_name):
+            op.execute(f"""
+                CREATE MATERIALIZED VIEW {view_name} AS
+                SELECT *
+                FROM cards
+                WHERE legalities->>'{legality_key}' = 'legal'
+            """)
 
         # Unique index on id — required for REFRESH MATERIALIZED VIEW CONCURRENTLY
-        op.execute(f"""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_{view_name}_id ON {view_name} (id)
-        """)
+        if not _index_exists(f"idx_{view_name}_id"):
+            op.execute(f"""
+                CREATE UNIQUE INDEX idx_{view_name}_id ON {view_name} (id)
+            """)
 
         # Name index for text lookups
-        op.execute(f"""
-            CREATE INDEX IF NOT EXISTS idx_{view_name}_name ON {view_name} (name)
-        """)
+        if not _index_exists(f"idx_{view_name}_name"):
+            op.execute(f"""
+                CREATE INDEX idx_{view_name}_name ON {view_name} (name)
+            """)
 
         # Lowercase name index for case-insensitive lookups
-        op.execute(f"""
-            CREATE INDEX IF NOT EXISTS idx_{view_name}_name_lower ON {view_name} (lower(name))
-        """)
+        if not _index_exists(f"idx_{view_name}_name_lower"):
+            op.execute(f"""
+                CREATE INDEX idx_{view_name}_name_lower ON {view_name} (lower(name))
+            """)
 
         # GIN index on colors for array containment queries
-        op.execute(f"""
-            CREATE INDEX IF NOT EXISTS idx_{view_name}_colors ON {view_name} USING gin (colors)
-        """)
+        if not _index_exists(f"idx_{view_name}_colors"):
+            op.execute(f"""
+                CREATE INDEX idx_{view_name}_colors ON {view_name} USING gin (colors)
+            """)
 
         # NOTE: HNSW vector indexes are omitted intentionally.
         # They consume too much disk/shared memory for constrained hosting
