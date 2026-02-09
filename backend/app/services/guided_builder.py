@@ -33,6 +33,13 @@ ROLE_MAP: Dict[str, List[str]] = {
     "lifegain": ["lifegain"],
     "graveyard hate": ["graveyard_hate"],
     "tutors": ["tutor"],
+    "sacrifice outlets": ["recursion"],
+    "board wipes": ["removal_mass"],
+    "spot removal": ["removal_targeted"],
+    "cheap threats": ["threat_cheap"],
+    "big threats": ["threat_finisher"],
+    "top end": ["threat_finisher"],
+    "early threats": ["threat_cheap"],
 }
 
 # Role targets by archetype - rough guide for what a deck "wants"

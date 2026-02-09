@@ -55,7 +55,7 @@ TOOLS = [
                 "roles": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Role groups to suggest cards for (e.g. ['threats', 'removal', 'card advantage', 'protection'])"
+                    "description": "Role groups to suggest cards for. MUST use from: threats, creatures, removal, card advantage, card draw, counterspells, protection, ramp, burn, recursion, finishers, interaction, discard, lifegain, graveyard hate, tutors, sacrifice outlets, board wipes, spot removal, cheap threats, big threats"
                 }
             },
             "required": ["strategy", "colors", "roles"]
@@ -875,6 +875,31 @@ RULES:
         if build_around_cards:
             conversation.update_context(build_around_cards=build_around_cards)
 
+        # Build a dedicated "Build Around" group so the user can add the named card(s)
+        build_around_group = None
+        if build_around_cards:
+            ba_cards = []
+            for ba_name in build_around_cards:
+                if ba_name.lower() in existing_lower:
+                    continue
+                card = await self.card_service.get_by_name(ba_name, format=format)
+                if card:
+                    ba_cards.append({
+                        "card_name": card.name,
+                        "quantity": 1 if format == "cedh" else 4,
+                        "mana_cost": card.mana_cost,
+                        "type_line": card.type_line,
+                        "image_uri": card.image_uri,
+                        "reasoning": None,
+                    })
+            if ba_cards:
+                build_around_group = {
+                    "group_name": "Build Around",
+                    "role": "build_around",
+                    "is_batch": False,
+                    "cards": ba_cards,
+                }
+
         # Get synergy cards by blending co-occurrence data with mechanical synergy
         synergy_group = None
         if build_around_cards:
@@ -932,15 +957,15 @@ RULES:
                             "mechanical_score": mech_score,
                         }
 
-                # Compute blended score: mechanical synergy weighted higher than co-occurrence
-                # because co-occurrence can reflect generic "good stuff" while mechanical
-                # synergy captures actual strategic fit
+                # Compute blended score: co-occurrence weighted higher than mechanical synergy
+                # because co-occurrence reflects tournament-proven competitive viability
+                # while mechanical regex patterns are a supporting signal
                 for entry in merged_synergy.values():
                     cooc = entry["cooccurrence_score"]
                     mech = entry["mechanical_score"]
                     # Both sources agreeing is the strongest signal
                     both_bonus = 0.2 if cooc > 0 and mech > 0 else 0.0
-                    entry["blended_score"] = (0.35 * cooc) + (0.65 * mech) + both_bonus
+                    entry["blended_score"] = (0.65 * cooc) + (0.35 * mech) + both_bonus
 
                 # Sort by blended score and build the synergy group
                 ranked = sorted(
@@ -976,18 +1001,18 @@ RULES:
             except Exception as e:
                 logger.warning(f"Synergy lookup failed: {e}")
 
-        # Collect synergy card names so role groups don't duplicate them
-        synergy_names = []
+        # Collect build-around + synergy card names so role groups don't duplicate them
+        exclude_names = list(build_around_cards)
         if synergy_group:
-            synergy_names = [c["card_name"] for c in synergy_group["cards"]]
+            exclude_names.extend(c["card_name"] for c in synergy_group["cards"])
 
         # Query cards grouped by role (now tournament-aware)
-        # Pass synergy card names + existing deck cards so roles don't repeat them
+        # Pass build-around + synergy card names + existing deck cards so roles don't repeat them
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
             strategy=strategy,
             colors=colors,
             roles=roles,
-            existing_cards=existing + synergy_names,
+            existing_cards=existing + exclude_names,
             format=format,
             cards_per_role=cards_per_role,
         )
@@ -995,12 +1020,16 @@ RULES:
         # Build card suggestion groups
         card_suggestions = []
 
-        # Add synergy group first if we have build-around cards
+        # Add build-around group first, then synergy group
+        if build_around_group:
+            card_suggestions.append(build_around_group)
         if synergy_group:
             card_suggestions.append(synergy_group)
 
         # Track all card names across groups for final dedup
-        all_suggested = {c["card_name"].lower() for c in (synergy_group or {}).get("cards", [])}
+        all_suggested = set()
+        for grp in card_suggestions:
+            all_suggested.update(c["card_name"].lower() for c in grp.get("cards", []))
 
         for role, cards in role_cards.items():
             # Filter out any land cards and cross-group duplicates
