@@ -862,6 +862,10 @@ RULES:
         existing = [e.get("card_name", "") for e in deck.get("main_deck", [])]
         existing_lower = {n.lower() for n in existing}
 
+        # Merge in previously suggested cards so we don't re-suggest declined cards
+        previously_suggested = set(conversation.get_context().get("suggested_cards", []))
+        existing_lower = existing_lower | previously_suggested
+
         cards_per_role = 12 if format == "cedh" else 6
 
         # Extract card names from the strategy to find co-occurring cards
@@ -1061,6 +1065,15 @@ RULES:
         # Final safety net: validate all suggestions against format legality
         card_suggestions = await self._validate_suggestions_legality(card_suggestions, format)
 
+        # Persist all suggested card names so they aren't re-suggested in future turns
+        new_suggested = set()
+        for grp in card_suggestions:
+            for c in grp.get("cards", []):
+                new_suggested.add(c["card_name"].lower())
+        conversation.update_context(
+            suggested_cards=list(previously_suggested | new_suggested)
+        )
+
         response = ai_text + "\n\n" if ai_text else ""
         response += f"Here are my suggestions for your **{strategy}** deck. Review each group and add the cards you like!"
 
@@ -1093,6 +1106,10 @@ RULES:
 
         deck = conversation.current_deck or {}
         existing = [e.get("card_name", "") for e in deck.get("main_deck", [])]
+
+        # Merge in previously suggested cards so we don't re-suggest declined cards
+        previously_suggested = set(conversation.get_context().get("suggested_cards", []))
+        existing = existing + [n for n in previously_suggested if n not in {e.lower() for e in existing}]
 
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
             strategy=strategy or role,
@@ -1128,6 +1145,15 @@ RULES:
 
         # Final safety net: validate all suggestions against format legality
         card_suggestions = await self._validate_suggestions_legality(card_suggestions, format)
+
+        # Persist all suggested card names so they aren't re-suggested in future turns
+        new_suggested = set()
+        for grp in card_suggestions:
+            for c in grp.get("cards", []):
+                new_suggested.add(c["card_name"].lower())
+        conversation.update_context(
+            suggested_cards=list(previously_suggested | new_suggested)
+        )
 
         response = ai_text + "\n\n" if ai_text else ""
         response += f"Here are some **{role}** options for your deck:"
