@@ -63,13 +63,13 @@ TOOLS = [
     },
     {
         "name": "suggest_package",
-        "description": "Suggest a focused package of cards for a specific role/gap in an existing deck. Use when the user asks for cards to fill a specific need like 'what removal should I play?' or 'I need more card draw'. Returns 1 group.",
+        "description": "Suggest a focused package of cards for a specific role/gap in an existing deck. Use when the user asks for cards to fill a specific need like 'what removal should I play?' or 'I need more card draw'. Also use when the user asks for cards with a specific MTG keyword mechanic like 'cards with surveil' or 'flying creatures' - pass the mechanic name as the role. Returns 1 group.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "role": {
                     "type": "string",
-                    "description": "The role to fill (e.g. 'removal', 'card draw', 'finishers', 'counterspells', 'ramp')"
+                    "description": "The role to fill OR the MTG keyword mechanic to search for. Examples: 'removal', 'card draw', 'finishers', 'counterspells', 'ramp', 'surveil', 'flying', 'mill', 'deathtouch'. When the user asks for a specific mechanic (e.g. 'cards with surveil'), use the mechanic name directly (e.g. 'surveil')."
                 },
                 "strategy": {
                     "type": "string",

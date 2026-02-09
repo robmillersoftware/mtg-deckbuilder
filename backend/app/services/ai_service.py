@@ -371,8 +371,18 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
                     from app.services.card_service import get_format_legality_condition
                     from sqlalchemy import or_
 
-                    # Build conditions for each keyword
-                    keyword_conditions = [Card.oracle_text.ilike(f"%{kw}%") for kw in unique_keywords]
+                    # Build conditions for each keyword.
+                    # Proper MTG mechanic keywords (surveil, mill, etc.) are stored
+                    # in the Card.keywords ARRAY column by Scryfall. Use contains()
+                    # for these. Oracle text phrases ("sacrifice a", "enters the
+                    # battlefield") must still be matched via ilike on oracle_text.
+                    from app.services.guided_builder import MTG_KEYWORDS
+                    keyword_conditions = []
+                    for kw in unique_keywords:
+                        if kw.lower() in MTG_KEYWORDS:
+                            keyword_conditions.append(Card.keywords.contains([kw.title()]))
+                        else:
+                            keyword_conditions.append(Card.oracle_text.ilike(f"%{kw}%"))
 
                     # Also filter by colors
                     colors_upper = [c.upper() for c in colors]
