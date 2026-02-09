@@ -15,6 +15,51 @@ from app.services.card_service import CardService, get_format_view, FORMAT_LEGAL
 
 logger = logging.getLogger(__name__)
 
+# Known MTG keyword mechanics (from Scryfall's keywords field).
+# Used to detect when a user asks for cards with a specific mechanic
+# (e.g. "cards with Surveil") vs a deck role (e.g. "removal").
+# Stored lowercase for case-insensitive matching.
+MTG_KEYWORDS = {
+    "surveil", "mill", "flying", "trample", "deathtouch", "hexproof",
+    "lifelink", "menace", "reach", "haste", "flash", "vigilance",
+    "first strike", "double strike", "ward", "convoke", "proliferate",
+    "explore", "transform", "cycling", "kicker", "flashback", "madness",
+    "affinity", "cascade", "delve", "dredge", "escape", "foretell",
+    "morph", "mutate", "ninjutsu", "persist", "undying", "unearth",
+    "scry", "adapt", "riot", "spectacle", "afterlife", "amass",
+    "crew", "equip", "fabricate", "improvise", "investigate",
+    "prowess", "raid", "revolt", "threshold", "toxic", "infect",
+    "wither", "exalted", "extort", "bargain", "offspring", "manifest",
+    "connive", "descend", "discover", "plot", "craft", "defender",
+    "indestructible", "shroud", "protection", "landfall",
+    "channel", "devotion", "annihilator", "battle cry",
+    "cipher", "evolve", "exploit", "flanking",
+    "graft", "ingest", "living weapon",
+    "megamorph", "miracle", "modular", "overload", "phasing",
+    "provoke", "rampage", "rebound", "retrace", "shadow",
+    "skulk", "soulbond", "storm", "suspend", "totem armor",
+    "unleash", "bestow", "tribute", "outlast", "dash",
+    "renown", "emerge", "embalm", "eternalize", "ascend",
+    "jump-start", "mentor",
+}
+
+
+def _extract_mtg_keywords(role: str) -> List[str]:
+    """Extract recognized MTG keywords from a role string.
+
+    Handles patterns like "cards with surveil", "surveil cards",
+    "surveil", "flying creatures", etc.
+    """
+    role_lower = role.lower().strip()
+    found = []
+    for kw in sorted(MTG_KEYWORDS, key=len, reverse=True):
+        if kw in role_lower:
+            found.append(kw)
+            # Remove matched keyword to avoid sub-matches
+            role_lower = role_lower.replace(kw, "")
+    return found
+
+
 # Map user-facing role names (from Claude tool calls) to system role names in card_roles table
 ROLE_MAP: Dict[str, List[str]] = {
     "threats": ["threat_cheap", "threat_midrange", "threat_finisher"],
@@ -436,6 +481,45 @@ class DeckAnalyzer:
                     f"Meta-first: role='{role}' -> system_roles={system_roles}, "
                     f"got {len(role_cards)} cards (strategy='{strategy}')"
                 )
+
+            # Keyword-aware path: if the role mentions a specific MTG mechanic
+            # (e.g. "cards with surveil"), search by keyword first.
+            if len(role_cards) < cards_per_role and not system_roles:
+                remaining_needed = cards_per_role - len(role_cards)
+                detected_keywords = _extract_mtg_keywords(role)
+                if detected_keywords:
+                    # Capitalize keywords to match Scryfall's format in the DB
+                    capitalized = [kw.title() for kw in detected_keywords]
+                    logger.info(
+                        f"Keyword search: role='{role}' detected keywords={capitalized}"
+                    )
+                    keyword_cards = await self.card_service.search(
+                        keywords=capitalized,
+                        colors=colors if colors else None,
+                        standard_only=(format == "standard"),
+                        format=format,
+                        limit=remaining_needed * 3,
+                    )
+                    for card in keyword_cards:
+                        if card.name.lower() in global_seen:
+                            continue
+                        if len(role_cards) >= cards_per_role:
+                            break
+                        role_cards.append({
+                            "card_name": card.name,
+                            "card_id": str(card.id),
+                            "mana_cost": card.mana_cost,
+                            "type_line": card.type_line,
+                            "oracle_text": card.oracle_text,
+                            "image_uri": card.image_uri,
+                            "image_uri_small": card.image_uri_small,
+                        })
+                        global_seen.add(card.name.lower())
+
+                    if role_cards:
+                        logger.info(
+                            f"Keyword search: got {len(role_cards)} cards for keywords={capitalized}"
+                        )
 
             # Fallback: semantic search if no ROLE_MAP entry or not enough cards
             if len(role_cards) < cards_per_role:
