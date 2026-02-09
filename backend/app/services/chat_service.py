@@ -311,14 +311,18 @@ class ChatService:
             system_prompt = f"""You are Spellbook, a collaborative deck building partner for {format_name} format.
 You work WITH the user, not FOR them. Suggest cards, explain choices, let them decide.
 
+{format_guidance}
+
 {conv_context}
 {deck_context}
 {conv_summary}
-{format_guidance}
+
+CRITICAL RULE - YOU MUST USE TOOLS TO RECOMMEND CARDS:
+When the user names a specific card to build around, or picks colors/an archetype, you MUST call suggest_core. Do NOT respond with only text describing the card or listing card names in your message. Card recommendations MUST go through the tools so they appear in the interactive UI. A text-only response that describes cards without calling a tool is NEVER acceptable when the user wants to build a deck.
 
 FLOW:
-1. EXPLORE: Help settle on a direction. If vague, use analyze_meta. If they name a card/colors, move to step 2.
-2. BUILD CORE: Use suggest_core to propose key cards in role-based groups (e.g. threats, removal, card advantage, protection).
+1. EXPLORE: Help settle on a direction. ONLY if the user is truly vague (e.g. "help me", "what's good"), use analyze_meta. If they name ANY specific card, colors, or archetype, skip directly to step 2.
+2. BUILD CORE: Call suggest_core with the strategy, colors (inferred from the card if needed), and 3-5 role groups. You may include a BRIEF (1-2 sentence) introduction before the tool call, but the tool call is MANDATORY.
 3. FILL GAPS: After user adds cards, use suggest_package for missing roles.
 4. LANDS: When nonland count is near target, use finalize_mana_base. ONLY use finalize_mana_base for lands.
 5. REFINE: Help with cuts, sideboard, matchups using modify_deck or get_matchup_info.
@@ -331,9 +335,8 @@ RULES:
 - For questions about matchups, strategy, or "how do I beat X" - use get_matchup_info or respond with text advice. Do NOT generate cards.
 - When the user says "what's good" or similar vague exploration, use analyze_meta.
 - Be concise in your text responses. Focus on actionable advice.
-- Always explain your reasoning briefly when suggesting a direction.
-- NEVER ask the user to clarify which card they mean if CARD REFERENCES are provided below. The card has already been identified from the database. Proceed directly to building around it.
-- If the user names a card that IS in the CARD REFERENCES section, treat it as unambiguous and immediately proceed to suggest_core or the appropriate next step.
+- NEVER ask the user to clarify which card they mean if CARD REFERENCES are provided below. The card has already been identified from the database.
+- If the user names a card that IS in the CARD REFERENCES section, you MUST immediately call suggest_core. Do NOT describe the card back to the user, do NOT ask which direction they want, do NOT suggest commanders. Just call the tool.
 - IMPORTANT: When the user asks for "more support", "more help", "more options", or similar continuation requests, continue building on the CURRENT STRATEGY described in the conversation context above. Do NOT reset to a generic help menu. Suggest more cards, offer alternative approaches within the strategy, or advance to the next phase.{card_context}"""
 
             # Build conversation history - send last 20 messages for multi-turn context
@@ -352,13 +355,21 @@ RULES:
             # Fix: ensure messages alternate (Claude API requirement)
             api_messages = self._fix_message_alternation(api_messages)
 
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2048,
-                system=system_prompt,
-                tools=TOOLS,
-                messages=api_messages,
-            )
+            # When a card has been resolved from the database, force tool use
+            # to ensure card recommendations go through the interactive UI
+            # rather than being listed as plain text.
+            api_kwargs = {
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 2048,
+                "system": system_prompt,
+                "tools": TOOLS,
+                "messages": api_messages,
+            }
+            if resolved_cards and not deck:
+                # User named a card and no deck exists yet -> force a tool call
+                api_kwargs["tool_choice"] = {"type": "any"}
+
+            response = client.messages.create(**api_kwargs)
 
             # Capture text content alongside tool use
             response_text = ""
@@ -525,14 +536,16 @@ RULES:
 - Suggest cards in larger batches (~10-15 per group, 5 groups)
 - Target ~34 lands, ~65 nonland cards"""
         # All non-Commander 60-card formats
-        return f"""IMPORTANT - {format_name.upper()} FORMAT RULES:
-- This is {format_name}, a 60-card constructed format. NOT Commander/EDH.
+        return f"""CRITICAL FORMAT CONSTRAINT - {format_name.upper()}:
+- This is {format_name}, a 60-card constructed format. NOT Commander/EDH/cEDH.
 - 60 card minimum main deck, 15 card sideboard.
 - Up to 4 copies of any non-basic land card.
-- Do NOT mention or suggest commanders, color identity restrictions, or singleton constraints.
+- NEVER mention commanders, color identity, singleton, or EDH in any form. These concepts do not exist in {format_name}.
+- NEVER suggest picking a commander or legendary creature as a "commander". There are no commanders in {format_name}.
 - Do NOT reference Commander/EDH strategies, archetypes, or card evaluations.
 - Only suggest cards that are legal in {format_name}.
 - Think in terms of 4-of staples, playsets, and {format_name} metagame archetypes.
+- When a user says "build around [card]", they want a 60-card {format_name} deck featuring that card, NOT a Commander deck.
 - Target ~24 lands, ~36 nonland cards (varies by archetype)."""
 
     def _fix_message_alternation(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
