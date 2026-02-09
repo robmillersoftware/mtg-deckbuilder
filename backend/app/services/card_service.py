@@ -330,9 +330,14 @@ class CardService:
             elif standard_only:
                 conditions.append("is_standard_legal = true")
             if colors:
-                for color in colors:
-                    if color.upper() in ["W", "U", "B", "R", "G"]:
-                        conditions.append(f"'{color.upper()}' = ANY(colors)")
+                # Card's colors must be a subset of the deck's colors (or colorless).
+                # A BR deck wants B, R, BR, and colorless cards — but NOT BG, BU, etc.
+                valid_colors = [c.upper() for c in colors if c.upper() in ["W", "U", "B", "R", "G"]]
+                if valid_colors:
+                    arr_literal = "ARRAY[" + ",".join(f"'{c}'" for c in valid_colors) + "]::text[]"
+                    conditions.append(
+                        f"(colors <@ {arr_literal} OR colors = '{{}}' OR colors IS NULL)"
+                    )
 
             where_clause = " AND ".join(conditions)
 
@@ -370,7 +375,7 @@ class CardService:
 
         except Exception as e:
             logger.error(f"Vector search failed: {e}, falling back to text search")
-            return await self.search(q=query, standard_only=standard_only, limit=limit, colors=colors)
+            return await self.search(q=query, standard_only=standard_only, format=format, limit=limit, colors=colors)
 
     async def get_candidates(
         self,
