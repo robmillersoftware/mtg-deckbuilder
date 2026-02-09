@@ -29,9 +29,10 @@ def upgrade() -> None:
     for view_suffix, legality_key in FORMAT_LEGALITY_MAP.items():
         view_name = f"cards_{view_suffix}"
 
-        # Create materialized view
+        # Create materialized view (IF NOT EXISTS for idempotent re-runs
+        # after partial failures)
         op.execute(f"""
-            CREATE MATERIALIZED VIEW {view_name} AS
+            CREATE MATERIALIZED VIEW IF NOT EXISTS {view_name} AS
             SELECT *
             FROM cards
             WHERE legalities->>'{legality_key}' = 'legal'
@@ -39,31 +40,34 @@ def upgrade() -> None:
 
         # Unique index on id — required for REFRESH MATERIALIZED VIEW CONCURRENTLY
         op.execute(f"""
-            CREATE UNIQUE INDEX idx_{view_name}_id ON {view_name} (id)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_{view_name}_id ON {view_name} (id)
         """)
 
         # Name index for text lookups
         op.execute(f"""
-            CREATE INDEX idx_{view_name}_name ON {view_name} (name)
+            CREATE INDEX IF NOT EXISTS idx_{view_name}_name ON {view_name} (name)
         """)
 
         # Lowercase name index for case-insensitive lookups
         op.execute(f"""
-            CREATE INDEX idx_{view_name}_name_lower ON {view_name} (lower(name))
+            CREATE INDEX IF NOT EXISTS idx_{view_name}_name_lower ON {view_name} (lower(name))
         """)
 
         # GIN index on colors for array containment queries
         op.execute(f"""
-            CREATE INDEX idx_{view_name}_colors ON {view_name} USING gin (colors)
+            CREATE INDEX IF NOT EXISTS idx_{view_name}_colors ON {view_name} USING gin (colors)
         """)
 
-        # Vector index for semantic search (cosine distance)
-        # Only index rows that actually have embeddings
-        op.execute(f"""
-            CREATE INDEX idx_{view_name}_embedding
-            ON {view_name} USING hnsw (embedding vector_cosine_ops)
-            WHERE embedding IS NOT NULL
-        """)
+        # NOTE: HNSW vector indexes are omitted intentionally.
+        # They consume too much disk/shared memory for constrained hosting
+        # environments (e.g. Railway). The materialized views are already
+        # small enough that sequential vector scans are fast.
+
+    # Drop any HNSW indexes that may have been created by a previous
+    # version of this migration before it failed mid-way.
+    for view_suffix in FORMAT_LEGALITY_MAP:
+        view_name = f"cards_{view_suffix}"
+        op.execute(f"DROP INDEX IF EXISTS idx_{view_name}_embedding")
 
 
 def downgrade() -> None:
