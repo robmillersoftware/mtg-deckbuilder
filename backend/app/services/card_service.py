@@ -364,6 +364,8 @@ class CardService:
 
         except Exception as e:
             logger.error(f"Vector search failed: {e}, falling back to text search")
+            # Rollback the aborted transaction so the text-search fallback can run
+            await self.db.rollback()
             return await self.search(q=query, standard_only=standard_only, format=format, limit=limit, colors=colors)
 
     async def _vector_search(
@@ -430,7 +432,7 @@ class CardService:
             # Card's colors must be a subset of the deck's colors (or colorless).
             valid_colors = [c.upper() for c in colors if c.upper() in ["W", "U", "B", "R", "G"]]
             if valid_colors:
-                arr_literal = "ARRAY[" + ",".join(f"'{c}'" for c in valid_colors) + "]::text[]"
+                arr_literal = "ARRAY[" + ",".join(f"'{c}'" for c in valid_colors) + "]::varchar[]"
                 conditions.append(
                     f"(colors <@ {arr_literal} OR colors = '{{}}' OR colors IS NULL)"
                 )
