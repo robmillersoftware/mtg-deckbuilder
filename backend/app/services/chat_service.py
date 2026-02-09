@@ -175,10 +175,15 @@ class ChatService:
         self.deck_generator = DeckGenerator(db)
         self.deck_analyzer = DeckAnalyzer(db)
 
-    async def _resolve_card_mentions(self, message: str, format: str) -> List[Dict[str, str]]:
+    async def _resolve_card_mentions(
+        self, message: str, format: str, check_legality: bool = True
+    ) -> List[Dict[str, str]]:
         """
         Look up card names mentioned in the user's message against the database.
         Returns a list of dicts with card details for any matches found.
+
+        If check_legality is False, skips format legality filtering (used as
+        a fallback to detect cards that exist but aren't legal in the format).
         """
         words = message.split()
         potential_names = []
@@ -198,23 +203,29 @@ class ChatService:
         resolved = []
         seen_names = set()
 
+        legality_filter = get_format_legality_condition(format) if check_legality else None
+
         for name in potential_names:
             if len(name) < 3:
                 continue
 
             # Try exact match first
+            conditions = [sqlfunc.lower(Card.name) == name.lower()]
+            if legality_filter is not None:
+                conditions.append(legality_filter)
             query = select(Card.name, Card.type_line, Card.oracle_text, Card.mana_cost, Card.colors).where(
-                sqlfunc.lower(Card.name) == name.lower(),
-                get_format_legality_condition(format)
+                *conditions
             ).limit(1)
             result = await self.db.execute(query)
             row = result.first()
 
             if not row:
                 # Try partial match, but count how many distinct cards match
+                partial_conditions = [sqlfunc.lower(Card.name).like(f"%{name.lower()}%")]
+                if legality_filter is not None:
+                    partial_conditions.append(legality_filter)
                 count_query = select(sqlfunc.count(sqlfunc.distinct(Card.name))).where(
-                    sqlfunc.lower(Card.name).like(f"%{name.lower()}%"),
-                    get_format_legality_condition(format)
+                    *partial_conditions
                 )
                 count_result = await self.db.execute(count_query)
                 match_count = count_result.scalar() or 0
@@ -222,8 +233,7 @@ class ChatService:
                 if match_count == 1:
                     # Only one card matches - safe to use it
                     query = select(Card.name, Card.type_line, Card.oracle_text, Card.mana_cost, Card.colors).where(
-                        sqlfunc.lower(Card.name).like(f"%{name.lower()}%"),
-                        get_format_legality_condition(format)
+                        *partial_conditions
                     ).limit(1)
                     result = await self.db.execute(query)
                     row = result.first()
@@ -281,6 +291,17 @@ class ChatService:
             # Resolve card names mentioned in the message
             resolved_cards = await self._resolve_card_mentions(message, format)
 
+            # Fallback: if no cards found with format filter, try without format
+            # restriction to detect cards that exist but aren't legal in the
+            # selected format.  This prevents the AI from hallucinating card
+            # details and lets us warn it about legality.
+            format_illegal_cards: List[Dict[str, str]] = []
+            if not resolved_cards:
+                all_cards = await self._resolve_card_mentions(
+                    message, format, check_legality=False
+                )
+                format_illegal_cards = all_cards
+
             # Build card context if any cards were found
             card_context = ""
             if resolved_cards:
@@ -293,6 +314,22 @@ class ChatService:
                     "\n\nCARD REFERENCES (verified from database):\n"
                     + "\n".join(card_lines)
                     + "\nThese cards have been verified. Do NOT ask for clarification about them."
+                )
+            elif format_illegal_cards:
+                format_name_upper = "cEDH" if format == "cedh" else format.capitalize()
+                card_lines = []
+                for c in format_illegal_cards:
+                    card_lines.append(
+                        f"- {c['name']} {c['mana_cost']} — {c['type_line']}: {c['oracle_text'][:200]}"
+                    )
+                card_context = (
+                    f"\n\nCARD REFERENCES (found but NOT LEGAL in {format_name_upper}):\n"
+                    + "\n".join(card_lines)
+                    + f"\nThese cards are NOT legal in {format_name_upper}. "
+                    + f"Do NOT build a deck with them. Instead, help the user find "
+                    + f"{format_name_upper}-legal cards that enable a similar strategy. "
+                    + f"Call suggest_core with a strategy description inspired by what "
+                    + f"these cards do, using only {format_name_upper}-legal cards."
                 )
 
             # Build deck context string
@@ -355,9 +392,19 @@ RULES:
             # Fix: ensure messages alternate (Claude API requirement)
             api_messages = self._fix_message_alternation(api_messages)
 
-            # When a card has been resolved from the database, force tool use
-            # to ensure card recommendations go through the interactive UI
-            # rather than being listed as plain text.
+            # When a card has been resolved from the database or the user
+            # expresses clear deck-building intent, force tool use to ensure
+            # card recommendations go through the interactive UI rather than
+            # being listed as plain text (which can hallucinate Commander
+            # concepts in non-Commander formats).
+            build_intent_keywords = [
+                "build around", "build with", "i want to build",
+                "i want to play", "deck with", "deck around",
+                "deck featuring", "brew around", "brew with",
+            ]
+            has_build_intent = any(
+                kw in message.lower() for kw in build_intent_keywords
+            )
             api_kwargs = {
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": 2048,
@@ -365,8 +412,10 @@ RULES:
                 "tools": TOOLS,
                 "messages": api_messages,
             }
-            if resolved_cards and not deck:
-                # User named a card and no deck exists yet -> force a tool call
+            if (resolved_cards or format_illegal_cards or has_build_intent) and not deck:
+                # User named a card or expressed build intent and no deck
+                # exists yet -> force a tool call to prevent free-text
+                # Commander suggestions in non-Commander formats
                 api_kwargs["tool_choice"] = {"type": "any"}
 
             response = client.messages.create(**api_kwargs)
