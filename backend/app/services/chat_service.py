@@ -524,9 +524,16 @@ RULES:
 - Color identity: deck can only contain cards matching the commander's color identity
 - Suggest cards in larger batches (~10-15 per group, 5 groups)
 - Target ~34 lands, ~65 nonland cards"""
-        elif format in ["modern", "legacy"]:
-            return f"Building for {format_name} format - 60 card minimum, 4 copies max of any non-basic land card."
-        return "Building for Standard format - 60 card minimum, 4 copies max of any non-basic land card."
+        # All non-Commander 60-card formats
+        return f"""IMPORTANT - {format_name.upper()} FORMAT RULES:
+- This is {format_name}, a 60-card constructed format. NOT Commander/EDH.
+- 60 card minimum main deck, 15 card sideboard.
+- Up to 4 copies of any non-basic land card.
+- Do NOT mention or suggest commanders, color identity restrictions, or singleton constraints.
+- Do NOT reference Commander/EDH strategies, archetypes, or card evaluations.
+- Only suggest cards that are legal in {format_name}.
+- Think in terms of 4-of staples, playsets, and {format_name} metagame archetypes.
+- Target ~24 lands, ~36 nonland cards (varies by archetype)."""
 
     def _fix_message_alternation(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Ensure messages alternate user/assistant as required by Claude API."""
