@@ -8,6 +8,8 @@ from collections import defaultdict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text, or_
 
+from app.services.card_service import get_format_view
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,12 +35,12 @@ SYNERGY_PATTERNS: Dict[str, List[Tuple[str, float]]] = {
         ("disturb", 1.0),
         ("aftermath", 0.75),
         ("retrace", 0.75),
-        # Death/sacrifice synergy
-        ("when.*dies", 0.75),
-        ("whenever.*dies", 0.75),
-        ("sacrifice a creature", 0.75),
-        ("sacrifice a permanent", 0.75),
-        ("sacrifice another", 0.75),
+        # Death/sacrifice synergy (tangential for graveyard; core in "sacrifice" theme)
+        ("when.*dies", 0.25),
+        ("whenever.*dies", 0.25),
+        ("sacrifice a creature", 0.25),
+        ("sacrifice a permanent", 0.25),
+        ("sacrifice another", 0.25),
         # Reanimation
         ("return.*creature.*from.*graveyard.*to the battlefield", 1.0),
         ("reanimate", 1.0),
@@ -301,70 +303,6 @@ class CardSelectionMixin:
         # Only include themes with meaningful signal (score >= 0.75)
         return [t for t, s in sorted_themes if s >= 0.75][:7]
 
-    async def _get_tournament_synergy_cards(
-        self,
-        themes: List[str],
-        limit: int = 40,
-        format: str = "standard"
-    ) -> List[Dict[str, Any]]:
-        """Get tournament-played cards that match the given themes."""
-        from app.models.card import Card
-        from app.models.meta import Decklist, Event
-
-        if not themes:
-            return []
-
-        # Get recent tournament decklists for the specified format
-        query = select(Decklist).join(Event).where(
-            Event.format == format
-        ).limit(100)
-        result = await self.db.execute(query)
-        decklists = result.scalars().all()
-
-        # Collect all cards from decklists
-        card_counts = defaultdict(int)
-        for decklist in decklists:
-            for entry in (decklist.main_deck or []):
-                card_name = entry.get("card_name", "")
-                if card_name:
-                    card_counts[card_name] += 1
-
-        # Get card data for the most played cards
-        top_cards = sorted(card_counts.items(), key=lambda x: x[1], reverse=True)[:200]
-        card_names = [c[0] for c in top_cards]
-
-        if not card_names:
-            return []
-
-        query = select(Card).where(
-            func.lower(Card.name).in_([n.lower() for n in card_names])
-        )
-        result = await self.db.execute(query)
-        cards = result.scalars().all()
-
-        # Filter to cards matching themes
-        matching_cards = []
-        for card in cards:
-            oracle = (card.oracle_text or "").lower()
-            type_line = (card.type_line or "").lower()
-            name_lower = card.name.lower()
-
-            for theme in themes:
-                theme_lower = theme.lower()
-                if (theme_lower in oracle or theme_lower in type_line or
-                    theme_lower in name_lower):
-                    matching_cards.append({
-                        "name": card.name,
-                        "mana_cost": card.mana_cost,
-                        "type_line": card.type_line,
-                        "recommended_quantity": 4,
-                        "frequency": card_counts.get(card.name, 1),
-                    })
-                    break
-
-        matching_cards.sort(key=lambda x: x["frequency"], reverse=True)
-        return matching_cards[:limit]
-
     async def _get_synergy_cards(
         self,
         themes: List[str],
@@ -373,9 +311,6 @@ class CardSelectionMixin:
         format: str = "standard"
     ) -> List[Dict[str, Any]]:
         """Get cards that synergize with the given themes using pattern-based scoring."""
-        from app.models.card import Card
-        from app.services.card_service import get_format_legality_condition
-
         if not themes:
             return []
 
@@ -397,46 +332,58 @@ class CardSelectionMixin:
                             if len(word) >= 4:
                                 search_terms.add(word)
 
-        # Query cards matching any of the search terms
-        conditions = []
-        for term in list(search_terms)[:15]:  # Cap to avoid overly broad queries
-            conditions.append(Card.oracle_text.ilike(f"%{term}%"))
-            conditions.append(Card.type_line.ilike(f"%{term}%"))
-
-        if not conditions:
+        if not search_terms:
             return []
 
-        query = select(Card).where(
-            or_(*conditions),
-            get_format_legality_condition(format)
-        ).limit(200)
+        # Query cards from the format-specific materialized view
+        # This enforces legality structurally and DISTINCT ON deduplicates printings
+        view_name = get_format_view(format)
+        term_list = list(search_terms)[:15]  # Cap to avoid overly broad queries
+        or_clauses = []
+        params: Dict[str, Any] = {}
+        for i, term in enumerate(term_list):
+            or_clauses.append(f"LOWER(c.oracle_text) LIKE :term_{i}")
+            or_clauses.append(f"LOWER(c.type_line) LIKE :term_{i}")
+            params[f"term_{i}"] = f"%{term.lower()}%"
 
-        result = await self.db.execute(query)
-        cards = result.scalars().all()
+        or_sql = " OR ".join(or_clauses)
+        query_sql = f"""
+            SELECT DISTINCT ON (c.name)
+                c.name, c.mana_cost, c.type_line, c.oracle_text,
+                c.colors, c.keywords
+            FROM {view_name} c
+            WHERE ({or_sql})
+            ORDER BY c.name
+            LIMIT 200
+        """
+
+        result = await self.db.execute(text(query_sql), params)
+        rows = result.all()
 
         # Score and filter
         scored_cards = []
-        seen = set()
-        for card in cards:
-            if card.name in seen:
-                continue
-
-            card_colors = card.colors or []
+        for row in rows:
+            card_colors = row.colors or []
             is_colorless = len(card_colors) == 0
-            is_land = "land" in (card.type_line or "").lower()
+            is_land = "land" in (row.type_line or "").lower()
             matches_colors = all(c in colors_upper for c in card_colors)
 
             if not (is_colorless or is_land or matches_colors):
                 continue
 
-            score = self._score_card_synergy(card, themes)
-            if score > 0:
-                seen.add(card.name)
+            # Build a lightweight object for the scorer
+            card_obj = type("Card", (), {
+                "oracle_text": row.oracle_text,
+                "type_line": row.type_line,
+                "keywords": row.keywords or [],
+            })()
+            score = self._score_card_synergy(card_obj, themes)
+            if score >= 1.5:
                 scored_cards.append({
-                    "name": card.name,
-                    "mana_cost": card.mana_cost,
-                    "type_line": card.type_line,
-                    "oracle_text": card.oracle_text,
+                    "name": row.name,
+                    "mana_cost": row.mana_cost,
+                    "type_line": row.type_line,
+                    "oracle_text": row.oracle_text,
                     "synergy_score": score,
                 })
 

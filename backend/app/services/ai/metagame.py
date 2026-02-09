@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, union_all
 
 from app.models.meta import Decklist, Event, CardCooccurrence
-from app.services.card_service import get_format_legality_condition
+from app.services.card_service import get_format_legality_condition, get_format_view
 
 logger = logging.getLogger(__name__)
 
@@ -565,8 +565,6 @@ class MetagameMixin:
         format: str = "standard"
     ) -> List[Dict[str, Any]]:
         """Get cards that frequently co-occur with the given cards in tournament decks."""
-        from app.models.card import Card
-
         if not card_names:
             return []
 
@@ -609,26 +607,38 @@ class MetagameMixin:
             logger.info(f"No co-occurrence data found for {card_names}")
             return []
 
-        # Get card info to filter by color
+        # Get card info from the format-specific materialized view to filter by color
+        # DISTINCT ON (name) deduplicates across printings
         card_names_to_check = [row[0] for row in cooccurrence_results]
         colors_upper = [c.upper() for c in colors]
 
-        card_query = select(Card).where(
-            func.lower(Card.name).in_([n.lower() for n in card_names_to_check]),
-            get_format_legality_condition(format)
-        )
-        card_result = await self.db.execute(card_query)
-        cards = card_result.scalars().all()
+        view_name = get_format_view(format)
+        name_params = {}
+        name_placeholders = []
+        for i, n in enumerate(card_names_to_check):
+            name_params[f"n_{i}"] = n.lower()
+            name_placeholders.append(f":n_{i}")
 
-        # Build map of card name to colors
+        card_sql = f"""
+            SELECT DISTINCT ON (c.name)
+                c.name, c.colors, c.type_line
+            FROM {view_name} c
+            WHERE LOWER(c.name) IN ({', '.join(name_placeholders)})
+            ORDER BY c.name
+        """
+        from sqlalchemy import text as sa_text
+        card_result = await self.db.execute(sa_text(card_sql), name_params)
+        card_rows = card_result.all()
+
+        # Build map of card name to info
         card_color_map = {}
-        for card in cards:
-            card_colors = card.colors or []
+        for row in card_rows:
+            card_colors = row.colors or []
             is_colorless = len(card_colors) == 0
-            is_land = "land" in (card.type_line or "").lower()
+            is_land = "land" in (row.type_line or "").lower()
             matches_colors = all(c in colors_upper for c in card_colors)
             if is_colorless or is_land or matches_colors:
-                card_color_map[card.name.lower()] = card
+                card_color_map[row.name.lower()] = row
 
         # Filter results by color and build output
         synergy_cards = []

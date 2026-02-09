@@ -783,11 +783,16 @@ RULES:
 
         This is a safety net that catches any cards that slip through upstream filters
         (e.g., stale co-occurrence data, semantic search edge cases, incorrect DB legality).
+
+        Uses the format-specific materialized view for reliable enforcement.
         """
+        from sqlalchemy import text as sa_text
+        from app.services.card_service import get_format_view
+
         if not card_suggestions:
             return card_suggestions
 
-        legality_condition = get_format_legality_condition(format)
+        view_name = get_format_view(format)
 
         validated_groups = []
         for group in card_suggestions:
@@ -795,12 +800,19 @@ RULES:
             if not card_names:
                 continue
 
-            # Batch check which cards are legal in this format
-            legal_query = select(Card.name).where(
-                sqlfunc.lower(Card.name).in_([n.lower() for n in card_names]),
-                legality_condition,
-            )
-            result = await self.db.execute(legal_query)
+            # Batch check which cards are legal via the materialized view
+            name_params = {}
+            name_placeholders = []
+            for i, n in enumerate(card_names):
+                name_params[f"n_{i}"] = n.lower()
+                name_placeholders.append(f":n_{i}")
+
+            legal_sql = f"""
+                SELECT DISTINCT name
+                FROM {view_name}
+                WHERE LOWER(name) IN ({', '.join(name_placeholders)})
+            """
+            result = await self.db.execute(sa_text(legal_sql), name_params)
             legal_names = {row[0].lower() for row in result.all()}
 
             # Filter group cards to only legal ones
