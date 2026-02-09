@@ -619,6 +619,7 @@ REMINDER: ~{int(avg_lands)} LANDS + ~{total_deck_size - int(avg_lands)} NON-LAND
             logger.debug(f"[AI-SERVICE] {len(on_color_tournament)} tournament cards match colors {colors}")
 
             # Build format-specific rules
+            format_name = "cEDH" if format == "cedh" else format.capitalize()
             if format == "cedh":
                 from app.services.cedh_knowledge import get_cedh_system_prompt, CEDH_STAPLES
 
@@ -692,7 +693,7 @@ CARD COUNT CHECKLIST (must add up to 99):
 }}"""
             else:
                 target_lands = archetype_template.get('avg_lands', composition.get('avg_lands', 24)) if archetype_template else composition.get('avg_lands', 24)
-                format_header = f"""You are Spellbook, an expert Magic: The Gathering deck builder for Standard format.
+                format_header = f"""You are Spellbook, an expert Magic: The Gathering deck builder for {format_name} format.
 
 YOU MUST BUILD A COMPLETE 60-CARD DECK + 15-CARD SIDEBOARD.
 
