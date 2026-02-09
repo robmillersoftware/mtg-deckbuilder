@@ -20,11 +20,34 @@ FORMAT_LEGALITY_MAP = {
     "cedh": "commander",  # cEDH uses Commander legality
 }
 
+# Map internal format names to their materialized view table names.
+# These views contain ONLY cards legal in the given format, making
+# format enforcement structural rather than filter-based.
+FORMAT_VIEW_MAP = {
+    "standard": "cards_standard",
+    "historic": "cards_historic",
+    "modern": "cards_modern",
+    "legacy": "cards_legacy",
+    "cedh": "cards_commander",
+}
+
+
+def get_format_view(format_name: str) -> str:
+    """
+    Return the materialized view name for a format.
+
+    Falls back to the main ``cards`` table if the format has no dedicated view.
+    """
+    return FORMAT_VIEW_MAP.get(format_name, "cards")
+
 
 def get_format_legality_condition(format_name: str):
     """
     Get the SQLAlchemy condition for checking card legality in a format.
     Returns a condition that checks the legalities JSONB field.
+
+    Used as a backup filter for ORM queries that still hit the main cards table.
+    The materialized views are the primary enforcement layer.
     """
     legality_key = FORMAT_LEGALITY_MAP.get(format_name, "standard")
     # Check if legalities->>key = 'legal'
@@ -323,20 +346,37 @@ class CardService:
             # pgvector uses <=> for cosine distance, <-> for L2 distance
             embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
+            # Determine which table/view to query.
+            # Format-specific materialized views contain ONLY legal cards,
+            # so we don't need an additional legalities WHERE clause.
+            if format and format in FORMAT_VIEW_MAP:
+                source_table = get_format_view(format)
+            else:
+                source_table = "cards"
+
             conditions = ["embedding IS NOT NULL"]
-            if format and format in FORMAT_LEGALITY_MAP:
-                legality_key = FORMAT_LEGALITY_MAP[format]
-                conditions.append(f"legalities->>'{legality_key}' = 'legal'")
-            elif standard_only:
-                conditions.append("is_standard_legal = true")
+
+            # If querying the main table (no format view), add legality filter
+            if source_table == "cards":
+                if format and format in FORMAT_LEGALITY_MAP:
+                    legality_key = FORMAT_LEGALITY_MAP[format]
+                    conditions.append(f"legalities->>'{legality_key}' = 'legal'")
+                elif standard_only:
+                    conditions.append("is_standard_legal = true")
+
             if colors:
-                for color in colors:
-                    if color.upper() in ["W", "U", "B", "R", "G"]:
-                        conditions.append(f"'{color.upper()}' = ANY(colors)")
+                # Card's colors must be a subset of the deck's colors (or colorless).
+                # A BR deck wants B, R, BR, and colorless cards — but NOT BG, BU, etc.
+                valid_colors = [c.upper() for c in colors if c.upper() in ["W", "U", "B", "R", "G"]]
+                if valid_colors:
+                    arr_literal = "ARRAY[" + ",".join(f"'{c}'" for c in valid_colors) + "]::text[]"
+                    conditions.append(
+                        f"(colors <@ {arr_literal} OR colors = '{{}}' OR colors IS NULL)"
+                    )
 
             where_clause = " AND ".join(conditions)
 
-            # Use raw SQL for vector similarity search
+            # Use raw SQL for vector similarity search against the format view
             sql = text(f"""
                 SELECT id, name, mana_cost, cmc, type_line, oracle_text, power, toughness,
                        colors, color_identity, keywords, legalities, set_code, collector_number,
@@ -344,7 +384,7 @@ class CardService:
                        price_usd_foil, scryfall_uri, oracle_id, set_name, scryfall_id,
                        is_standard_legal, created_at, updated_at,
                        embedding <=> :embedding AS distance
-                FROM cards
+                FROM {source_table}
                 WHERE {where_clause}
                 ORDER BY embedding <=> :embedding
                 LIMIT :limit
@@ -370,7 +410,7 @@ class CardService:
 
         except Exception as e:
             logger.error(f"Vector search failed: {e}, falling back to text search")
-            return await self.search(q=query, standard_only=standard_only, limit=limit, colors=colors)
+            return await self.search(q=query, standard_only=standard_only, format=format, limit=limit, colors=colors)
 
     async def get_candidates(
         self,

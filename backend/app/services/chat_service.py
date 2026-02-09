@@ -584,10 +584,11 @@ RULES:
         return f"""FORMAT: {format_name.upper()} (60-card constructed)
 - 60 card minimum main deck, 15 card sideboard.
 - Up to 4 copies of any non-basic land card.
-- Only suggest cards that are legal in {format_name}.
+- ONLY suggest cards that are legal in {format_name}. Never suggest Commander-only or EDH-only cards.
 - Think in terms of 4-of playsets, curve optimization, and {format_name} metagame archetypes.
 - When a user says "build around [card]", they want a 60-card {format_name} deck featuring that card as a 4-of.
-- Target ~24 lands, ~36 nonland cards (varies by archetype)."""
+- Target ~24 lands, ~36 nonland cards (varies by archetype).
+- NEVER use "commanders", "command zone", or commander-related role names. This is NOT a Commander/EDH format. Use roles like "threats", "removal", "card advantage", "finishers", "protection", "utility" instead."""
 
     def _fix_message_alternation(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Ensure messages alternate user/assistant as required by Claude API."""
@@ -772,6 +773,53 @@ RULES:
         """Remove land cards from a list of card suggestions."""
         return [c for c in cards if not ChatService._is_land_card(c)]
 
+    async def _validate_suggestions_legality(
+        self,
+        card_suggestions: List[Dict[str, Any]],
+        format: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Validate all card suggestions against format legality and remove illegal cards.
+
+        This is a safety net that catches any cards that slip through upstream filters
+        (e.g., stale co-occurrence data, semantic search edge cases, incorrect DB legality).
+        """
+        if not card_suggestions:
+            return card_suggestions
+
+        legality_condition = get_format_legality_condition(format)
+
+        validated_groups = []
+        for group in card_suggestions:
+            card_names = [c.get("card_name", "") for c in group.get("cards", [])]
+            if not card_names:
+                continue
+
+            # Batch check which cards are legal in this format
+            legal_query = select(Card.name).where(
+                sqlfunc.lower(Card.name).in_([n.lower() for n in card_names]),
+                legality_condition,
+            )
+            result = await self.db.execute(legal_query)
+            legal_names = {row[0].lower() for row in result.all()}
+
+            # Filter group cards to only legal ones
+            legal_cards = [
+                c for c in group["cards"]
+                if c.get("card_name", "").lower() in legal_names
+            ]
+
+            if legal_cards:
+                validated_group = {**group, "cards": legal_cards}
+                validated_groups.append(validated_group)
+            else:
+                logger.warning(
+                    f"Dropped suggestion group '{group.get('group_name')}' — "
+                    f"no cards legal in {format}"
+                )
+
+        return validated_groups
+
     async def _handle_suggest_core(
         self,
         tool_input: Dict[str, Any],
@@ -886,6 +934,9 @@ RULES:
             }
             card_suggestions.append(group)
 
+        # Final safety net: validate all suggestions against format legality
+        card_suggestions = await self._validate_suggestions_legality(card_suggestions, format)
+
         response = ai_text + "\n\n" if ai_text else ""
         response += f"Here are my suggestions for your **{strategy}** deck. Review each group and add the cards you like!"
 
@@ -951,6 +1002,9 @@ RULES:
             }
             card_suggestions.append(group)
 
+        # Final safety net: validate all suggestions against format legality
+        card_suggestions = await self._validate_suggestions_legality(card_suggestions, format)
+
         response = ai_text + "\n\n" if ai_text else ""
         response += f"Here are some **{role}** options for your deck:"
 
@@ -1006,6 +1060,9 @@ RULES:
                 ],
             }
             card_suggestions.append(group)
+
+        # Final safety net: validate all suggestions against format legality
+        card_suggestions = await self._validate_suggestions_legality(card_suggestions, format)
 
         total_lands = sum(l["quantity"] for l in lands)
         response = ai_text + "\n\n" if ai_text else ""

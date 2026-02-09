@@ -660,6 +660,17 @@ async def scrape_mtgtop8(formats: Optional[List[str]] = None) -> Dict[str, Any]:
         logger.warning(f"Failed to compute archetype templates: {error_detail}")
         stats["errors"].append(f"Archetype templates error: {error_detail}")
 
+    # Refresh format materialized views so card suggestions stay in sync
+    try:
+        from app.jobs.refresh_format_views import refresh_format_views
+        async with async_session_factory() as db:
+            views_refreshed = await refresh_format_views(db)
+        stats["format_views_refreshed"] = views_refreshed
+    except Exception as e:
+        error_detail = f"{type(e).__name__}: {e}" if str(e) else repr(e)
+        logger.warning(f"Failed to refresh format views: {error_detail}")
+        stats["errors"].append(f"Format views error: {error_detail}")
+
     stats["completed_at"] = datetime.utcnow().isoformat()
     return stats
 
