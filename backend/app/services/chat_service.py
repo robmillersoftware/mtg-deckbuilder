@@ -868,6 +868,11 @@ RULES:
 
         cards_per_role = 12 if format == "cedh" else 6
 
+        # Fetch extra candidates to compensate for previously_suggested filtering.
+        # Without this buffer, later turns return very few cards because most
+        # co-occurrence / synergy results overlap with earlier suggestions.
+        suggestion_buffer = min(len(previously_suggested), cards_per_role * 4)
+
         # Extract card names from the strategy to find co-occurring cards
         # (e.g., strategy="Moonshadow enchantment aggro" -> look for "Moonshadow")
         build_around_cards = []
@@ -914,7 +919,7 @@ RULES:
                 cooccurrence_cards = await self.ai_service._get_cooccurrence_cards(
                     card_names=build_around_cards,
                     colors=colors,
-                    limit=cards_per_role * 2,
+                    limit=cards_per_role * 2 + suggestion_buffer,
                     format=format,
                 )
                 max_cooccurrence = max(
@@ -938,9 +943,9 @@ RULES:
                     build_around_cards=build_around_cards,
                     colors=colors,
                     strategy=strategy,
-                    limit=cards_per_role * 2,
+                    limit=cards_per_role * 2 + suggestion_buffer,
                     format=format,
-                    exclude_cards=set(existing),
+                    exclude_cards=existing_lower,
                 )
                 max_mech = max(
                     (mc.get("synergy_score", 1) for mc in mechanical_cards),
