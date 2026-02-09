@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.card_service import (
     get_format_legality_condition,
+    get_format_view,
     FORMAT_LEGALITY_MAP,
+    FORMAT_VIEW_MAP,
 )
 from app.services.chat_service import ChatService
 
@@ -32,6 +34,38 @@ class TestFormatLegalityCondition:
         cond = get_format_legality_condition("unknown_format")
         # The condition should still be usable (no exception)
         assert cond is not None
+
+
+# ---------------------------------------------------------------------------
+# Materialized view routing tests
+# ---------------------------------------------------------------------------
+
+class TestFormatViewRouting:
+    """Tests that format names are correctly routed to materialized views."""
+
+    def test_standard_routes_to_cards_standard(self):
+        assert get_format_view("standard") == "cards_standard"
+
+    def test_modern_routes_to_cards_modern(self):
+        assert get_format_view("modern") == "cards_modern"
+
+    def test_legacy_routes_to_cards_legacy(self):
+        assert get_format_view("legacy") == "cards_legacy"
+
+    def test_historic_routes_to_cards_historic(self):
+        assert get_format_view("historic") == "cards_historic"
+
+    def test_cedh_routes_to_cards_commander(self):
+        assert get_format_view("cedh") == "cards_commander"
+
+    def test_unknown_format_falls_back_to_cards(self):
+        assert get_format_view("unknown_format") == "cards"
+
+    def test_all_legality_formats_have_views(self):
+        """Every format in FORMAT_LEGALITY_MAP must have a materialized view."""
+        for fmt in FORMAT_LEGALITY_MAP:
+            view = FORMAT_VIEW_MAP.get(fmt)
+            assert view is not None, f"Format '{fmt}' has no materialized view"
 
 
 # ---------------------------------------------------------------------------
@@ -167,3 +201,73 @@ class TestFormatGuidance:
         guidance = chat_service._get_format_guidance("modern", "Modern")
         assert "NEVER use" in guidance
         assert "commanders" in guidance.lower()
+
+
+# ---------------------------------------------------------------------------
+# Semantic search table routing tests
+# ---------------------------------------------------------------------------
+
+class TestSemanticSearchRouting:
+    """Tests that semantic_search uses the correct materialized view."""
+
+    @pytest.fixture
+    def card_service(self):
+        from app.services.card_service import CardService
+        service = CardService.__new__(CardService)
+        service.db = AsyncMock()
+        return service
+
+    @pytest.mark.asyncio
+    async def test_standard_queries_standard_view(self, card_service):
+        """When format='standard', semantic search should query cards_standard."""
+        mock_embedding_service = MagicMock()
+        mock_embedding_service.get_query_embedding = AsyncMock(return_value=[0.1] * 1536)
+
+        # Make the DB execute return empty results
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        card_service.db.execute = AsyncMock(return_value=mock_result)
+
+        with patch("app.services.card_service.get_embedding_service", return_value=mock_embedding_service):
+            await card_service.semantic_search(query="test", format="standard")
+
+        # Inspect the SQL that was passed to db.execute
+        call_args = card_service.db.execute.call_args
+        sql_text = str(call_args[0][0])
+        assert "cards_standard" in sql_text
+        assert "FROM cards\n" not in sql_text  # Should NOT query raw cards table
+
+    @pytest.mark.asyncio
+    async def test_cedh_queries_commander_view(self, card_service):
+        """When format='cedh', semantic search should query cards_commander."""
+        mock_embedding_service = MagicMock()
+        mock_embedding_service.get_query_embedding = AsyncMock(return_value=[0.1] * 1536)
+
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        card_service.db.execute = AsyncMock(return_value=mock_result)
+
+        with patch("app.services.card_service.get_embedding_service", return_value=mock_embedding_service):
+            await card_service.semantic_search(query="test", format="cedh")
+
+        call_args = card_service.db.execute.call_args
+        sql_text = str(call_args[0][0])
+        assert "cards_commander" in sql_text
+
+    @pytest.mark.asyncio
+    async def test_no_format_queries_cards_table_with_legality(self, card_service):
+        """Without a format, should query the main cards table with standard_only filter."""
+        mock_embedding_service = MagicMock()
+        mock_embedding_service.get_query_embedding = AsyncMock(return_value=[0.1] * 1536)
+
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        card_service.db.execute = AsyncMock(return_value=mock_result)
+
+        with patch("app.services.card_service.get_embedding_service", return_value=mock_embedding_service):
+            await card_service.semantic_search(query="test", standard_only=True)
+
+        call_args = card_service.db.execute.call_args
+        sql_text = str(call_args[0][0])
+        # Should fall back to main cards table with is_standard_legal filter
+        assert "is_standard_legal" in sql_text

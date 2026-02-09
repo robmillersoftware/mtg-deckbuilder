@@ -283,6 +283,11 @@ async def sync_scryfall_cards() -> Dict[str, Any]:
             embeddings_updated = await compute_card_embeddings(db)
             stats["embeddings_updated"] = embeddings_updated
 
+            # Refresh format materialized views so per-format queries see new data
+            from app.jobs.refresh_format_views import refresh_format_views
+            views_refreshed = await refresh_format_views(db)
+            stats["format_views_refreshed"] = views_refreshed
+
         except Exception as e:
             logger.error(f"Scryfall sync failed: {e}")
             stats["errors"].append(str(e))
