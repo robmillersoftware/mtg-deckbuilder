@@ -598,7 +598,7 @@ class MetagameMixin:
             combined.c.partner
         ).order_by(
             func.sum(combined.c.count).desc()
-        ).limit(limit * 2)
+        ).limit(limit * 4)
 
         result = await self.db.execute(final_query)
         cooccurrence_results = result.all()
@@ -637,11 +637,14 @@ class MetagameMixin:
         # Build map of card name to info
         card_color_map = {}
         for row in card_rows:
+            # Skip lands early — they are always filtered out by callers and
+            # waste result slots that could go to actual synergy cards.
+            if "land" in (row.type_line or "").lower():
+                continue
             card_colors = row.colors or []
             is_colorless = len(card_colors) == 0
-            is_land = "land" in (row.type_line or "").lower()
             matches_colors = all(c in colors_upper for c in card_colors)
-            if is_colorless or is_land or matches_colors:
+            if is_colorless or matches_colors:
                 card_color_map[row.name.lower()] = row
 
         # Filter results by color and build output

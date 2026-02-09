@@ -369,12 +369,14 @@ class CardSelectionMixin:
         # Score and filter
         scored_cards = []
         for row in rows:
+            # Skip lands — they are always filtered out downstream and waste slots.
+            if "land" in (row.type_line or "").lower():
+                continue
             card_colors = row.colors or []
             is_colorless = len(card_colors) == 0
-            is_land = "land" in (row.type_line or "").lower()
             matches_colors = all(c in colors_upper for c in card_colors)
 
-            if not (is_colorless or is_land or matches_colors):
+            if not (is_colorless or matches_colors):
                 continue
 
             # Build a lightweight object for the scorer
