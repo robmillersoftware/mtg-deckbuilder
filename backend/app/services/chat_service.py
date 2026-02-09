@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from sqlalchemy import func as sqlfunc
 
+from app.models.card import Card
 from app.models.conversation import Conversation
 from app.schemas.conversation import (
     ChatResponse,
