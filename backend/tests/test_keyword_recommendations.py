@@ -181,20 +181,22 @@ class TestKeywordTournamentRanking:
         from unittest.mock import AsyncMock, MagicMock
 
         # Create mock cards: card_a has no tournament data, card_b is a staple
-        def make_mock_card(name, card_id="00000000-0000-0000-0000-000000000001"):
+        def make_mock_card(name, card_id="id", rarity="common", cmc=3):
             card = MagicMock()
             card.name = name
             card.id = card_id
             card.mana_cost = "{1}{B}"
             card.type_line = "Creature"
-            card.oracle_text = f"Surveil 1"
+            card.oracle_text = "Surveil 1"
             card.image_uri = None
             card.image_uri_small = None
+            card.rarity = rarity
+            card.cmc = cmc
             return card
 
-        jank_card = make_mock_card("Jank Surveiler", "id-jank")
-        staple_card = make_mock_card("Tournament Staple", "id-staple")
-        mid_card = make_mock_card("Midtier Surveil", "id-mid")
+        jank_card = make_mock_card("Jank Surveiler", "id-jank", rarity="common", cmc=5)
+        staple_card = make_mock_card("Tournament Staple", "id-staple", rarity="rare", cmc=2)
+        mid_card = make_mock_card("Midtier Surveil", "id-mid", rarity="uncommon", cmc=3)
 
         # card_service.search returns cards in alphabetical order (the current behavior)
         analyzer.card_service.search = AsyncMock(
@@ -224,3 +226,53 @@ class TestKeywordTournamentRanking:
         assert cards[0]["card_name"] == "Tournament Staple"
         assert cards[1]["card_name"] == "Midtier Surveil"
         assert cards[2]["card_name"] == "Jank Surveiler"
+
+    @pytest.mark.asyncio
+    async def test_keyword_tiebreak_by_rarity_and_cmc(self, analyzer):
+        """When tournament frequency is tied, rarer and cheaper cards should rank higher."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        def make_mock_card(name, card_id="id", rarity="common", cmc=3):
+            card = MagicMock()
+            card.name = name
+            card.id = card_id
+            card.mana_cost = "{1}{B}"
+            card.type_line = "Creature"
+            card.oracle_text = "Surveil 1"
+            card.image_uri = None
+            card.image_uri_small = None
+            card.rarity = rarity
+            card.cmc = cmc
+            return card
+
+        # All have 0 tournament appearances, so tiebreakers matter
+        common_5cmc = make_mock_card("Common Expensive", "id-1", rarity="common", cmc=5)
+        rare_2cmc = make_mock_card("Rare Cheap", "id-2", rarity="rare", cmc=2)
+        rare_4cmc = make_mock_card("Rare Pricey", "id-3", rarity="rare", cmc=4)
+        uncommon_3cmc = make_mock_card("Uncommon Mid", "id-4", rarity="uncommon", cmc=3)
+
+        analyzer.card_service.search = AsyncMock(
+            return_value=[common_5cmc, rare_2cmc, rare_4cmc, uncommon_3cmc]
+        )
+
+        # No tournament data at all
+        mock_freq_result = MagicMock()
+        mock_freq_result.all.return_value = []
+        analyzer.db.execute = AsyncMock(return_value=mock_freq_result)
+
+        result = await analyzer.suggest_cards_for_strategy(
+            strategy="surveil",
+            colors=["B"],
+            roles=["surveil"],
+            existing_cards=[],
+            format="standard",
+            cards_per_role=4,
+        )
+
+        cards = result.get("surveil", [])
+        assert len(cards) == 4
+        # Rarity first (rare < uncommon < common), then CMC ascending
+        assert cards[0]["card_name"] == "Rare Cheap"      # rare, cmc=2
+        assert cards[1]["card_name"] == "Rare Pricey"      # rare, cmc=4
+        assert cards[2]["card_name"] == "Uncommon Mid"     # uncommon, cmc=3
+        assert cards[3]["card_name"] == "Common Expensive"  # common, cmc=5

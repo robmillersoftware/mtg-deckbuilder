@@ -543,7 +543,7 @@ class DeckAnalyzer:
                         limit=remaining_needed * 10,
                     )
 
-                    # Rank by tournament decklist frequency
+                    # Rank by tournament decklist frequency, then rarity, then CMC
                     candidate_names = [
                         c.name for c in keyword_cards
                         if c.name.lower() not in global_seen
@@ -551,10 +551,15 @@ class DeckAnalyzer:
                     freq_map = await self._rank_cards_by_tournament_frequency(
                         candidate_names, format=format
                     )
-                    # Sort: tournament frequency desc, then by name for stability
+                    # Rarity ordering: rarer cards are generally more powerful
+                    rarity_rank = {"mythic": 0, "rare": 1, "uncommon": 2, "common": 3}
                     keyword_cards_sorted = sorted(
                         [c for c in keyword_cards if c.name.lower() not in global_seen],
-                        key=lambda c: (-freq_map.get(c.name.lower(), 0), c.name),
+                        key=lambda c: (
+                            -freq_map.get(c.name.lower(), 0),
+                            rarity_rank.get(getattr(c, "rarity", "common") or "common", 3),
+                            getattr(c, "cmc", 0) or 0,
+                        ),
                     )
 
                     for card in keyword_cards_sorted:
