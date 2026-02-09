@@ -1112,9 +1112,10 @@ RULES:
         deck = conversation.current_deck or {}
         existing = [e.get("card_name", "") for e in deck.get("main_deck", [])]
 
-        # Merge in previously suggested cards so we don't re-suggest declined cards
+        # Read previously suggested cards for post-filtering (don't pass to search
+        # or the query gets starved of candidates)
         previously_suggested = set(conversation.get_context().get("suggested_cards", []))
-        existing = existing + [n for n in previously_suggested if n not in {e.lower() for e in existing}]
+        suggestion_buffer = min(len(previously_suggested), count * 3)
 
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
             strategy=strategy or role,
@@ -1122,13 +1123,16 @@ RULES:
             roles=[role],
             existing_cards=existing,
             format=format,
-            cards_per_role=count,
+            cards_per_role=count + suggestion_buffer,
         )
 
         card_suggestions = []
         cards = role_cards.get(role, [])
         # Filter out any land cards - lands come from finalize_mana_base
         cards = self._filter_lands_from_cards(cards)
+        # Filter out previously suggested cards
+        cards = [c for c in cards if c["card_name"].lower() not in previously_suggested]
+        cards = cards[:count]
         if cards:
             group = {
                 "group_name": role.replace("_", " ").title(),
