@@ -856,43 +856,106 @@ RULES:
         if build_around_cards:
             conversation.update_context(build_around_cards=build_around_cards)
 
-        # Get co-occurrence based synergy cards if we have build-around targets
+        # Get synergy cards by blending co-occurrence data with mechanical synergy
         synergy_group = None
         if build_around_cards:
             try:
+                merged_synergy: dict[str, dict] = {}  # name_lower -> card_data
+
+                # Source 1: Co-occurrence from tournament data
                 cooccurrence_cards = await self.ai_service._get_cooccurrence_cards(
                     card_names=build_around_cards,
                     colors=colors,
-                    limit=cards_per_role,
+                    limit=cards_per_role * 2,
                     format=format,
                 )
-                if cooccurrence_cards:
-                    # Fetch full card data for co-occurrence results
-                    synergy_cards = []
-                    for cc in cooccurrence_cards:
-                        if cc["name"].lower() in existing_lower:
-                            continue
-                        card = await self.card_service.get_by_name(cc["name"], format=format)
-                        if card and "land" not in (card.type_line or "").lower():
-                            synergy_cards.append({
-                                "card_name": card.name,
-                                "quantity": 1 if format == "cedh" else 4,
-                                "mana_cost": card.mana_cost,
-                                "type_line": card.type_line,
-                                "image_uri": card.image_uri,
-                                "reasoning": None,
-                            })
-                        if len(synergy_cards) >= cards_per_role:
-                            break
-                    if synergy_cards:
-                        synergy_group = {
-                            "group_name": f"Synergy with {', '.join(build_around_cards)}",
-                            "role": "synergy",
-                            "is_batch": False,
-                            "cards": synergy_cards,
+                max_cooccurrence = max(
+                    (cc.get("cooccurrence_count", 1) for cc in cooccurrence_cards),
+                    default=1,
+                )
+                for cc in cooccurrence_cards:
+                    name_lower = cc["name"].lower()
+                    if name_lower in existing_lower:
+                        continue
+                    # Normalize co-occurrence to 0-1 range
+                    cooc_score = cc.get("cooccurrence_count", 1) / max(max_cooccurrence, 1)
+                    merged_synergy[name_lower] = {
+                        "name": cc["name"],
+                        "cooccurrence_score": cooc_score,
+                        "mechanical_score": 0.0,
+                    }
+
+                # Source 2: Mechanical synergy from card text analysis
+                mechanical_cards = await self.ai_service._get_mechanical_synergy_cards(
+                    build_around_cards=build_around_cards,
+                    colors=colors,
+                    strategy=strategy,
+                    limit=cards_per_role * 2,
+                    format=format,
+                    exclude_cards=set(existing),
+                )
+                max_mech = max(
+                    (mc.get("synergy_score", 1) for mc in mechanical_cards),
+                    default=1,
+                )
+                for mc in mechanical_cards:
+                    name_lower = mc["name"].lower()
+                    if name_lower in existing_lower:
+                        continue
+                    mech_score = mc.get("synergy_score", 1) / max(max_mech, 1)
+                    if name_lower in merged_synergy:
+                        # Card found by both sources - boost it
+                        merged_synergy[name_lower]["mechanical_score"] = mech_score
+                    else:
+                        merged_synergy[name_lower] = {
+                            "name": mc["name"],
+                            "cooccurrence_score": 0.0,
+                            "mechanical_score": mech_score,
                         }
+
+                # Compute blended score: mechanical synergy weighted higher than co-occurrence
+                # because co-occurrence can reflect generic "good stuff" while mechanical
+                # synergy captures actual strategic fit
+                for entry in merged_synergy.values():
+                    cooc = entry["cooccurrence_score"]
+                    mech = entry["mechanical_score"]
+                    # Both sources agreeing is the strongest signal
+                    both_bonus = 0.2 if cooc > 0 and mech > 0 else 0.0
+                    entry["blended_score"] = (0.35 * cooc) + (0.65 * mech) + both_bonus
+
+                # Sort by blended score and build the synergy group
+                ranked = sorted(
+                    merged_synergy.values(),
+                    key=lambda x: x["blended_score"],
+                    reverse=True,
+                )
+
+                synergy_cards = []
+                for entry in ranked:
+                    if entry["blended_score"] <= 0:
+                        continue
+                    card = await self.card_service.get_by_name(entry["name"], format=format)
+                    if card and "land" not in (card.type_line or "").lower():
+                        synergy_cards.append({
+                            "card_name": card.name,
+                            "quantity": 1 if format == "cedh" else 4,
+                            "mana_cost": card.mana_cost,
+                            "type_line": card.type_line,
+                            "image_uri": card.image_uri,
+                            "reasoning": None,
+                        })
+                    if len(synergy_cards) >= cards_per_role:
+                        break
+
+                if synergy_cards:
+                    synergy_group = {
+                        "group_name": f"Synergy with {', '.join(build_around_cards)}",
+                        "role": "synergy",
+                        "is_batch": False,
+                        "cards": synergy_cards,
+                    }
             except Exception as e:
-                logger.warning(f"Co-occurrence lookup failed: {e}")
+                logger.warning(f"Synergy lookup failed: {e}")
 
         # Query cards grouped by role (now tournament-aware)
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
