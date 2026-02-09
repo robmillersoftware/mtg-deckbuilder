@@ -281,6 +281,46 @@ class DeckAnalyzer:
 
         return results
 
+    async def _rank_cards_by_tournament_frequency(
+        self,
+        card_names: List[str],
+        format: str = "standard",
+    ) -> Dict[str, int]:
+        """
+        Look up tournament decklist frequency for a list of card names.
+
+        Returns a dict mapping lowercase card name -> frequency count.
+        Cards not found in tournament data get 0.
+        """
+        if not card_names:
+            return {}
+
+        # Build parameterized IN clause
+        name_params = {}
+        name_placeholders = []
+        for i, name in enumerate(card_names):
+            name_params[f"n_{i}"] = name.lower()
+            name_placeholders.append(f":n_{i}")
+
+        freq_sql = f"""
+            SELECT
+                LOWER(card_entry->>'card_name') as card_name,
+                COUNT(DISTINCT d.id) as freq
+            FROM decklists d
+            JOIN events e ON d.event_id = e.id,
+                 jsonb_array_elements(d.main_deck) as card_entry
+            WHERE e.format = :format
+              AND LOWER(card_entry->>'card_name') IN ({', '.join(name_placeholders)})
+            GROUP BY LOWER(card_entry->>'card_name')
+        """
+        name_params["format"] = format
+
+        result = await self.db.execute(text(freq_sql), name_params)
+        rows = result.all()
+
+        freq_map = {row[0]: row[1] for row in rows}
+        return freq_map
+
     async def _get_meta_role_cards(
         self,
         strategy: str,
@@ -483,7 +523,8 @@ class DeckAnalyzer:
                 )
 
             # Keyword-aware path: if the role mentions a specific MTG mechanic
-            # (e.g. "cards with surveil"), search by keyword first.
+            # (e.g. "cards with surveil"), search by keyword first, then rank
+            # by tournament playability so competitive staples appear first.
             if len(role_cards) < cards_per_role and not system_roles:
                 remaining_needed = cards_per_role - len(role_cards)
                 detected_keywords = _extract_mtg_keywords(role)
@@ -493,16 +534,35 @@ class DeckAnalyzer:
                     logger.info(
                         f"Keyword search: role='{role}' detected keywords={capitalized}"
                     )
+                    # Fetch a larger pool so we can rank and pick the best
                     keyword_cards = await self.card_service.search(
                         keywords=capitalized,
                         colors=colors if colors else None,
                         standard_only=(format == "standard"),
                         format=format,
-                        limit=remaining_needed * 3,
+                        limit=remaining_needed * 10,
                     )
-                    for card in keyword_cards:
-                        if card.name.lower() in global_seen:
-                            continue
+
+                    # Rank by tournament decklist frequency, then rarity, then CMC
+                    candidate_names = [
+                        c.name for c in keyword_cards
+                        if c.name.lower() not in global_seen
+                    ]
+                    freq_map = await self._rank_cards_by_tournament_frequency(
+                        candidate_names, format=format
+                    )
+                    # Rarity ordering: rarer cards are generally more powerful
+                    rarity_rank = {"mythic": 0, "rare": 1, "uncommon": 2, "common": 3}
+                    keyword_cards_sorted = sorted(
+                        [c for c in keyword_cards if c.name.lower() not in global_seen],
+                        key=lambda c: (
+                            -freq_map.get(c.name.lower(), 0),
+                            rarity_rank.get(getattr(c, "rarity", "common") or "common", 3),
+                            getattr(c, "cmc", 0) or 0,
+                        ),
+                    )
+
+                    for card in keyword_cards_sorted:
                         if len(role_cards) >= cards_per_role:
                             break
                         role_cards.append({
@@ -518,7 +578,8 @@ class DeckAnalyzer:
 
                     if role_cards:
                         logger.info(
-                            f"Keyword search: got {len(role_cards)} cards for keywords={capitalized}"
+                            f"Keyword search: got {len(role_cards)} cards for keywords={capitalized} "
+                            f"(ranked by tournament frequency)"
                         )
 
             # Fallback: semantic search if no ROLE_MAP entry or not enough cards
