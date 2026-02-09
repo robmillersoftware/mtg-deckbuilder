@@ -376,6 +376,10 @@ class DeckAnalyzer:
         the primary source doesn't return enough cards.
         """
         existing_lower = {n.lower() for n in existing_cards}
+        # Track cards across ALL roles to prevent the same card appearing in
+        # multiple groups (e.g. Rise of the Dark Realms in "threats", "payoffs",
+        # "finishers", and "removal" simultaneously)
+        global_seen: set = set(existing_lower)
         results: Dict[str, List[Dict[str, Any]]] = {}
 
         for role in roles:
@@ -391,15 +395,16 @@ class DeckAnalyzer:
                     colors=colors,
                     system_roles=system_roles,
                     format=format,
-                    limit=cards_per_role * 2,  # fetch extra for filtering
-                    exclude=existing_lower,
+                    limit=cards_per_role * 3,  # fetch extra to compensate for dedup
+                    exclude=global_seen,
                 )
                 for card in meta_cards:
-                    if card["card_name"].lower() in existing_lower:
+                    if card["card_name"].lower() in global_seen:
                         continue
                     if len(role_cards) >= cards_per_role:
                         break
                     role_cards.append(card)
+                    global_seen.add(card["card_name"].lower())
 
                 logger.info(
                     f"Meta-first: role='{role}' -> system_roles={system_roles}, "
@@ -409,7 +414,6 @@ class DeckAnalyzer:
             # Fallback: semantic search if no ROLE_MAP entry or not enough cards
             if len(role_cards) < cards_per_role:
                 remaining_needed = cards_per_role - len(role_cards)
-                seen_names = existing_lower | {c["card_name"].lower() for c in role_cards}
 
                 query = f"{role} {strategy} cards for {''.join(colors)} deck"
                 try:
@@ -428,7 +432,7 @@ class DeckAnalyzer:
                     )
 
                 for card in cards:
-                    if card.name.lower() in seen_names:
+                    if card.name.lower() in global_seen:
                         continue
                     if len(role_cards) >= cards_per_role:
                         break
@@ -441,6 +445,7 @@ class DeckAnalyzer:
                         "image_uri": card.image_uri,
                         "image_uri_small": card.image_uri_small,
                     })
+                    global_seen.add(card.name.lower())
 
                 if not system_roles:
                     logger.info(f"Semantic fallback: role='{role}' not in ROLE_MAP, got {len(role_cards)} cards")

@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 # Import the module directly to avoid __init__.py triggering heavy deps
 _spec = importlib.util.spec_from_file_location(
     "card_selection",
-    "app/services/ai/card_selection.py",
+    "backend/app/services/ai/card_selection.py",
     submodule_search_locations=[],
 )
 _mod = importlib.util.module_from_spec(_spec)

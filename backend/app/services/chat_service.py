@@ -976,12 +976,18 @@ RULES:
             except Exception as e:
                 logger.warning(f"Synergy lookup failed: {e}")
 
+        # Collect synergy card names so role groups don't duplicate them
+        synergy_names = []
+        if synergy_group:
+            synergy_names = [c["card_name"] for c in synergy_group["cards"]]
+
         # Query cards grouped by role (now tournament-aware)
+        # Pass synergy card names + existing deck cards so roles don't repeat them
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
             strategy=strategy,
             colors=colors,
             roles=roles,
-            existing_cards=existing,
+            existing_cards=existing + synergy_names,
             format=format,
             cards_per_role=cards_per_role,
         )
@@ -993,9 +999,15 @@ RULES:
         if synergy_group:
             card_suggestions.append(synergy_group)
 
+        # Track all card names across groups for final dedup
+        all_suggested = {c["card_name"].lower() for c in (synergy_group or {}).get("cards", [])}
+
         for role, cards in role_cards.items():
-            # Filter out any land cards that slipped through semantic search
-            filtered_cards = self._filter_lands_from_cards(cards)
+            # Filter out any land cards and cross-group duplicates
+            filtered_cards = [
+                c for c in self._filter_lands_from_cards(cards)
+                if c["card_name"].lower() not in all_suggested
+            ]
             if not filtered_cards:
                 continue
             group = {
@@ -1015,6 +1027,7 @@ RULES:
                 ],
             }
             card_suggestions.append(group)
+            all_suggested.update(c["card_name"].lower() for c in filtered_cards)
 
         # Final safety net: validate all suggestions against format legality
         card_suggestions = await self._validate_suggestions_legality(card_suggestions, format)
