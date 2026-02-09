@@ -8,7 +8,7 @@ from collections import defaultdict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text, or_
 
-from app.services.card_service import get_format_view
+from app.services.card_service import get_format_view, FORMAT_LEGALITY_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +337,12 @@ class CardSelectionMixin:
 
         # Query cards from the format-specific materialized view
         # This enforces legality structurally and DISTINCT ON deduplicates printings
+        # Belt-and-suspenders: always add a legality WHERE clause in case the view
+        # falls back to the main 'cards' table (e.g. unknown format name)
         view_name = get_format_view(format)
+        legality_key = FORMAT_LEGALITY_MAP.get(format, "standard")
+        logger.debug(f"[SYNERGY] format={format!r}, view={view_name}, legality_key={legality_key}")
+
         term_list = list(search_terms)[:15]  # Cap to avoid overly broad queries
         or_clauses = []
         params: Dict[str, Any] = {}
@@ -353,6 +358,7 @@ class CardSelectionMixin:
                 c.colors, c.keywords
             FROM {view_name} c
             WHERE ({or_sql})
+              AND c.legalities->>'{legality_key}' = 'legal'
             ORDER BY c.name
             LIMIT 200
         """

@@ -262,6 +262,7 @@ class ChatService:
         Process a user message using Claude with tools for incremental deck building.
         """
         self._current_format = format
+        logger.info(f"[CHAT] process_message called with format={format!r}")
 
         # Get or create conversation
         conversation = await self._get_or_create_conversation(conversation_id, user_id)
@@ -787,12 +788,14 @@ RULES:
         Uses the format-specific materialized view for reliable enforcement.
         """
         from sqlalchemy import text as sa_text
-        from app.services.card_service import get_format_view
+        from app.services.card_service import get_format_view, FORMAT_LEGALITY_MAP
 
         if not card_suggestions:
             return card_suggestions
 
         view_name = get_format_view(format)
+        legality_key = FORMAT_LEGALITY_MAP.get(format, "standard")
+        logger.info(f"[VALIDATE] format={format!r}, view={view_name}, legality_key={legality_key}")
 
         validated_groups = []
         for group in card_suggestions:
@@ -801,6 +804,8 @@ RULES:
                 continue
 
             # Batch check which cards are legal via the materialized view
+            # Belt-and-suspenders: also add legality WHERE clause in case view
+            # falls back to main 'cards' table
             name_params = {}
             name_placeholders = []
             for i, n in enumerate(card_names):
@@ -811,6 +816,7 @@ RULES:
                 SELECT DISTINCT name
                 FROM {view_name}
                 WHERE LOWER(name) IN ({', '.join(name_placeholders)})
+                  AND legalities->>'{legality_key}' = 'legal'
             """
             result = await self.db.execute(sa_text(legal_sql), name_params)
             legal_names = {row[0].lower() for row in result.all()}
@@ -840,6 +846,7 @@ RULES:
     ) -> ChatResponse:
         """Suggest core cards in role-based groups, incorporating tournament data."""
         format = getattr(self, "_current_format", "standard")
+        logger.info(f"[SUGGEST-CORE] format={format!r}, _current_format={getattr(self, '_current_format', 'NOT SET')!r}")
         strategy = tool_input.get("strategy", "")
         colors = tool_input.get("colors", [])
         roles = tool_input.get("roles", ["threats", "removal", "card advantage"])

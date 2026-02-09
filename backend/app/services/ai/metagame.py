@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, union_all
 
 from app.models.meta import Decklist, Event, CardCooccurrence
-from app.services.card_service import get_format_legality_condition, get_format_view
+from app.services.card_service import get_format_legality_condition, get_format_view, FORMAT_LEGALITY_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -613,6 +613,9 @@ class MetagameMixin:
         colors_upper = [c.upper() for c in colors]
 
         view_name = get_format_view(format)
+        legality_key = FORMAT_LEGALITY_MAP.get(format, "standard")
+        logger.debug(f"[CO-OCCUR] format={format!r}, view={view_name}, legality_key={legality_key}")
+
         name_params = {}
         name_placeholders = []
         for i, n in enumerate(card_names_to_check):
@@ -624,6 +627,7 @@ class MetagameMixin:
                 c.name, c.colors, c.type_line
             FROM {view_name} c
             WHERE LOWER(c.name) IN ({', '.join(name_placeholders)})
+              AND c.legalities->>'{legality_key}' = 'legal'
             ORDER BY c.name
         """
         from sqlalchemy import text as sa_text
