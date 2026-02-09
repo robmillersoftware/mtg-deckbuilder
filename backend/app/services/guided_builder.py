@@ -6,17 +6,34 @@ color distribution, role coverage gaps, and card suggestions.
 """
 
 from typing import Optional, List, Dict, Any
-from collections import defaultdict
 import logging
-import math
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
+from sqlalchemy import text
 
-from app.models.meta import Decklist, Event
-from app.services.card_service import CardService, get_format_legality_condition
+from app.services.card_service import CardService, get_format_view, FORMAT_LEGALITY_MAP
 
 logger = logging.getLogger(__name__)
+
+# Map user-facing role names (from Claude tool calls) to system role names in card_roles table
+ROLE_MAP: Dict[str, List[str]] = {
+    "threats": ["threat_cheap", "threat_midrange", "threat_finisher"],
+    "creatures": ["threat_cheap", "threat_midrange", "threat_finisher"],
+    "removal": ["removal_targeted", "removal_mass", "removal_artifact_enchantment"],
+    "card advantage": ["card_draw", "card_selection"],
+    "card draw": ["card_draw", "card_selection"],
+    "counterspells": ["counterspell"],
+    "protection": ["protection"],
+    "ramp": ["ramp"],
+    "burn": ["burn"],
+    "recursion": ["recursion"],
+    "finishers": ["threat_finisher"],
+    "interaction": ["removal_targeted", "counterspell"],
+    "discard": ["discard"],
+    "lifegain": ["lifegain"],
+    "graveyard hate": ["graveyard_hate"],
+    "tutors": ["tutor"],
+}
 
 # Role targets by archetype - rough guide for what a deck "wants"
 ARCHETYPE_ROLE_TARGETS = {
@@ -204,54 +221,142 @@ class DeckAnalyzer:
 
         return results
 
-    async def _get_tournament_card_names(self, strategy: str, format: str = "standard") -> set:
-        """Get card names that appear in tournament decklists matching the strategy."""
-        query = select(Decklist).join(Event).where(Event.format == format)
+    async def _get_meta_role_cards(
+        self,
+        strategy: str,
+        colors: List[str],
+        system_roles: List[str],
+        format: str = "standard",
+        limit: int = 8,
+        exclude: set = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get cards for the given system roles, ranked by tournament frequency then efficiency.
 
-        # Try to match strategy to archetype
-        if strategy:
-            search_terms = [strategy]
-            # Map common strategy terms to archetype names
-            strategy_map = {
-                "graveyard": ["reanimator", "graveyard", "dredge"],
-                "reanimate": ["reanimator"],
-                "sacrifice": ["sacrifice", "aristocrats"],
-                "tokens": ["tokens", "go-wide"],
-                "ramp": ["ramp", "big mana"],
-                "control": ["control"],
-                "aggro": ["aggro", "red deck"],
-                "burn": ["burn", "red deck", "aggro"],
-                "tempo": ["tempo"],
-                "midrange": ["midrange"],
-                "combo": ["combo"],
+        Primary source: card_roles table cross-referenced with tournament decklist frequency.
+        Uses format-based legality (legalities JSONB) instead of is_standard_legal.
+        """
+        if not system_roles:
+            return []
+
+        exclude = exclude or set()
+        color_list = [c.upper() for c in colors]
+        color_placeholders = ", ".join([f"'{c}'" for c in color_list])
+        legality_key = FORMAT_LEGALITY_MAP.get(format, "standard")
+        view_name = get_format_view(format)
+
+        # Build archetype filter for tournament decks
+        strategy_terms = [strategy.lower()] if strategy else []
+        strategy_map = {
+            "graveyard": ["reanimator", "graveyard", "dredge"],
+            "reanimate": ["reanimator"],
+            "sacrifice": ["sacrifice", "aristocrats"],
+            "tokens": ["tokens", "go-wide"],
+            "ramp": ["ramp", "big mana"],
+            "control": ["control"],
+            "aggro": ["aggro", "red deck"],
+            "burn": ["burn", "red deck", "aggro"],
+            "tempo": ["tempo"],
+            "midrange": ["midrange"],
+            "combo": ["combo"],
+        }
+        for keyword, terms in strategy_map.items():
+            if strategy and keyword in strategy.lower():
+                strategy_terms.extend(terms)
+        # Deduplicate
+        strategy_terms = list(dict.fromkeys(strategy_terms))
+
+        archetype_conditions = [f"LOWER(d.archetype) LIKE '%' || :strat_{i} || '%'" for i in range(len(strategy_terms))]
+        archetype_filter = " OR ".join(archetype_conditions) if archetype_conditions else "TRUE"
+
+        # Build role filter
+        role_placeholders = ", ".join([f":role_{i}" for i in range(len(system_roles))])
+
+        # Build exclude filter
+        exclude_clause = ""
+        if exclude:
+            exclude_placeholders = ", ".join([f":excl_{i}" for i in range(len(exclude))])
+            exclude_clause = f"AND LOWER(c.name) NOT IN ({exclude_placeholders})"
+
+        query_sql = f"""
+            WITH tournament_freq AS (
+                SELECT
+                    card_entry->>'card_name' as card_name,
+                    COUNT(DISTINCT d.id) as freq
+                FROM decklists d
+                JOIN events e ON d.event_id = e.id,
+                     jsonb_array_elements(d.main_deck) as card_entry
+                WHERE e.format = :format
+                  AND ({archetype_filter})
+                GROUP BY card_entry->>'card_name'
+            ),
+            role_cards AS (
+                SELECT DISTINCT ON (c.name)
+                    c.id,
+                    c.name,
+                    SPLIT_PART(c.name, ' // ', 1) as front_face_name,
+                    c.mana_cost,
+                    c.type_line,
+                    c.oracle_text,
+                    c.image_uri,
+                    c.image_uri_small,
+                    c.colors,
+                    c.cmc,
+                    cr.efficiency
+                FROM {view_name} c
+                JOIN card_roles cr ON c.id = cr.card_id
+                WHERE cr.role IN ({role_placeholders})
+                  {exclude_clause}
+                ORDER BY c.name, cr.efficiency DESC NULLS LAST
+            )
+            SELECT
+                rc.id,
+                rc.name,
+                rc.mana_cost,
+                rc.type_line,
+                rc.oracle_text,
+                rc.image_uri,
+                rc.image_uri_small,
+                rc.efficiency,
+                rc.cmc,
+                COALESCE(tf.freq, 0) as tournament_count
+            FROM role_cards rc
+            LEFT JOIN tournament_freq tf ON
+                LOWER(tf.card_name) = LOWER(rc.name) OR
+                LOWER(tf.card_name) = LOWER(rc.front_face_name)
+            WHERE rc.colors = ARRAY[]::varchar[]
+               OR rc.colors <@ ARRAY[{color_placeholders}]::varchar[]
+            ORDER BY tournament_count DESC, rc.efficiency DESC NULLS LAST, rc.cmc ASC
+            LIMIT :limit
+        """
+
+        # Build params
+        params: Dict[str, Any] = {"format": format, "limit": limit}
+        for i, term in enumerate(strategy_terms):
+            params[f"strat_{i}"] = term
+        for i, role in enumerate(system_roles):
+            params[f"role_{i}"] = role
+        if exclude:
+            for i, name in enumerate(sorted(exclude)):
+                params[f"excl_{i}"] = name.lower()
+
+        result = await self.db.execute(text(query_sql), params)
+        rows = result.all()
+
+        return [
+            {
+                "card_name": row.name,
+                "card_id": str(row.id),
+                "mana_cost": row.mana_cost,
+                "type_line": row.type_line,
+                "oracle_text": row.oracle_text,
+                "image_uri": row.image_uri,
+                "image_uri_small": row.image_uri_small,
+                "tournament_count": row.tournament_count,
+                "efficiency": row.efficiency,
             }
-            for keyword, terms in strategy_map.items():
-                if keyword in strategy.lower():
-                    search_terms.extend(terms)
-
-            conditions = [Decklist.archetype.ilike(f"%{term}%") for term in search_terms]
-            query = query.where(or_(*conditions))
-
-        query = query.limit(50)
-        result = await self.db.execute(query)
-        decklists = result.scalars().all()
-
-        # If no matching archetypes, fall back to all tournament cards for format
-        if not decklists:
-            query = select(Decklist).join(Event).where(Event.format == format).limit(100)
-            result = await self.db.execute(query)
-            decklists = result.scalars().all()
-
-        tournament_cards = set()
-        card_frequency = defaultdict(int)
-        for decklist in decklists:
-            for entry in (decklist.main_deck or []):
-                card_name = entry.get("card_name", "")
-                if card_name:
-                    tournament_cards.add(card_name.lower())
-                    card_frequency[card_name.lower()] += 1
-
-        return tournament_cards
+            for row in rows
+        ]
 
     async def suggest_cards_for_strategy(
         self,
@@ -265,57 +370,80 @@ class DeckAnalyzer:
         """
         Suggest cards grouped by role for a given strategy.
         Returns {role: [card_data, ...]} with rich metadata.
-        Blends semantic search with tournament data to prioritize competitive cards.
+
+        Meta-first: uses card_roles + tournament frequency as primary source,
+        falls back to semantic search only when roles aren't in ROLE_MAP or
+        the primary source doesn't return enough cards.
         """
         existing_lower = {n.lower() for n in existing_cards}
         results: Dict[str, List[Dict[str, Any]]] = {}
 
-        # Get tournament-played cards for this strategy
-        tournament_cards = await self._get_tournament_card_names(strategy, format)
-        logger.info(f"Found {len(tournament_cards)} tournament cards for strategy '{strategy}' in {format}")
-
         for role in roles:
-            query = f"{role} {strategy} cards for {''.join(colors)} deck"
-            try:
-                cards = await self.card_service.semantic_search(
-                    query=query,
-                    colors=colors if colors else None,
+            role_key = role.lower().strip()
+            system_roles = ROLE_MAP.get(role_key)
+
+            role_cards: List[Dict[str, Any]] = []
+
+            if system_roles:
+                # Primary path: card_roles + tournament frequency
+                meta_cards = await self._get_meta_role_cards(
+                    strategy=strategy,
+                    colors=colors,
+                    system_roles=system_roles,
                     format=format,
-                    limit=cards_per_role * 4,
+                    limit=cards_per_role * 2,  # fetch extra for filtering
+                    exclude=existing_lower,
                 )
-            except Exception:
-                cards = await self.card_service.search(
-                    colors=colors if colors else None,
-                    standard_only=(format == "standard"),
-                    format=format,
-                    limit=cards_per_role * 4,
+                for card in meta_cards:
+                    if card["card_name"].lower() in existing_lower:
+                        continue
+                    if len(role_cards) >= cards_per_role:
+                        break
+                    role_cards.append(card)
+
+                logger.info(
+                    f"Meta-first: role='{role}' -> system_roles={system_roles}, "
+                    f"got {len(role_cards)} cards (strategy='{strategy}')"
                 )
 
-            # Split into tournament-played and non-tournament cards
-            tournament_matches = []
-            semantic_only = []
-            for card in cards:
-                if card.name.lower() in existing_lower:
-                    continue
-                card_data = {
-                    "card_name": card.name,
-                    "card_id": str(card.id),
-                    "mana_cost": card.mana_cost,
-                    "type_line": card.type_line,
-                    "oracle_text": card.oracle_text,
-                    "image_uri": card.image_uri,
-                    "image_uri_small": card.image_uri_small,
-                }
-                if card.name.lower() in tournament_cards:
-                    tournament_matches.append(card_data)
-                else:
-                    semantic_only.append(card_data)
+            # Fallback: semantic search if no ROLE_MAP entry or not enough cards
+            if len(role_cards) < cards_per_role:
+                remaining_needed = cards_per_role - len(role_cards)
+                seen_names = existing_lower | {c["card_name"].lower() for c in role_cards}
 
-            # Prioritize tournament-played cards, fill remainder with semantic results
-            role_cards = tournament_matches[:cards_per_role]
-            remaining = cards_per_role - len(role_cards)
-            if remaining > 0:
-                role_cards.extend(semantic_only[:remaining])
+                query = f"{role} {strategy} cards for {''.join(colors)} deck"
+                try:
+                    cards = await self.card_service.semantic_search(
+                        query=query,
+                        colors=colors if colors else None,
+                        format=format,
+                        limit=remaining_needed * 3,
+                    )
+                except Exception:
+                    cards = await self.card_service.search(
+                        colors=colors if colors else None,
+                        standard_only=(format == "standard"),
+                        format=format,
+                        limit=remaining_needed * 3,
+                    )
+
+                for card in cards:
+                    if card.name.lower() in seen_names:
+                        continue
+                    if len(role_cards) >= cards_per_role:
+                        break
+                    role_cards.append({
+                        "card_name": card.name,
+                        "card_id": str(card.id),
+                        "mana_cost": card.mana_cost,
+                        "type_line": card.type_line,
+                        "oracle_text": card.oracle_text,
+                        "image_uri": card.image_uri,
+                        "image_uri_small": card.image_uri_small,
+                    })
+
+                if not system_roles:
+                    logger.info(f"Semantic fallback: role='{role}' not in ROLE_MAP, got {len(role_cards)} cards")
 
             if role_cards:
                 results[role] = role_cards
