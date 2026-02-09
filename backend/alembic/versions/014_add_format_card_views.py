@@ -25,45 +25,78 @@ FORMAT_LEGALITY_MAP = {
 }
 
 
+def _view_exists(view_name: str) -> bool:
+    """Check if a materialized view already exists (for idempotent re-runs)."""
+    from sqlalchemy import text
+
+    conn = op.get_bind()
+    result = conn.execute(
+        text("SELECT 1 FROM pg_matviews WHERE matviewname = :name"),
+        {"name": view_name},
+    )
+    return result.scalar() is not None
+
+
+def _index_exists(index_name: str) -> bool:
+    """Check if an index already exists."""
+    from sqlalchemy import text
+
+    conn = op.get_bind()
+    result = conn.execute(
+        text("SELECT 1 FROM pg_indexes WHERE indexname = :name"),
+        {"name": index_name},
+    )
+    return result.scalar() is not None
+
+
 def upgrade() -> None:
     for view_suffix, legality_key in FORMAT_LEGALITY_MAP.items():
         view_name = f"cards_{view_suffix}"
 
-        # Create materialized view
-        op.execute(f"""
-            CREATE MATERIALIZED VIEW {view_name} AS
-            SELECT *
-            FROM cards
-            WHERE legalities->>'{legality_key}' = 'legal'
-        """)
+        # Create materialized view if it doesn't already exist
+        # (PostgreSQL has no IF NOT EXISTS for materialized views)
+        if not _view_exists(view_name):
+            op.execute(f"""
+                CREATE MATERIALIZED VIEW {view_name} AS
+                SELECT *
+                FROM cards
+                WHERE legalities->>'{legality_key}' = 'legal'
+            """)
 
         # Unique index on id — required for REFRESH MATERIALIZED VIEW CONCURRENTLY
-        op.execute(f"""
-            CREATE UNIQUE INDEX idx_{view_name}_id ON {view_name} (id)
-        """)
+        if not _index_exists(f"idx_{view_name}_id"):
+            op.execute(f"""
+                CREATE UNIQUE INDEX idx_{view_name}_id ON {view_name} (id)
+            """)
 
         # Name index for text lookups
-        op.execute(f"""
-            CREATE INDEX idx_{view_name}_name ON {view_name} (name)
-        """)
+        if not _index_exists(f"idx_{view_name}_name"):
+            op.execute(f"""
+                CREATE INDEX idx_{view_name}_name ON {view_name} (name)
+            """)
 
         # Lowercase name index for case-insensitive lookups
-        op.execute(f"""
-            CREATE INDEX idx_{view_name}_name_lower ON {view_name} (lower(name))
-        """)
+        if not _index_exists(f"idx_{view_name}_name_lower"):
+            op.execute(f"""
+                CREATE INDEX idx_{view_name}_name_lower ON {view_name} (lower(name))
+            """)
 
         # GIN index on colors for array containment queries
-        op.execute(f"""
-            CREATE INDEX idx_{view_name}_colors ON {view_name} USING gin (colors)
-        """)
+        if not _index_exists(f"idx_{view_name}_colors"):
+            op.execute(f"""
+                CREATE INDEX idx_{view_name}_colors ON {view_name} USING gin (colors)
+            """)
 
-        # Vector index for semantic search (cosine distance)
-        # Only index rows that actually have embeddings
-        op.execute(f"""
-            CREATE INDEX idx_{view_name}_embedding
-            ON {view_name} USING hnsw (embedding vector_cosine_ops)
-            WHERE embedding IS NOT NULL
-        """)
+        # NOTE: HNSW vector indexes are omitted intentionally.
+        # They consume too much disk/shared memory for constrained hosting
+        # environments (e.g. Railway). The materialized views are already
+        # small enough that sequential vector scans are fast.
+
+    # Drop any HNSW indexes that may have been created by a previous
+    # version of this migration before it failed mid-way.
+    for view_suffix in FORMAT_LEGALITY_MAP:
+        view_name = f"cards_{view_suffix}"
+        op.execute(f"DROP INDEX IF EXISTS idx_{view_name}_embedding")
 
 
 def downgrade() -> None:

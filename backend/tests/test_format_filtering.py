@@ -219,27 +219,65 @@ class TestSemanticSearchRouting:
 
     @pytest.mark.asyncio
     async def test_standard_queries_standard_view(self, card_service):
-        """When format='standard', semantic search should query cards_standard."""
-        mock_embedding_service = MagicMock()
-        mock_embedding_service.get_query_embedding = AsyncMock(return_value=[0.1] * 1536)
-
-        # Make the DB execute return empty results
+        """When format='standard', _execute_vector_query should target cards_standard."""
         mock_result = MagicMock()
         mock_result.fetchall.return_value = []
         card_service.db.execute = AsyncMock(return_value=mock_result)
 
-        with patch("app.services.card_service.get_embedding_service", return_value=mock_embedding_service):
-            await card_service.semantic_search(query="test", format="standard")
+        await card_service._execute_vector_query(
+            "[0.1]", "cards_standard", format="standard",
+            standard_only=True, colors=None, limit=10,
+        )
 
-        # Inspect the SQL that was passed to db.execute
         call_args = card_service.db.execute.call_args
         sql_text = str(call_args[0][0])
         assert "cards_standard" in sql_text
-        assert "FROM cards\n" not in sql_text  # Should NOT query raw cards table
+        # Should NOT add legality WHERE filter — the view handles it
+        assert "legalities->>" not in sql_text
 
     @pytest.mark.asyncio
-    async def test_cedh_queries_commander_view(self, card_service):
-        """When format='cedh', semantic search should query cards_commander."""
+    async def test_cards_table_adds_legality_filter(self, card_service):
+        """When querying the main cards table, legality filter should be added."""
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        card_service.db.execute = AsyncMock(return_value=mock_result)
+
+        await card_service._execute_vector_query(
+            "[0.1]", "cards", format="standard",
+            standard_only=True, colors=None, limit=10,
+        )
+
+        call_args = card_service.db.execute.call_args
+        sql_text = str(call_args[0][0])
+        assert "legalities->>'standard' = 'legal'" in sql_text
+
+    @pytest.mark.asyncio
+    async def test_view_failure_falls_back_to_cards_table(self, card_service):
+        """If the view doesn't exist, _vector_search should fall back to cards table."""
+        # First call (view) raises, second call (fallback) succeeds
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        card_service.db.execute = AsyncMock(
+            side_effect=[Exception("relation cards_standard does not exist"), mock_result]
+        )
+        card_service.db.rollback = AsyncMock()
+
+        rows = await card_service._vector_search(
+            [0.1] * 1536, format="standard", standard_only=True,
+            colors=None, limit=10,
+        )
+
+        assert rows == []
+        # Should have called rollback after first failure
+        card_service.db.rollback.assert_called_once()
+        # Second call should hit the cards table with legality filter
+        fallback_sql = str(card_service.db.execute.call_args_list[1][0][0])
+        assert "FROM cards" in fallback_sql
+        assert "legalities->>'standard' = 'legal'" in fallback_sql
+
+    @pytest.mark.asyncio
+    async def test_full_semantic_search_routes_to_view(self, card_service):
+        """End-to-end: semantic_search with format should use the format view."""
         mock_embedding_service = MagicMock()
         mock_embedding_service.get_query_embedding = AsyncMock(return_value=[0.1] * 1536)
 
@@ -253,21 +291,3 @@ class TestSemanticSearchRouting:
         call_args = card_service.db.execute.call_args
         sql_text = str(call_args[0][0])
         assert "cards_commander" in sql_text
-
-    @pytest.mark.asyncio
-    async def test_no_format_queries_cards_table_with_legality(self, card_service):
-        """Without a format, should query the main cards table with standard_only filter."""
-        mock_embedding_service = MagicMock()
-        mock_embedding_service.get_query_embedding = AsyncMock(return_value=[0.1] * 1536)
-
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = []
-        card_service.db.execute = AsyncMock(return_value=mock_result)
-
-        with patch("app.services.card_service.get_embedding_service", return_value=mock_embedding_service):
-            await card_service.semantic_search(query="test", standard_only=True)
-
-        call_args = card_service.db.execute.call_args
-        sql_text = str(call_args[0][0])
-        # Should fall back to main cards table with is_standard_legal filter
-        assert "is_standard_legal" in sql_text

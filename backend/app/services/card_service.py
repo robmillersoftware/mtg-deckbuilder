@@ -342,56 +342,10 @@ class CardService:
             return await self.search(q=query, standard_only=standard_only, format=format, limit=limit, colors=colors)
 
         try:
-            # Build the vector search query using cosine distance (<=>)
-            # pgvector uses <=> for cosine distance, <-> for L2 distance
-            embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
-
-            # Determine which table/view to query.
-            # Format-specific materialized views contain ONLY legal cards,
-            # so we don't need an additional legalities WHERE clause.
-            if format and format in FORMAT_VIEW_MAP:
-                source_table = get_format_view(format)
-            else:
-                source_table = "cards"
-
-            conditions = ["embedding IS NOT NULL"]
-
-            # If querying the main table (no format view), add legality filter
-            if source_table == "cards":
-                if format and format in FORMAT_LEGALITY_MAP:
-                    legality_key = FORMAT_LEGALITY_MAP[format]
-                    conditions.append(f"legalities->>'{legality_key}' = 'legal'")
-                elif standard_only:
-                    conditions.append("is_standard_legal = true")
-
-            if colors:
-                # Card's colors must be a subset of the deck's colors (or colorless).
-                # A BR deck wants B, R, BR, and colorless cards — but NOT BG, BU, etc.
-                valid_colors = [c.upper() for c in colors if c.upper() in ["W", "U", "B", "R", "G"]]
-                if valid_colors:
-                    arr_literal = "ARRAY[" + ",".join(f"'{c}'" for c in valid_colors) + "]::text[]"
-                    conditions.append(
-                        f"(colors <@ {arr_literal} OR colors = '{{}}' OR colors IS NULL)"
-                    )
-
-            where_clause = " AND ".join(conditions)
-
-            # Use raw SQL for vector similarity search against the format view
-            sql = text(f"""
-                SELECT id, name, mana_cost, cmc, type_line, oracle_text, power, toughness,
-                       colors, color_identity, keywords, legalities, set_code, collector_number,
-                       rarity, image_uri, image_uri_small, image_uri_art_crop, price_usd,
-                       price_usd_foil, scryfall_uri, oracle_id, set_name, scryfall_id,
-                       is_standard_legal, created_at, updated_at,
-                       embedding <=> :embedding AS distance
-                FROM {source_table}
-                WHERE {where_clause}
-                ORDER BY embedding <=> :embedding
-                LIMIT :limit
-            """)
-
-            result = await self.db.execute(sql, {"embedding": embedding_str, "limit": limit * 3})
-            rows = result.fetchall()
+            rows = await self._vector_search(
+                query_embedding, format=format, standard_only=standard_only,
+                colors=colors, limit=limit,
+            )
 
             # Deduplicate by name (keep highest similarity)
             seen_names = set()
@@ -411,6 +365,93 @@ class CardService:
         except Exception as e:
             logger.error(f"Vector search failed: {e}, falling back to text search")
             return await self.search(q=query, standard_only=standard_only, format=format, limit=limit, colors=colors)
+
+    async def _vector_search(
+        self,
+        query_embedding: List[float],
+        format: Optional[str] = None,
+        standard_only: bool = True,
+        colors: Optional[List[str]] = None,
+        limit: int = 10,
+    ):
+        """
+        Execute the raw vector similarity query.
+
+        Tries the format-specific materialized view first; if it doesn't exist
+        (migration hasn't run yet), falls back to the main ``cards`` table with
+        a legality WHERE clause.
+        """
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        # Try the format view first, fall back to cards table
+        if format and format in FORMAT_VIEW_MAP:
+            source_table = get_format_view(format)
+        else:
+            source_table = "cards"
+
+        try:
+            return await self._execute_vector_query(
+                embedding_str, source_table, format, standard_only, colors, limit,
+            )
+        except Exception as e:
+            if source_table != "cards":
+                # View probably doesn't exist yet — fall back to main table
+                logger.warning(
+                    f"Format view '{source_table}' query failed ({e}), "
+                    "falling back to cards table with legality filter"
+                )
+                await self.db.rollback()
+                return await self._execute_vector_query(
+                    embedding_str, "cards", format, standard_only, colors, limit,
+                )
+            raise
+
+    async def _execute_vector_query(
+        self,
+        embedding_str: str,
+        source_table: str,
+        format: Optional[str],
+        standard_only: bool,
+        colors: Optional[List[str]],
+        limit: int,
+    ):
+        """Build and execute a single vector similarity SQL query."""
+        conditions = ["embedding IS NOT NULL"]
+
+        # If querying the main table (no format view), add legality filter
+        if source_table == "cards":
+            if format and format in FORMAT_LEGALITY_MAP:
+                legality_key = FORMAT_LEGALITY_MAP[format]
+                conditions.append(f"legalities->>'{legality_key}' = 'legal'")
+            elif standard_only:
+                conditions.append("is_standard_legal = true")
+
+        if colors:
+            # Card's colors must be a subset of the deck's colors (or colorless).
+            valid_colors = [c.upper() for c in colors if c.upper() in ["W", "U", "B", "R", "G"]]
+            if valid_colors:
+                arr_literal = "ARRAY[" + ",".join(f"'{c}'" for c in valid_colors) + "]::text[]"
+                conditions.append(
+                    f"(colors <@ {arr_literal} OR colors = '{{}}' OR colors IS NULL)"
+                )
+
+        where_clause = " AND ".join(conditions)
+
+        sql = text(f"""
+            SELECT id, name, mana_cost, cmc, type_line, oracle_text, power, toughness,
+                   colors, color_identity, keywords, legalities, set_code, collector_number,
+                   rarity, image_uri, image_uri_small, image_uri_art_crop, price_usd,
+                   price_usd_foil, scryfall_uri, oracle_id, set_name, scryfall_id,
+                   is_standard_legal, created_at, updated_at,
+                   embedding <=> :embedding AS distance
+            FROM {source_table}
+            WHERE {where_clause}
+            ORDER BY embedding <=> :embedding
+            LIMIT :limit
+        """)
+
+        result = await self.db.execute(sql, {"embedding": embedding_str, "limit": limit * 3})
+        return result.fetchall()
 
     async def get_candidates(
         self,
