@@ -8,24 +8,14 @@ Validates that:
 - Multi-axis cards (matching multiple patterns) get score bonuses
 """
 
-import importlib
-import sys
 import pytest
 from unittest.mock import MagicMock
 
-# Import the module directly to avoid __init__.py triggering heavy deps
-_spec = importlib.util.spec_from_file_location(
-    "card_selection",
-    "backend/app/services/ai/card_selection.py",
-    submodule_search_locations=[],
+from app.services.ai.card_selection import (
+    SYNERGY_PATTERNS,
+    STRATEGY_THEME_MAP,
+    CardSelectionMixin,
 )
-_mod = importlib.util.module_from_spec(_spec)
-sys.modules["card_selection"] = _mod
-_spec.loader.exec_module(_mod)
-
-SYNERGY_PATTERNS = _mod.SYNERGY_PATTERNS
-STRATEGY_THEME_MAP = _mod.STRATEGY_THEME_MAP
-CardSelectionMixin = _mod.CardSelectionMixin
 
 
 def _make_card(
@@ -97,7 +87,7 @@ class TestScoreCardSynergy:
         card = _make_card(
             name="Viscera Seer",
             oracle_text="Sacrifice a creature: Scry 1.",
-            type_line="Creature — Vampire Wizard",
+            type_line="Creature - Vampire Wizard",
         )
         score = self.mixin._score_card_synergy(card, ["sacrifice"])
         assert score >= 1.0
@@ -107,7 +97,7 @@ class TestScoreCardSynergy:
         card = _make_card(
             name="Blood Artist",
             oracle_text="Whenever Blood Artist or another creature dies, target opponent loses 1 life and you gain 1 life.",
-            type_line="Creature — Vampire",
+            type_line="Creature - Vampire",
         )
         graveyard_score = self.mixin._score_card_synergy(card, ["graveyard"])
         sacrifice_score = self.mixin._score_card_synergy(card, ["sacrifice"])
@@ -176,7 +166,7 @@ class TestScoreCardSynergy:
         card = _make_card(
             name="Zombie Lord",
             oracle_text="Other Zombies you control get +1/+1.",
-            type_line="Creature — Zombie",
+            type_line="Creature - Zombie",
         )
         score = self.mixin._score_card_synergy(card, ["zombie"])
         assert score > 0
@@ -231,7 +221,7 @@ class TestSynergyRanking:
                 "X or less from your graveyard to your hand, where X is the number of experience "
                 "counters you have."
             ),
-            type_line="Legendary Creature — Human Shaman",
+            type_line="Legendary Creature - Human Shaman",
         )
         single_card = _make_card(
             name="Eternal Witness",

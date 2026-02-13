@@ -7,33 +7,14 @@ Validates that:
 - ai_service uses Card.keywords.contains() for proper MTG keywords
 """
 
-import importlib
-import sys
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
-# Import guided_builder module to test _extract_mtg_keywords
-_spec = importlib.util.spec_from_file_location(
-    "guided_builder",
-    "backend/app/services/guided_builder.py",
-    submodule_search_locations=[],
+from app.services.guided_builder import (
+    _extract_mtg_keywords,
+    MTG_KEYWORDS,
+    DeckAnalyzer,
 )
-_mod = importlib.util.module_from_spec(_spec)
-
-# Stub out dependencies that guided_builder imports
-from unittest.mock import MagicMock
-
-# Create mock modules for guided_builder's imports
-sys.modules["sqlalchemy"] = MagicMock()
-sys.modules["sqlalchemy.ext"] = MagicMock()
-sys.modules["sqlalchemy.ext.asyncio"] = MagicMock()
-sys.modules["app"] = MagicMock()
-sys.modules["app.services"] = MagicMock()
-sys.modules["app.services.card_service"] = MagicMock()
-
-_spec.loader.exec_module(_mod)
-
-_extract_mtg_keywords = _mod._extract_mtg_keywords
-MTG_KEYWORDS = _mod.MTG_KEYWORDS
 
 
 class TestExtractMtgKeywords:
@@ -139,9 +120,6 @@ class TestKeywordTournamentRanking:
     @pytest.fixture
     def analyzer(self):
         """Create a DeckAnalyzer with mocked DB."""
-        from unittest.mock import AsyncMock
-
-        DeckAnalyzer = _mod.DeckAnalyzer
         instance = DeckAnalyzer.__new__(DeckAnalyzer)
         instance.db = AsyncMock()
         instance.card_service = AsyncMock()
@@ -150,8 +128,6 @@ class TestKeywordTournamentRanking:
     @pytest.mark.asyncio
     async def test_rank_cards_returns_frequency_map(self, analyzer):
         """_rank_cards_by_tournament_frequency returns card->count mapping."""
-        from unittest.mock import AsyncMock, MagicMock
-
         mock_result = MagicMock()
         mock_result.all.return_value = [
             ("fatal push", 42),
@@ -178,8 +154,6 @@ class TestKeywordTournamentRanking:
     @pytest.mark.asyncio
     async def test_keyword_search_sorts_by_tournament_freq(self, analyzer):
         """suggest_cards_for_strategy should rank keyword cards by tournament frequency."""
-        from unittest.mock import AsyncMock, MagicMock
-
         # Create mock cards: card_a has no tournament data, card_b is a staple
         def make_mock_card(name, card_id="id", rarity="common", cmc=3):
             card = MagicMock()
@@ -230,8 +204,6 @@ class TestKeywordTournamentRanking:
     @pytest.mark.asyncio
     async def test_keyword_tiebreak_by_rarity_and_cmc(self, analyzer):
         """When tournament frequency is tied, rarer and cheaper cards should rank higher."""
-        from unittest.mock import AsyncMock, MagicMock
-
         def make_mock_card(name, card_id="id", rarity="common", cmc=3):
             card = MagicMock()
             card.name = name

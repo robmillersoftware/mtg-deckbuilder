@@ -18,6 +18,7 @@ const PROGRESS_MESSAGES = [
 
 interface ChatWindowProps {
   className?: string;
+  mode?: 'build' | 'guided';
 }
 
 // Format options
@@ -29,7 +30,7 @@ const FORMAT_OPTIONS = [
   { value: 'cedh', label: 'cEDH' },
 ];
 
-export function ChatWindow({ className }: ChatWindowProps) {
+export function ChatWindow({ className, mode = 'build' }: ChatWindowProps) {
   const [input, setInput] = useState('');
   const [progressMessageIndex, setProgressMessageIndex] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -42,7 +43,7 @@ export function ChatWindow({ className }: ChatWindowProps) {
     setFormat,
     sendMessage,
     startNewConversation,
-  } = useChat();
+  } = useChat(mode);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {

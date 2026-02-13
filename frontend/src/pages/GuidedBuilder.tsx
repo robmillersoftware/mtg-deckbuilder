@@ -71,7 +71,7 @@ export function GuidedBuilderPage() {
     setFormat,
     sendMessage,
     startNewConversation,
-  } = useChat();
+  } = useChat('guided');
 
   const [input, setInput] = useState('');
   const [progressIdx, setProgressIdx] = useState(0);

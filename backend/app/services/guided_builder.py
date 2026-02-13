@@ -494,12 +494,12 @@ class DeckAnalyzer:
         for role in roles:
             role_key = role.lower().strip()
             system_roles = ROLE_MAP.get(role_key)
+            cmc_limit = ROLE_CMC_LIMITS.get(role_key)
 
             role_cards: List[Dict[str, Any]] = []
 
             if system_roles:
                 # Primary path: card_roles + tournament frequency
-                cmc_limit = ROLE_CMC_LIMITS.get(role_key)
                 meta_cards = await self._get_meta_role_cards(
                     strategy=strategy,
                     colors=colors,
@@ -565,6 +565,8 @@ class DeckAnalyzer:
                     for card in keyword_cards_sorted:
                         if len(role_cards) >= cards_per_role:
                             break
+                        if cmc_limit is not None and (getattr(card, "cmc", None) or 0) > cmc_limit:
+                            continue
                         role_cards.append({
                             "card_name": card.name,
                             "card_id": str(card.id),
@@ -592,18 +594,37 @@ class DeckAnalyzer:
                         query=query,
                         colors=colors if colors else None,
                         format=format,
-                        limit=remaining_needed * 3,
+                        limit=remaining_needed * 6,
                     )
                 except Exception:
                     cards = await self.card_service.search(
                         colors=colors if colors else None,
                         standard_only=(format == "standard"),
                         format=format,
-                        limit=remaining_needed * 3,
+                        limit=remaining_needed * 6,
                     )
 
-                for card in cards:
-                    if card.name.lower() in global_seen:
+                # Re-rank semantic results by tournament frequency so competitive
+                # staples appear before jank that merely matches embeddings
+                candidate_names = [
+                    c.name for c in cards
+                    if c.name.lower() not in global_seen
+                ]
+                freq_map = await self._rank_cards_by_tournament_frequency(
+                    candidate_names, format=format
+                )
+                rarity_rank = {"mythic": 0, "rare": 1, "uncommon": 2, "common": 3}
+                cards_sorted = sorted(
+                    [c for c in cards if c.name.lower() not in global_seen],
+                    key=lambda c: (
+                        -freq_map.get(c.name.lower(), 0),
+                        rarity_rank.get(getattr(c, "rarity", "common") or "common", 3),
+                        getattr(c, "cmc", 0) or 0,
+                    ),
+                )
+
+                for card in cards_sorted:
+                    if cmc_limit is not None and (getattr(card, "cmc", None) or 0) > cmc_limit:
                         continue
                     if len(role_cards) >= cards_per_role:
                         break

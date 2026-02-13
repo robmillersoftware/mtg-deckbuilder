@@ -1,12 +1,12 @@
-import { useState, useCallback } from 'react';
-import { useConversationStore } from '@/store/conversation';
+import { useState, useCallback, useEffect } from 'react';
+import { useConversationStore, ConversationMode } from '@/store/conversation';
 import { useDeckStore } from '@/store/deck';
 import { usePreferencesStore } from '@/store/preferences';
 import { conversationsApi } from '@/services/api';
 import { Message, ChatResponse } from '@/types';
 import toast from 'react-hot-toast';
 
-export function useChat() {
+export function useChat(mode?: ConversationMode) {
   const [isLoading, setIsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
@@ -17,9 +17,27 @@ export function useChat() {
     currentFormat,
     cardSuggestions,
     setCardSuggestions,
+    conversationMode,
+    setConversationMode,
   } = useConversationStore();
 
   const { setCurrentDeck } = useDeckStore();
+
+  // When a mode is specified, ensure the conversation belongs to this mode.
+  // If the persisted conversation was from a different mode, clear it.
+  useEffect(() => {
+    if (!mode) return;
+    if (conversationMode && conversationMode !== mode) {
+      // Different mode — start fresh
+      setCurrentConversation(null);
+      setCurrentDeck(null);
+      setSuggestions([]);
+      setCardSuggestions(null);
+      const defaultFormat = usePreferencesStore.getState().defaultFormat;
+      useConversationStore.getState().setFormat(defaultFormat);
+    }
+    setConversationMode(mode);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim() || isLoading) return;

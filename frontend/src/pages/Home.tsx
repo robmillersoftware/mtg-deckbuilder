@@ -36,6 +36,10 @@ export function HomePage() {
       setSearchParams({}, { replace: true });
     }
 
+    // Don't restore a guided-mode conversation into the build tab
+    const { conversationMode } = useConversationStore.getState();
+    if (!conversationParam && conversationMode === 'guided') return;
+
     // Skip if we already have this conversation loaded, or no ID to restore
     if (!idToRestore || currentConversation?.id === idToRestore) return;
 

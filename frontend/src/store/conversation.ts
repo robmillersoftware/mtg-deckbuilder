@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Message, Conversation, CardSuggestionGroup } from '@/types';
 
+export type ConversationMode = 'build' | 'guided' | null;
+
 interface ConversationState {
   currentConversation: Conversation | null;
   conversations: Conversation[];
@@ -9,6 +11,7 @@ interface ConversationState {
   currentFormat: string; // Format for current conversation
   cardSuggestions: CardSuggestionGroup[] | null;
   lastConversationId: string | null;
+  conversationMode: ConversationMode;
 
   setCurrentConversation: (conversation: Conversation | null) => void;
   setConversations: (conversations: Conversation[]) => void;
@@ -16,6 +19,7 @@ interface ConversationState {
   setLoading: (loading: boolean) => void;
   setFormat: (format: string) => void;
   setCardSuggestions: (suggestions: CardSuggestionGroup[] | null) => void;
+  setConversationMode: (mode: ConversationMode) => void;
   reset: () => void;
 }
 
@@ -28,6 +32,7 @@ export const useConversationStore = create<ConversationState>()(
       currentFormat: 'standard',
       cardSuggestions: null,
       lastConversationId: null,
+      conversationMode: null,
 
       setCurrentConversation: (conversation) => {
         // When loading a conversation, also set its format from current_deck if available
@@ -69,6 +74,8 @@ export const useConversationStore = create<ConversationState>()(
 
       setCardSuggestions: (cardSuggestions) => set({ cardSuggestions }),
 
+      setConversationMode: (conversationMode) => set({ conversationMode }),
+
       reset: () =>
         set({
           currentConversation: null,
@@ -77,6 +84,7 @@ export const useConversationStore = create<ConversationState>()(
           currentFormat: 'standard',
           cardSuggestions: null,
           lastConversationId: null,
+          conversationMode: null,
         }),
     }),
     {
@@ -86,6 +94,7 @@ export const useConversationStore = create<ConversationState>()(
         currentFormat: state.currentFormat,
         cardSuggestions: state.cardSuggestions,
         lastConversationId: state.lastConversationId,
+        conversationMode: state.conversationMode,
       }),
     }
   )
