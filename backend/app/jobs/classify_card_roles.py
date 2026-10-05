@@ -269,12 +269,11 @@ async def classify_all_cards() -> Dict[str, Any]:
                 stats["completed_at"] = datetime.utcnow().isoformat()
                 return stats
 
-            # Process in batches
-            while True:
-                cards = await get_unclassified_cards(db, limit=BATCH_SIZE)
-
-                if not cards:
-                    break
+            # Snapshot once and make a single pass: cards that fit no role are
+            # never saved, so re-querying "unclassified" each batch would loop forever
+            pending = await get_unclassified_cards(db, limit=total_unclassified)
+            for i in range(0, len(pending), BATCH_SIZE):
+                cards = pending[i:i + BATCH_SIZE]
 
                 stats["batches"] += 1
                 logger.info(f"Batch {stats['batches']}: Classifying {len(cards)} cards")
