@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # OpenAI (for embeddings)
     OPENAI_API_KEY: Optional[str] = None
 
+    # TypeSafe (Jev System One judgments)
+    TYPESAFE_API_KEY: Optional[str] = None
+
     # SendGrid
     SENDGRID_API_KEY: Optional[str] = None
     SENDGRID_FROM_EMAIL: str = "noreply@spellbook.app"
@@ -43,7 +46,7 @@ class Settings(BaseSettings):
     ENABLE_SCHEDULER: bool = True
 
     class Config:
-        env_file = ".env"
+        env_file = (".env", "../.env")
         case_sensitive = True
 
 
