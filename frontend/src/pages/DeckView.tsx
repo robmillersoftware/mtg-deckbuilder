@@ -26,6 +26,7 @@ export function DeckViewPage() {
       setFit(response.data);
     } catch (error) {
       console.error('Fit check failed:', error);
+      toast.error('Fit check failed');
     } finally {
       setIsCheckingFit(false);
     }

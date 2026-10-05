@@ -4,6 +4,8 @@ import { CardTooltip } from './CardTooltip';
 import { CardSearch } from './CardSearch';
 import clsx from 'clsx';
 
+const normalizeCardName = (n: string) => n.split(' // ')[0].trim().toLowerCase();
+
 interface DeckListProps {
   mainDeck: DeckEntry[];
   sideboard: DeckEntry[];
@@ -33,6 +35,7 @@ export function DeckList({
   editable = false,
   className,
 }: DeckListProps) {
+  const flaggedSet = new Set((flagged ?? []).map(normalizeCardName));
   // Check if this is a commander format
   const isCommanderFormat = format === 'commander' || format === 'cedh';
   // Group cards by type
@@ -82,7 +85,7 @@ export function DeckList({
                 entry={{ ...commander, quantity: 1 }}
                 target="main"
                 explanation={cardExplanations?.[commander.card_name]}
-                flagged={flagged?.includes(commander.card_name)}
+                flagged={flaggedSet.has(normalizeCardName(commander.card_name))}
                 onClick={onCardClick}
                 editable={false}
               />
@@ -108,7 +111,7 @@ export function DeckList({
                     entry={entry}
                     target="main"
                     explanation={cardExplanations?.[entry.card_name]}
-                flagged={flagged?.includes(entry.card_name)}
+                flagged={flaggedSet.has(normalizeCardName(entry.card_name))}
                     onClick={onCardClick}
                     onQuantityChange={onQuantityChange}
                     editable={editable}
@@ -132,7 +135,7 @@ export function DeckList({
                   entry={entry}
                   target="sideboard"
                   explanation={cardExplanations?.[entry.card_name]}
-                flagged={flagged?.includes(entry.card_name)}
+                flagged={flaggedSet.has(normalizeCardName(entry.card_name))}
                   onClick={onCardClick}
                   onQuantityChange={onQuantityChange}
                   editable={editable}
