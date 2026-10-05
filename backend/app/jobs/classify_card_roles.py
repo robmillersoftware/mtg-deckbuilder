@@ -19,7 +19,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.db.session import async_session_factory
 from app.models.card import Card, CardRole, CARD_ROLES
-from app.core.config import settings
+from app.services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -124,16 +124,12 @@ async def get_unclassified_cards(db: AsyncSession, limit: int = 500) -> List[Car
 
 
 async def classify_cards_batch(cards: List[Card]) -> List[Dict[str, Any]]:
-    """Classify a batch of cards using Claude."""
-    if not settings.ANTHROPIC_API_KEY:
-        logger.error("ANTHROPIC_API_KEY not configured")
+    """Classify a batch of cards using the LLM."""
+    if not llm.is_configured():
+        logger.error("OPENROUTER_API_KEY not configured")
         return []
 
     try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
         # Build card data for prompt
         cards_data = []
         for card in cards:
@@ -151,17 +147,11 @@ async def classify_cards_batch(cards: List[Card]) -> List[Dict[str, Any]]:
         cards_json = json.dumps(cards_data, indent=2)
         prompt = CLASSIFICATION_PROMPT.format(cards_json=cards_json)
 
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        content = llm.complete(system="", user=prompt, max_tokens=4096)
 
-        if not response.content:
-            logger.error("Empty response from Claude")
+        if not content:
+            logger.error("Empty response from LLM")
             return []
-
-        content = response.content[0].text
 
         # Parse JSON from response
         if "[" in content:
@@ -279,12 +269,11 @@ async def classify_all_cards() -> Dict[str, Any]:
                 stats["completed_at"] = datetime.utcnow().isoformat()
                 return stats
 
-            # Process in batches
-            while True:
-                cards = await get_unclassified_cards(db, limit=BATCH_SIZE)
-
-                if not cards:
-                    break
+            # Snapshot once and make a single pass: cards that fit no role are
+            # never saved, so re-querying "unclassified" each batch would loop forever
+            pending = await get_unclassified_cards(db, limit=total_unclassified)
+            for i in range(0, len(pending), BATCH_SIZE):
+                cards = pending[i:i + BATCH_SIZE]
 
                 stats["batches"] += 1
                 logger.info(f"Batch {stats['batches']}: Classifying {len(cards)} cards")

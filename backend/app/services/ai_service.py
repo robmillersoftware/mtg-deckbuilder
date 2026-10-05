@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.services import llm
 from app.services.card_service import CardService
 from app.services.deck_validator import BASIC_LANDS
 from app.models.meta import Decklist, Event, CardCooccurrence
@@ -94,14 +95,11 @@ class AIService(ManaBaseMixin, DeckValidationMixin, MetagameMixin, CardSelection
         """
         specific_cards = specific_cards or []
 
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             return await self._generate_fallback_deck(archetype, colors, strategy, format=format)
 
         try:
             import asyncio
-            import anthropic
-
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
             # Phase 1: Handle specific cards and strategy-based archetype matching (may change colors)
             # NOTE: For cEDH, colors come from the commander's color identity and should NOT be overridden
@@ -807,18 +805,15 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
 
 {format_json}"""
 
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
+            content = llm.complete(
                 system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
+                user=user_message,
+                max_tokens=4096,
             )
 
-            if not response.content:
+            if not content:
                 logger.error("AI returned empty content")
                 raise ValueError("Empty AI response")
-
-            content = response.content[0].text
 
             # Extract JSON with error recovery
             if "{" in content:
@@ -982,14 +977,10 @@ MANA BASE from {mana_base_data.get('sample_size', 0)} tournament decks:
         """
         Generate a complete sideboard guide matrix for all meta matchups.
         """
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             return {"matchups": [], "general_sideboard_notes": "AI service not configured"}
 
         try:
-            import anthropic
-
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
             main_deck = deck_data.get("main_deck", [])
             sideboard = deck_data.get("sideboard", [])
 
@@ -1044,17 +1035,14 @@ Return JSON:
     "general_sideboard_notes": "General advice about sideboarding with this deck"
 }}"""
 
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
+            content = llm.complete(
                 system=system_prompt,
-                messages=[{"role": "user", "content": f"Generate sideboard plans for all {len(meta_archetypes[:8])} matchups."}],
+                user=f"Generate sideboard plans for all {len(meta_archetypes[:8])} matchups.",
+                max_tokens=4096,
             )
 
-            if not response.content:
+            if not content:
                 return {"matchups": [], "general_sideboard_notes": "Failed to generate"}
-
-            content = response.content[0].text
 
             if "{" in content:
                 json_start = content.index("{")
@@ -1078,14 +1066,10 @@ Return JSON:
         Generate context-aware explanations for each card in the deck.
         Explains WHY each card is in THIS specific deck.
         """
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             return {}
 
         try:
-            import anthropic
-
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
             # Collect unique card names from main deck and sideboard
             main_deck = deck_data.get("main_deck", [])
             sideboard = deck_data.get("sideboard", [])
@@ -1126,17 +1110,14 @@ Return JSON mapping card names to explanations:
 
 Be specific to this deck's strategy. Don't just describe what the card does - explain why it's HERE."""
 
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
+            content = llm.complete(
                 system=system_prompt,
-                messages=[{"role": "user", "content": f"Generate explanations for all {len(all_card_names)} cards."}],
+                user=f"Generate explanations for all {len(all_card_names)} cards.",
+                max_tokens=4096,
             )
 
-            if not response.content:
+            if not content:
                 return {}
-
-            content = response.content[0].text
 
             # Extract JSON
             if "{" in content:
@@ -1159,21 +1140,15 @@ Be specific to this deck's strategy. Don't just describe what the card does - ex
         """
         Suggest modifications to an existing deck.
         """
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             return {"changes": [], "summary": "AI service not configured"}
 
         try:
-            import anthropic
-
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
             # Get available cards
             available_cards = await self.card_service.search(standard_only=True, limit=100)
             available_names = [c.name for c in available_cards]
 
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2048,
+            content = llm.complete(
                 system=f"""You are a Magic: The Gathering deck modification assistant.
 
 Current deck:
@@ -1189,10 +1164,9 @@ Return modifications as JSON:
     ],
     "summary": "Brief summary of changes"
 }}""",
-                messages=[{"role": "user", "content": modification_request}],
+                user=modification_request,
+                max_tokens=2048,
             )
-
-            content = response.content[0].text
             if "{" in content:
                 json_start = content.index("{")
                 json_end = content.rindex("}") + 1

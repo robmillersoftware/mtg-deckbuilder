@@ -18,7 +18,7 @@ from app.services.deck_generator import DeckGenerator
 from app.services.ai_service import AIService
 from app.services.guided_builder import DeckAnalyzer
 from app.services import deck_fit
-from app.core.config import settings
+from app.services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -283,13 +283,10 @@ class ChatService:
         # Add user message to conversation
         conversation.add_message("user", message)
 
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             return await self._fallback_response(message, conversation, user_id)
 
         try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
             # Resolve card names mentioned in the message
             resolved_cards = await self._resolve_card_mentions(message, format)
 
@@ -404,42 +401,29 @@ RULES:
             has_build_intent = any(
                 kw in message.lower() for kw in build_intent_keywords
             )
-            api_kwargs = {
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 2048,
-                "system": system_prompt,
-                "tools": TOOLS,
-                "messages": api_messages,
-            }
-            if (resolved_cards or format_illegal_cards or has_build_intent) and not deck:
-                # User named a card or expressed build intent and no deck
-                # exists yet -> force a tool call so cards go through the UI
-                api_kwargs["tool_choice"] = {"type": "any"}
+            # User named a card or expressed build intent and no deck exists
+            # yet -> force a tool call so cards go through the UI
+            require_tool = bool(
+                (resolved_cards or format_illegal_cards or has_build_intent) and not deck
+            )
+            response_text, tool_calls = llm.chat_with_tools(
+                system=system_prompt,
+                messages=api_messages,
+                tools=TOOLS,
+                require_tool=require_tool,
+                max_tokens=2048,
+            )
 
-            response = client.messages.create(**api_kwargs)
+            for tool_name, tool_input in tool_calls:
+                logger.debug(f"[CHAT-SERVICE] LLM called tool: {tool_name} with input: {tool_input}")
 
-            # Capture text content alongside tool use
-            response_text = ""
-            for content in response.content:
-                if hasattr(content, "text"):
-                    response_text += content.text
+                result = await self._dispatch_tool(
+                    tool_name, tool_input, conversation, user_id, response_text
+                )
+                if result:
+                    return result
 
-            # Process tool calls
-            if response.stop_reason == "tool_use":
-                for content in response.content:
-                    if content.type == "tool_use":
-                        tool_name = content.name
-                        tool_input = content.input
-
-                        logger.debug(f"[CHAT-SERVICE] Claude called tool: {tool_name} with input: {tool_input}")
-
-                        result = await self._dispatch_tool(
-                            tool_name, tool_input, conversation, user_id, response_text
-                        )
-                        if result:
-                            return result
-
-            # Claude responded with text only (no tool use)
+            # Text-only reply (no tool use)
             if response_text:
                 conversation.add_message("assistant", response_text)
                 await self.db.commit()
