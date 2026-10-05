@@ -75,6 +75,7 @@ export interface Deck {
   archetype?: string;
   commander?: DeckEntry; // For Commander/cEDH formats
   main_deck: DeckEntry[];
+  fit_flagged?: string[];
   sideboard: DeckEntry[];
   strategy_summary?: string;
   card_explanations?: Record<string, string>;
@@ -170,6 +171,15 @@ export interface Conversation {
   updated_at: string;
 }
 
+export interface CardFit {
+  plan_fit: number;
+  synergy: number | null;
+}
+
+export interface FitScore extends CardFit {
+  anti_synergy: number;
+}
+
 export interface CardSuggestionItem {
   card_name: string;
   quantity: number;
@@ -177,6 +187,7 @@ export interface CardSuggestionItem {
   type_line?: string;
   image_uri?: string;
   reasoning?: string;
+  fit?: CardFit | null;
 }
 
 export interface CardSuggestionGroup {
@@ -428,4 +439,25 @@ export interface PaginatedResponse<T> {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface IdentityOverrides {
+  tags_on: string[];
+  tags_off: string[];
+  pinned: string[];
+  unpinned: string[];
+}
+
+export interface DeckIdentity {
+  tags: string[];
+  key_cards: string[];
+  request_text?: string | null;
+  overrides: IdentityOverrides;
+}
+
+export interface DeckFitResponse {
+  identity: DeckIdentity | null;
+  cards: Record<string, FitScore>;
+  flagged: string[];
+  available_tags: string[];
 }

@@ -17,6 +17,7 @@ from app.services.card_service import CardService, get_format_legality_condition
 from app.services.deck_generator import DeckGenerator
 from app.services.ai_service import AIService
 from app.services.guided_builder import DeckAnalyzer
+from app.services import deck_fit
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -1017,6 +1018,7 @@ RULES:
 
         # Query cards grouped by role (now tournament-aware)
         # Pass build-around + synergy card names + existing deck cards so roles don't repeat them
+        identity = await self._fit_identity(conversation, deck.get("main_deck", []), strategy)
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
             strategy=strategy,
             colors=colors,
@@ -1024,6 +1026,7 @@ RULES:
             existing_cards=existing + exclude_names,
             format=format,
             cards_per_role=cards_per_role,
+            identity=identity,
         )
 
         # Build card suggestion groups
@@ -1060,6 +1063,7 @@ RULES:
                         "type_line": c.get("type_line"),
                         "image_uri": c.get("image_uri"),
                         "reasoning": None,
+                        "fit": c.get("fit"),
                     }
                     for c in filtered_cards
                 ],
@@ -1117,6 +1121,7 @@ RULES:
         previously_suggested = set(conversation.get_context().get("suggested_cards", []))
         suggestion_buffer = min(len(previously_suggested), count * 3)
 
+        identity = await self._fit_identity(conversation, deck.get("main_deck", []), strategy)
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
             strategy=strategy or role,
             colors=colors,
@@ -1124,6 +1129,7 @@ RULES:
             existing_cards=existing,
             format=format,
             cards_per_role=count + suggestion_buffer,
+            identity=identity,
         )
 
         card_suggestions = []
@@ -1146,6 +1152,7 @@ RULES:
                         "type_line": c.get("type_line"),
                         "image_uri": c.get("image_uri"),
                         "reasoning": None,
+                        "fit": c.get("fit"),
                     }
                     for c in cards
                 ],
@@ -1371,6 +1378,7 @@ RULES:
                 "main_deck": result.deck.main_deck,
                 "sideboard": result.deck.sideboard,
                 "archetype": result.deck.archetype,
+                "fit_flagged": result.fit_flagged,
             },
             suggestions=[
                 "Explain the sideboard" if format != "cedh" else "Explain key cards",
@@ -1378,6 +1386,33 @@ RULES:
                 "Make it faster",
             ],
         )
+
+    async def _fit_identity(
+        self,
+        conversation: Conversation,
+        deck_entries: List[Dict[str, Any]],
+        request_text: str,
+    ) -> Optional[deck_fit.DeckIdentity]:
+        """Deck identity for fit ranking, cached in conversation context and
+        re-inferred when the nonland count crosses deck_fit.RE_INFER_AT."""
+        names = [e.get("card_name") for e in deck_entries if e.get("card_name")]
+        payloads = await deck_fit.load_payloads(self.db, names)
+        nonland_count = sum(not deck_fit.is_land(p) for p in payloads)
+        cached = conversation.get_context().get("fit_identity")
+        if cached and cached.get("bucket") == deck_fit.bucket(nonland_count) and (
+                not request_text or cached.get("request_text") == request_text):
+            try:
+                return deck_fit.DeckIdentity(**cached["identity"])
+            except Exception:
+                pass  # malformed/drifted cache entry: treat as a miss
+        identity = await deck_fit.infer_identity(payloads, request_text or None)
+        if identity:
+            conversation.update_context(fit_identity={
+                "bucket": deck_fit.bucket(nonland_count),
+                "request_text": request_text or None,
+                "identity": identity.model_dump(),
+            })
+        return identity
 
     # --- Helper methods ---
 

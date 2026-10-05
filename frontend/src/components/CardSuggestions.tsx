@@ -132,6 +132,12 @@ function SuggestionCard({
         {card.type_line && (
           <p className="text-xs text-gray-500 truncate">{card.type_line}</p>
         )}
+        {card.fit && (
+          <div className="flex gap-1 mt-0.5">
+            <FitBadge label="Plan" value={card.fit.plan_fit} />
+            {card.fit.synergy !== null && <FitBadge label="Synergy" value={card.fit.synergy} />}
+          </div>
+        )}
         {card.reasoning && (
           <p className="text-xs text-gray-400 mt-0.5">{card.reasoning}</p>
         )}
@@ -154,5 +160,22 @@ function SuggestionCard({
         </button>
       </div>
     </div>
+  );
+}
+
+function FitBadge({ label, value }: { label: string; value: number }) {
+  const pct = Math.round(value * 100);
+  return (
+    <span
+      title={`${label} fit: ${pct}%`}
+      className={clsx(
+        'text-[10px] px-1.5 py-0.5 rounded',
+        value >= 0.66 ? 'bg-green-900 text-green-300'
+          : value >= 0.34 ? 'bg-yellow-900 text-yellow-300'
+          : 'bg-gray-800 text-gray-400'
+      )}
+    >
+      {label} {pct}%
+    </span>
   );
 }

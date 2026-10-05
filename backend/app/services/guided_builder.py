@@ -11,6 +11,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
+from app.services.deck_fit import DeckIdentity, card_payload, is_land, load_payloads, rank, score_fit
 from app.services.card_service import CardService, get_format_view, FORMAT_LEGALITY_MAP
 
 logger = logging.getLogger(__name__)
@@ -467,7 +468,75 @@ class DeckAnalyzer:
             for row in rows
         ]
 
+    # How many retrieval candidates to gather per suggestion slot when fit-ranking
+    FIT_POOL_MULTIPLIER = 3
+
     async def suggest_cards_for_strategy(
+        self,
+        strategy: str,
+        colors: List[str],
+        roles: List[str],
+        existing_cards: List[str],
+        format: str = "standard",
+        cards_per_role: int = 8,
+        identity: Optional[DeckIdentity] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Suggest cards grouped by role. With a deck identity, gathers a larger
+        candidate pool and re-ranks it by Jev fit + tournament frequency;
+        without one (or if Jev is unavailable) returns retrieval order.
+        """
+        if identity is None:
+            return await self._collect_role_candidates(
+                strategy, colors, roles, existing_cards, format, cards_per_role)
+
+        # Collect each role independently and dedupe after ranking, so one role's
+        # discarded candidates don't starve later roles.
+        pool = {}
+        for role in roles:
+            got = await self._collect_role_candidates(
+                strategy, colors, [role], existing_cards, format,
+                cards_per_role * self.FIT_POOL_MULTIPLIER)
+            pool[role] = [c for c in got.get(role, []) if not is_land(card_payload(c))]
+        candidates = [card_payload(c) for cards in pool.values() for c in cards]
+        keys = await load_payloads(self.db, identity.key_cards)
+        fit = await score_fit(identity, keys, candidates)
+        if not fit:
+            return self._take_unique(
+                {r: [c["card_name"] for c in cs] for r, cs in pool.items()},
+                pool, cards_per_role, fit)
+
+        freq = await self._rank_cards_by_tournament_frequency(list(fit), format=format)
+        ordered = {
+            role: rank(list({c["card_name"]: c for c in cards}), fit, freq)
+            for role, cards in pool.items()
+        }
+        return self._take_unique(ordered, pool, cards_per_role, fit)
+
+    @staticmethod
+    def _take_unique(ordered, pool, limit, fit):
+        """Walk roles in order, taking up to `limit` names per role not already
+        taken by an earlier role; attach fit when scores exist."""
+        taken: set = set()
+        results: Dict[str, List[Dict[str, Any]]] = {}
+        for role, names in ordered.items():
+            by_name = {c["card_name"]: c for c in pool[role]}
+            chosen = []
+            for n in names:
+                if len(chosen) >= limit:
+                    break
+                if n.lower() in taken:
+                    continue
+                taken.add(n.lower())
+                card = by_name[n]
+                chosen.append(
+                    {**card, "fit": {"plan_fit": fit[n].plan_fit, "synergy": fit[n].synergy}}
+                    if fit else card)
+            if chosen:
+                results[role] = chosen
+        return results
+
+    async def _collect_role_candidates(
         self,
         strategy: str,
         colors: List[str],

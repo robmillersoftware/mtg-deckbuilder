@@ -23,6 +23,7 @@ pydantic-settings==2.12.0
 # AI/ML
 anthropic==0.76.0
 openai==2.15.0
+typesafe-sdk==0.7.2
 numpy==2.4.1
 
 # HTTP client

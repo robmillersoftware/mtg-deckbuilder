@@ -26,6 +26,7 @@ from app.schemas.deck import (
     DeckValidationReport,
     DeckExportFormat,
     SideboardMatrixResponse,
+    DeckFitResponse,
 )
 from app.api.deps.auth import get_current_user_required, get_current_user
 from app.services.deck_service import DeckService
@@ -34,6 +35,7 @@ from app.services.deck_exporter import DeckExporter
 from app.services.deck_importer import DeckImporter
 from app.services.deck_generator import DeckGenerator
 from app.services.ai_service import AIService
+from app.services import deck_fit
 from app.core.security import generate_share_token
 from app.models.meta import MetaSnapshot
 
@@ -159,6 +161,59 @@ async def get_deck(
     await deck_service.enrich_deck(deck)
 
     return deck
+
+
+async def _owned_deck(db: AsyncSession, deck_id: UUID, user: User) -> Deck:
+    result = await db.execute(
+        select(Deck).where(and_(Deck.id == deck_id, Deck.owner_id == user.id))
+    )
+    deck = result.scalar_one_or_none()
+    if deck is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
+    return deck
+
+
+async def _deck_fit(db: AsyncSession, deck: Deck) -> DeckFitResponse:
+    overrides = deck_fit.IdentityOverrides(**(deck.identity or {}).get("overrides", {}))
+    entries = list(deck.main_deck or [])
+    if deck.commander and deck.commander not in {e.get("card_name") for e in entries}:
+        entries.append({"card_name": deck.commander})  # commander is stored apart from main_deck
+    identity, fit = await deck_fit.review_deck(
+        db, entries, deck.strategy_summary or deck.description, overrides)
+    if identity is not None:
+        deck.identity = identity.model_dump()
+        await db.commit()
+    return DeckFitResponse(
+        identity=identity,
+        cards=fit,
+        flagged=deck_fit.flag_low_fit(fit),
+        available_tags=list(deck_fit.THEME_TAGS),
+    )
+
+
+@router.post("/{deck_id}/fit", response_model=DeckFitResponse)
+async def check_deck_fit(
+    deck_id: UUID,
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """Infer the deck's identity with Jev and score each nonland card's fit."""
+    deck = await _owned_deck(db, deck_id, current_user)
+    return await _deck_fit(db, deck)
+
+
+@router.patch("/{deck_id}/identity", response_model=DeckFitResponse)
+async def update_deck_identity(
+    deck_id: UUID,
+    overrides: deck_fit.IdentityOverrides,
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save the user's tag/key-card overrides and re-score."""
+    deck = await _owned_deck(db, deck_id, current_user)
+    deck.identity = {**(deck.identity or {}), "overrides": overrides.model_dump()}
+    await db.commit()
+    return await _deck_fit(db, deck)
 
 
 @router.patch("/{deck_id}", response_model=DeckResponse)

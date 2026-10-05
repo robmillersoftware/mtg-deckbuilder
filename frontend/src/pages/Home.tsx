@@ -131,6 +131,7 @@ export function HomePage() {
               format={currentDeck.format}
               title={currentDeck.name || 'Current Deck'}
               cardExplanations={currentDeck.card_explanations}
+              flagged={currentDeck.fit_flagged}
               onQuantityChange={handleQuantityChange}
               onAddCard={handleAddCard}
               editable

@@ -4,6 +4,8 @@ import { CardTooltip } from './CardTooltip';
 import { CardSearch } from './CardSearch';
 import clsx from 'clsx';
 
+const normalizeCardName = (n: string) => n.split(' // ')[0].trim().toLowerCase();
+
 interface DeckListProps {
   mainDeck: DeckEntry[];
   sideboard: DeckEntry[];
@@ -16,6 +18,7 @@ interface DeckListProps {
   onAddCard?: (cardName: string, target: 'main' | 'sideboard') => void;
   editable?: boolean;
   className?: string;
+  flagged?: string[];
 }
 
 export function DeckList({
@@ -28,9 +31,11 @@ export function DeckList({
   onCardClick,
   onQuantityChange,
   onAddCard,
+  flagged,
   editable = false,
   className,
 }: DeckListProps) {
+  const flaggedSet = new Set((flagged ?? []).map(normalizeCardName));
   // Check if this is a commander format
   const isCommanderFormat = format === 'commander' || format === 'cedh';
   // Group cards by type
@@ -80,6 +85,7 @@ export function DeckList({
                 entry={{ ...commander, quantity: 1 }}
                 target="main"
                 explanation={cardExplanations?.[commander.card_name]}
+                flagged={flaggedSet.has(normalizeCardName(commander.card_name))}
                 onClick={onCardClick}
                 editable={false}
               />
@@ -105,6 +111,7 @@ export function DeckList({
                     entry={entry}
                     target="main"
                     explanation={cardExplanations?.[entry.card_name]}
+                flagged={flaggedSet.has(normalizeCardName(entry.card_name))}
                     onClick={onCardClick}
                     onQuantityChange={onQuantityChange}
                     editable={editable}
@@ -128,6 +135,7 @@ export function DeckList({
                   entry={entry}
                   target="sideboard"
                   explanation={cardExplanations?.[entry.card_name]}
+                flagged={flaggedSet.has(normalizeCardName(entry.card_name))}
                   onClick={onCardClick}
                   onQuantityChange={onQuantityChange}
                   editable={editable}
@@ -165,9 +173,10 @@ interface CardEntryProps {
   onClick?: (cardName: string) => void;
   onQuantityChange?: (cardName: string, quantity: number, target: 'main' | 'sideboard') => void;
   editable?: boolean;
+  flagged?: boolean;
 }
 
-function CardEntry({ entry, target, explanation, onClick, onQuantityChange, editable }: CardEntryProps) {
+function CardEntry({ entry, target, explanation, onClick, onQuantityChange, editable, flagged }: CardEntryProps) {
   const handleClick = () => {
     onClick?.(entry.card_name);
   };
@@ -199,6 +208,11 @@ function CardEntry({ entry, target, explanation, onClick, onQuantityChange, edit
         <CardTooltip cardName={entry.card_name} explanation={explanation}>
           <span className="text-white text-sm">{entry.card_name}</span>
         </CardTooltip>
+        {flagged && (
+          <span title="Low fit with this deck's theme" className="text-xs text-amber-400">
+            ⚠ low fit
+          </span>
+        )}
       </div>
 
       {editable && (
