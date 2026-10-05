@@ -1284,7 +1284,6 @@ RULES:
                 "main_deck": result.deck.main_deck,
                 "sideboard": result.deck.sideboard,
                 "archetype": result.deck.archetype,
-                "fit_flagged": result.fit_flagged,
             },
             suggestions=["Undo changes", "Show the full list", "Explain changes"],
         )
@@ -1379,6 +1378,7 @@ RULES:
                 "main_deck": result.deck.main_deck,
                 "sideboard": result.deck.sideboard,
                 "archetype": result.deck.archetype,
+                "fit_flagged": result.fit_flagged,
             },
             suggestions=[
                 "Explain the sideboard" if format != "cedh" else "Explain key cards",
