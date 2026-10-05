@@ -11,6 +11,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
+from app.services.deck_fit import DeckIdentity, card_payload, load_payloads, rank, score_fit
 from app.services.card_service import CardService, get_format_view, FORMAT_LEGALITY_MAP
 
 logger = logging.getLogger(__name__)
@@ -467,7 +468,50 @@ class DeckAnalyzer:
             for row in rows
         ]
 
+    # How many retrieval candidates to gather per suggestion slot when fit-ranking
+    FIT_POOL_MULTIPLIER = 3
+
     async def suggest_cards_for_strategy(
+        self,
+        strategy: str,
+        colors: List[str],
+        roles: List[str],
+        existing_cards: List[str],
+        format: str = "standard",
+        cards_per_role: int = 8,
+        identity: Optional[DeckIdentity] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Suggest cards grouped by role. With a deck identity, gathers a larger
+        candidate pool and re-ranks it by Jev fit + tournament frequency;
+        without one (or if Jev is unavailable) returns retrieval order.
+        """
+        if identity is None:
+            return await self._collect_role_candidates(
+                strategy, colors, roles, existing_cards, format, cards_per_role)
+
+        pool = await self._collect_role_candidates(
+            strategy, colors, roles, existing_cards, format,
+            cards_per_role * self.FIT_POOL_MULTIPLIER)
+        candidates = [card_payload(c) for cards in pool.values() for c in cards]
+        keys = await load_payloads(self.db, identity.key_cards)
+        fit = await score_fit(identity, keys, candidates)
+        if not fit:
+            return {role: cards[:cards_per_role] for role, cards in pool.items()}
+
+        freq = await self._rank_cards_by_tournament_frequency(list(fit), format=format)
+        results: Dict[str, List[Dict[str, Any]]] = {}
+        for role, cards in pool.items():
+            by_name = {c["card_name"]: c for c in cards}
+            ranked = rank(list(by_name), fit, freq)[:cards_per_role]
+            if ranked:
+                results[role] = [
+                    {**by_name[n], "fit": {"plan_fit": fit[n].plan_fit, "synergy": fit[n].synergy}}
+                    for n in ranked
+                ]
+        return results
+
+    async def _collect_role_candidates(
         self,
         strategy: str,
         colors: List[str],
