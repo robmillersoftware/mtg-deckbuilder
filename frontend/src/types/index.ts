@@ -170,6 +170,15 @@ export interface Conversation {
   updated_at: string;
 }
 
+export interface CardFit {
+  plan_fit: number;
+  synergy: number | null;
+}
+
+export interface FitScore extends CardFit {
+  anti_synergy: number;
+}
+
 export interface CardSuggestionItem {
   card_name: string;
   quantity: number;
@@ -177,6 +186,7 @@ export interface CardSuggestionItem {
   type_line?: string;
   image_uri?: string;
   reasoning?: string;
+  fit?: CardFit | null;
 }
 
 export interface CardSuggestionGroup {
