@@ -163,6 +163,13 @@ class TestInferIdentity:
         ident = await deck_fit.infer_identity([card("A")], "x", client=FakeClient(fail_on=lambda s: True))
         assert ident is None
 
+    async def test_response_parse_error_returns_none(self):
+        def bad_answer(state, qs):
+            # Omit tag:graveyard key, causing KeyError during parsing
+            return {k: 0.0 for k in qs if k.startswith("tag:") and k != "tag:graveyard"}, {}
+        ident = await deck_fit.infer_identity([card("A")], "x", client=FakeClient(bad_answer))
+        assert ident is None
+
 
 class TestScoreFit:
     async def test_scores_normalized_and_deduped(self):
@@ -190,6 +197,33 @@ class TestScoreFit:
     async def test_no_api_key_returns_empty(self, monkeypatch):
         monkeypatch.setattr(deck_fit.settings, "TYPESAFE_API_KEY", None)
         assert await deck_fit.score_fit(DeckIdentity(), [], [card("A")]) == {}
+
+    async def test_cancels_pending_tasks_on_first_failure(self):
+        import asyncio
+
+        class CancellationTrackingClient:
+            def __init__(self):
+                self.calls = []
+                self.cancelled = []
+
+            async def system_one(self, state, questions):
+                self.calls.append((state, questions))
+                try:
+                    if state["candidate"]["name"] == "A":
+                        raise ValueError("A failed")
+                    # B waits forever, allowing A to fail and cancel it
+                    await asyncio.sleep(float('inf'))
+                except asyncio.CancelledError:
+                    self.cancelled.append(state["candidate"]["name"])
+                    raise
+
+        client = CancellationTrackingClient()
+        fit = await asyncio.wait_for(
+            deck_fit.score_fit(DeckIdentity(), [], [card("A"), card("B")], client=client),
+            timeout=1.0,
+        )
+        assert fit == {}
+        assert "B" in client.cancelled  # B was cancelled, not left hanging
 
 
 class TestReviewDeck:

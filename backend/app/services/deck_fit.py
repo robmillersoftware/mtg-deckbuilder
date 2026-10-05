@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
-from typesafe_sdk import AsyncTypeSafeClient, Noul, Score
+from typesafe_sdk import AsyncTypeSafeClient, Noul, RetryPolicy, Score
 
 from app.core.config import settings
 
@@ -41,6 +41,7 @@ ORACLE_CHAR_LIMIT = 600
 RE_INFER_AT = (6, 15, 30)
 
 REQUEST_TIMEOUT = 2.0
+RETRY_BUDGET = 5.0
 # ponytail: fixed concurrency cap under Jev's 80 req/s limit; make it adaptive if 429s show up
 MAX_CONCURRENT = 32
 
@@ -152,7 +153,21 @@ def bucket(nonland_count: int) -> int:
 def _client() -> Optional[AsyncTypeSafeClient]:
     if not settings.TYPESAFE_API_KEY:
         return None
-    return AsyncTypeSafeClient(api_key=settings.TYPESAFE_API_KEY, timeout=REQUEST_TIMEOUT)
+    return AsyncTypeSafeClient(
+        api_key=settings.TYPESAFE_API_KEY,
+        timeout=REQUEST_TIMEOUT,
+        retry=RetryPolicy(api_timeout_error=False, timeout=RETRY_BUDGET),
+    )
+
+
+async def _close(client: Optional[AsyncTypeSafeClient]) -> None:
+    """Safely close a client, logging and swallowing any errors."""
+    if client is None:
+        return
+    try:
+        await client.aclose()
+    except Exception as e:
+        logger.warning(f"Failed to close Jev client: {e}")
 
 
 async def infer_identity(
@@ -188,23 +203,22 @@ async def infer_identity(
     try:
         resp = await client.system_one(
             {"deck": {"request": request_text or "", "cards": nonland}}, questions)
+        tags = [t for t in THEME_TAGS if resp.nouls[f"tag:{t}"].noul >= TAG_THRESHOLD]
+        key_cards: List[str] = []
+        if with_keys:
+            n = 5 if len(nonland) < 40 else 8
+            order = sorted(range(len(nonland)), key=lambda i: resp.scores[f"key:{i}"].score, reverse=True)
+            key_cards = [nonland[i]["name"] for i in order[:n]]
+
+        identity = DeckIdentity(tags=tags, key_cards=key_cards, request_text=request_text,
+                                overrides=overrides or IdentityOverrides())
+        return apply_overrides(identity, [c["name"] for c in nonland])
     except Exception as e:  # Jev must never break deck building
         logger.warning(f"Deck identity inference failed: {e}")
         return None
     finally:
         if owned:
-            await client.aclose()
-
-    tags = [t for t in THEME_TAGS if resp.nouls[f"tag:{t}"].noul >= TAG_THRESHOLD]
-    key_cards: List[str] = []
-    if with_keys:
-        n = 5 if len(nonland) < 40 else 8
-        order = sorted(range(len(nonland)), key=lambda i: resp.scores[f"key:{i}"].score, reverse=True)
-        key_cards = [nonland[i]["name"] for i in order[:n]]
-
-    identity = DeckIdentity(tags=tags, key_cards=key_cards, request_text=request_text,
-                            overrides=overrides or IdentityOverrides())
-    return apply_overrides(identity, [c["name"] for c in nonland])
+            await _close(client)
 
 
 async def score_fit(
@@ -240,25 +254,29 @@ async def score_fit(
     if client is None:
         return {}
     gate = asyncio.Semaphore(MAX_CONCURRENT)
+    results = {}
 
-    async def one(card: Dict[str, str]) -> Tuple[str, FitScore]:
+    async def one(card: Dict[str, str]) -> None:
         async with gate:
             r = await client.system_one({"deck": deck, "candidate": card}, questions)
-        return card["name"], FitScore(
+        results[card["name"]] = FitScore(
             plan_fit=r.scores["plan_fit"].score / 3,
             synergy=r.scores["synergy"].score / 3 if key_cards else None,
             anti_synergy=r.nouls["anti_synergy"].noul,
         )
 
     try:
-        results = await asyncio.gather(*(one(c) for c in unique.values()))
-    except Exception as e:  # partial fit is worse than none: fall back to existing ordering
-        logger.warning(f"Fit scoring failed, falling back: {e}")
+        async with asyncio.TaskGroup() as tg:
+            for card in unique.values():
+                tg.create_task(one(card))
+    except BaseException as e:  # partial fit is worse than none: fall back to existing ordering
+        if not isinstance(e, asyncio.CancelledError):
+            logger.warning(f"Fit scoring failed, falling back: {e}")
         return {}
     finally:
         if owned:
-            await client.aclose()
-    return dict(results)
+            await _close(client)
+    return results
 
 
 async def load_payloads(db, names: Sequence[str]) -> List[Dict[str, str]]:
