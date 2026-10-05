@@ -490,25 +490,50 @@ class DeckAnalyzer:
             return await self._collect_role_candidates(
                 strategy, colors, roles, existing_cards, format, cards_per_role)
 
-        pool = await self._collect_role_candidates(
-            strategy, colors, roles, existing_cards, format,
-            cards_per_role * self.FIT_POOL_MULTIPLIER)
+        # Collect each role independently and dedupe after ranking, so one role's
+        # discarded candidates don't starve later roles.
+        pool = {}
+        for role in roles:
+            got = await self._collect_role_candidates(
+                strategy, colors, [role], existing_cards, format,
+                cards_per_role * self.FIT_POOL_MULTIPLIER)
+            pool[role] = got.get(role, [])
         candidates = [card_payload(c) for cards in pool.values() for c in cards]
         keys = await load_payloads(self.db, identity.key_cards)
         fit = await score_fit(identity, keys, candidates)
         if not fit:
-            return {role: cards[:cards_per_role] for role, cards in pool.items()}
+            return self._take_unique(
+                {r: [c["card_name"] for c in cs] for r, cs in pool.items()},
+                pool, cards_per_role, fit)
 
         freq = await self._rank_cards_by_tournament_frequency(list(fit), format=format)
+        ordered = {
+            role: rank(list({c["card_name"]: c for c in cards}), fit, freq)
+            for role, cards in pool.items()
+        }
+        return self._take_unique(ordered, pool, cards_per_role, fit)
+
+    @staticmethod
+    def _take_unique(ordered, pool, limit, fit):
+        """Walk roles in order, taking up to `limit` names per role not already
+        taken by an earlier role; attach fit when scores exist."""
+        taken: set = set()
         results: Dict[str, List[Dict[str, Any]]] = {}
-        for role, cards in pool.items():
-            by_name = {c["card_name"]: c for c in cards}
-            ranked = rank(list(by_name), fit, freq)[:cards_per_role]
-            if ranked:
-                results[role] = [
-                    {**by_name[n], "fit": {"plan_fit": fit[n].plan_fit, "synergy": fit[n].synergy}}
-                    for n in ranked
-                ]
+        for role, names in ordered.items():
+            by_name = {c["card_name"]: c for c in pool[role]}
+            chosen = []
+            for n in names:
+                if len(chosen) >= limit:
+                    break
+                if n.lower() in taken:
+                    continue
+                taken.add(n.lower())
+                card = by_name[n]
+                chosen.append(
+                    {**card, "fit": {"plan_fit": fit[n].plan_fit, "synergy": fit[n].synergy}}
+                    if fit else card)
+            if chosen:
+                results[role] = chosen
         return results
 
     async def _collect_role_candidates(

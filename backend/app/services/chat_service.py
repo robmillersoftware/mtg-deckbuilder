@@ -1121,7 +1121,7 @@ RULES:
         previously_suggested = set(conversation.get_context().get("suggested_cards", []))
         suggestion_buffer = min(len(previously_suggested), count * 3)
 
-        identity = await self._fit_identity(conversation, deck.get("main_deck", []), strategy or role)
+        identity = await self._fit_identity(conversation, deck.get("main_deck", []), strategy)
         role_cards = await self.deck_analyzer.suggest_cards_for_strategy(
             strategy=strategy or role,
             colors=colors,
@@ -1398,12 +1398,17 @@ RULES:
         payloads = await deck_fit.load_payloads(self.db, names)
         nonland_count = sum(not deck_fit.is_land(p) for p in payloads)
         cached = conversation.get_context().get("fit_identity")
-        if cached and cached.get("bucket") == deck_fit.bucket(nonland_count):
-            return deck_fit.DeckIdentity(**cached["identity"])
+        if cached and cached.get("bucket") == deck_fit.bucket(nonland_count) and (
+                not request_text or cached.get("request_text") == request_text):
+            try:
+                return deck_fit.DeckIdentity(**cached["identity"])
+            except Exception:
+                pass  # malformed/drifted cache entry: treat as a miss
         identity = await deck_fit.infer_identity(payloads, request_text or None)
         if identity:
             conversation.update_context(fit_identity={
                 "bucket": deck_fit.bucket(nonland_count),
+                "request_text": request_text or None,
                 "identity": identity.model_dump(),
             })
         return identity
