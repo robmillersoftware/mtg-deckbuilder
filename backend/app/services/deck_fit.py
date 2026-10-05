@@ -6,10 +6,14 @@ anti-synergy). Code owns ranking, legality, and metagame strength.
 Design: docs/superpowers/specs/2026-10-05-deck-fit-design.md
 """
 
+import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
+from typesafe_sdk import AsyncTypeSafeClient, Noul, Score
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,29 @@ LOW_FIT_CUTOFF = 0.34
 WEIGHTS = {"plan_fit": 0.4, "synergy": 0.3, "meta": 0.3}
 ORACLE_CHAR_LIMIT = 600
 RE_INFER_AT = (6, 15, 30)
+
+REQUEST_TIMEOUT = 2.0
+# ponytail: fixed concurrency cap under Jev's 80 req/s limit; make it adaptive if 429s show up
+MAX_CONCURRENT = 32
+
+KEY_CARD_LEVELS = [
+    "Incidental: could be swapped for a generic card without changing the plan",
+    "Supporting: helps the plan but is replaceable",
+    "Important: one of the main ways the deck executes its plan",
+    "Defines the plan: the deck is built around this card",
+]
+PLAN_FIT_LEVELS = [
+    "Does nothing for this deck's plan",
+    "Incidental help: generically useful, not specific to the plan",
+    "Clearly supports the plan",
+    "A core piece of the plan",
+]
+SYNERGY_LEVELS = [
+    "No interaction with the key cards",
+    "Loose overlap: same general strategy, no direct interaction",
+    "Directly creates, uses, or rewards what one key card does",
+    "Directly creates, uses, or rewards what several key cards do",
+]
 
 
 class IdentityOverrides(BaseModel):
@@ -120,3 +147,147 @@ def flag_low_fit(fit: Dict[str, FitScore], limit: int = 5) -> List[str]:
 def bucket(nonland_count: int) -> int:
     """Which re-inference threshold a deck size has crossed (0-3)."""
     return sum(nonland_count >= t for t in RE_INFER_AT)
+
+
+def _client() -> Optional[AsyncTypeSafeClient]:
+    if not settings.TYPESAFE_API_KEY:
+        return None
+    return AsyncTypeSafeClient(api_key=settings.TYPESAFE_API_KEY, timeout=REQUEST_TIMEOUT)
+
+
+async def infer_identity(
+    cards: List[Dict[str, str]],
+    request_text: Optional[str],
+    overrides: Optional[IdentityOverrides] = None,
+    client=None,
+) -> Optional[DeckIdentity]:
+    """Theme tags (one Noul each) and key cards (one Score per nonland card), in one request."""
+    nonland = [c for c in cards if not is_land(c)]
+    if not nonland and not request_text:
+        return None
+
+    questions: Dict[str, Any] = {
+        f"tag:{tag}": Noul(instructions={
+            "question": "Does the deck described by `deck.request` and `deck.cards` build around this theme?",
+            "theme": definition,
+        })
+        for tag, definition in THEME_TAGS.items()
+    }
+    with_keys = len(nonland) >= RE_INFER_AT[0]
+    if with_keys:
+        for i in range(len(nonland)):
+            questions[f"key:{i}"] = Score(
+                instructions=f"How central is `deck.cards[{i}]` to this deck's plan?",
+                criteria=KEY_CARD_LEVELS,
+            )
+
+    owned = client is None
+    client = client or _client()
+    if client is None:
+        return None
+    try:
+        resp = await client.system_one(
+            {"deck": {"request": request_text or "", "cards": nonland}}, questions)
+    except Exception as e:  # Jev must never break deck building
+        logger.warning(f"Deck identity inference failed: {e}")
+        return None
+    finally:
+        if owned:
+            await client.aclose()
+
+    tags = [t for t in THEME_TAGS if resp.nouls[f"tag:{t}"].noul >= TAG_THRESHOLD]
+    key_cards: List[str] = []
+    if with_keys:
+        n = 5 if len(nonland) < 40 else 8
+        order = sorted(range(len(nonland)), key=lambda i: resp.scores[f"key:{i}"].score, reverse=True)
+        key_cards = [nonland[i]["name"] for i in order[:n]]
+
+    identity = DeckIdentity(tags=tags, key_cards=key_cards, request_text=request_text,
+                            overrides=overrides or IdentityOverrides())
+    return apply_overrides(identity, [c["name"] for c in nonland])
+
+
+async def score_fit(
+    identity: DeckIdentity,
+    key_cards: List[Dict[str, str]],
+    candidates: List[Dict[str, str]],
+    client=None,
+) -> Dict[str, FitScore]:
+    """One concurrent Jev request per unique candidate. Empty dict if any request fails."""
+    unique = {c["name"]: c for c in candidates}
+    if not unique:
+        return {}
+
+    deck = {"themes": identity.tags, "request": identity.request_text or "", "key_cards": key_cards}
+    questions: Dict[str, Any] = {
+        "plan_fit": Score(
+            instructions="How well does `candidate` advance the plan described by `deck.themes` and `deck.request`?",
+            criteria=PLAN_FIT_LEVELS,
+        ),
+        "anti_synergy": Noul(instructions=(
+            "Does `candidate` actively work against the plan in `deck`, for example exiling "
+            "its own graveyard in a graveyard deck or punishing its own token creation?"
+        )),
+    }
+    if key_cards:
+        questions["synergy"] = Score(
+            instructions="Does `candidate`'s oracle text create, use, or reward what `deck.key_cards` do?",
+            criteria=SYNERGY_LEVELS,
+        )
+
+    owned = client is None
+    client = client or _client()
+    if client is None:
+        return {}
+    gate = asyncio.Semaphore(MAX_CONCURRENT)
+
+    async def one(card: Dict[str, str]) -> Tuple[str, FitScore]:
+        async with gate:
+            r = await client.system_one({"deck": deck, "candidate": card}, questions)
+        return card["name"], FitScore(
+            plan_fit=r.scores["plan_fit"].score / 3,
+            synergy=r.scores["synergy"].score / 3 if key_cards else None,
+            anti_synergy=r.nouls["anti_synergy"].noul,
+        )
+
+    try:
+        results = await asyncio.gather(*(one(c) for c in unique.values()))
+    except Exception as e:  # partial fit is worse than none: fall back to existing ordering
+        logger.warning(f"Fit scoring failed, falling back: {e}")
+        return {}
+    finally:
+        if owned:
+            await client.aclose()
+    return dict(results)
+
+
+async def load_payloads(db, names: Sequence[str]) -> List[Dict[str, str]]:
+    from app.services.card_service import CardService
+
+    found = await CardService(db).get_cards_by_names(list(names))
+    seen, payloads = set(), []
+    for card in found.values():  # DFC faces map to the same Card; keep one payload each
+        if card.name not in seen:
+            seen.add(card.name)
+            payloads.append(card_payload(card))
+    return payloads
+
+
+async def review_deck(
+    db,
+    entries: List[Dict[str, Any]],
+    request_text: Optional[str],
+    overrides: Optional[IdentityOverrides] = None,
+    client=None,
+) -> Tuple[Optional[DeckIdentity], Dict[str, FitScore]]:
+    """Infer a deck's identity and score its nonland cards against it."""
+    payloads = await load_payloads(db, [e["card_name"] for e in entries if e.get("card_name")])
+    nonland = [p for p in payloads if not is_land(p)]
+    if not nonland:
+        return None, {}
+    identity = await infer_identity(payloads, request_text, overrides, client=client)
+    if identity is None:
+        return None, {}
+    keys = [p for p in nonland if p["name"] in identity.key_cards]
+    keys.sort(key=lambda p: identity.key_cards.index(p["name"]))
+    return identity, await score_fit(identity, keys, nonland, client=client)

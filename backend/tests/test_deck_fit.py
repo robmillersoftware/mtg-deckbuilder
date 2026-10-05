@@ -92,3 +92,130 @@ class TestFlagLowFit:
 
 def test_bucket():
     assert [deck_fit.bucket(n) for n in (0, 5, 6, 14, 15, 29, 30, 60)] == [0, 0, 1, 1, 2, 2, 3, 3]
+
+
+class FakeClient:
+    """Stands in for AsyncTypeSafeClient. `answer(state, questions)` -> (nouls, scores) dicts of floats."""
+
+    def __init__(self, answer=None, fail_on=None):
+        self.calls = []
+        self.answer = answer or (lambda state, qs: (
+            {k: 0.0 for k, q in qs.items() if type(q).__name__ == "Noul"},
+            {k: 0.0 for k, q in qs.items() if type(q).__name__ == "Score"},
+        ))
+        self.fail_on = fail_on
+
+    async def system_one(self, state, questions):
+        self.calls.append((state, questions))
+        if self.fail_on and self.fail_on(state):
+            from typesafe_sdk import TypeSafeAPITimeoutError
+            raise TypeSafeAPITimeoutError(2.0)
+        nouls, scores = self.answer(state, questions)
+        return SimpleNamespace(
+            nouls={k: SimpleNamespace(noul=v) for k, v in nouls.items()},
+            scores={k: SimpleNamespace(score=v) for k, v in scores.items()},
+        )
+
+
+def card(name, type_line="Creature — Zombie", text=""):
+    return {"name": name, "mana_cost": "{B}", "type_line": type_line, "oracle_text": text}
+
+
+class TestInferIdentity:
+    async def test_no_cards_no_request_returns_none_without_calling(self):
+        client = FakeClient()
+        assert await deck_fit.infer_identity([], None, client=client) is None
+        assert client.calls == []
+
+    async def test_request_only_infers_tags_no_key_cards(self):
+        def answer(state, qs):
+            return ({k: (0.9 if k == "tag:graveyard" else 0.1) for k in qs}, {})
+        ident = await deck_fit.infer_identity([], "self-mill zombies", client=FakeClient(answer))
+        assert ident.tags == ["graveyard"]
+        assert ident.key_cards == []
+        assert ident.request_text == "self-mill zombies"
+
+    async def test_key_cards_top5_by_score_lands_excluded(self):
+        cards = [card(f"C{i}") for i in range(8)] + [card("Swamp", "Basic Land — Swamp")]
+
+        def answer(state, qs):
+            nouls = {k: 0.0 for k in qs if k.startswith("tag:")}
+            scores = {k: float(k.split(":")[1]) for k in qs if k.startswith("key:")}
+            return nouls, scores
+        client = FakeClient(answer)
+        ident = await deck_fit.infer_identity(cards, None, client=client)
+        assert ident.key_cards == ["C7", "C6", "C5", "C4", "C3"]
+        state, _ = client.calls[0]
+        assert all(c["name"] != "Swamp" for c in state["deck"]["cards"])
+
+    async def test_fewer_than_six_nonland_cards_skips_key_questions(self):
+        client = FakeClient()
+        await deck_fit.infer_identity([card(f"C{i}") for i in range(5)], "x", client=client)
+        _, qs = client.calls[0]
+        assert not any(k.startswith("key:") for k in qs)
+
+    async def test_overrides_applied(self):
+        ident = await deck_fit.infer_identity(
+            [card("A")], "x", IdentityOverrides(tags_on=["tokens"]), client=FakeClient())
+        assert ident.tags == ["tokens"]
+
+    async def test_failure_returns_none(self):
+        ident = await deck_fit.infer_identity([card("A")], "x", client=FakeClient(fail_on=lambda s: True))
+        assert ident is None
+
+
+class TestScoreFit:
+    async def test_scores_normalized_and_deduped(self):
+        def answer(state, qs):
+            return {"anti_synergy": 0.2}, {"plan_fit": 3.0, "synergy": 1.5}
+        client = FakeClient(answer)
+        ident = DeckIdentity(tags=["graveyard"], key_cards=["K"])
+        fit = await deck_fit.score_fit(ident, [card("K")], [card("A"), card("A"), card("B")], client=client)
+        assert set(fit) == {"A", "B"}
+        assert len(client.calls) == 2
+        assert fit["A"] == FitScore(plan_fit=1.0, synergy=0.5, anti_synergy=0.2)
+
+    async def test_no_key_cards_skips_synergy(self):
+        client = FakeClient()
+        fit = await deck_fit.score_fit(DeckIdentity(tags=["tokens"]), [], [card("A")], client=client)
+        _, qs = client.calls[0]
+        assert "synergy" not in qs
+        assert fit["A"].synergy is None
+
+    async def test_any_failure_returns_empty(self):
+        client = FakeClient(fail_on=lambda s: s["candidate"]["name"] == "B")
+        fit = await deck_fit.score_fit(DeckIdentity(), [], [card("A"), card("B")], client=client)
+        assert fit == {}
+
+    async def test_no_api_key_returns_empty(self, monkeypatch):
+        monkeypatch.setattr(deck_fit.settings, "TYPESAFE_API_KEY", None)
+        assert await deck_fit.score_fit(DeckIdentity(), [], [card("A")]) == {}
+
+
+class TestReviewDeck:
+    async def test_lands_only_deck_returns_empty(self, monkeypatch):
+        async def fake_load(db, names):
+            return [card("Swamp", "Basic Land — Swamp")]
+        monkeypatch.setattr(deck_fit, "load_payloads", fake_load)
+        identity, fit = await deck_fit.review_deck(None, [{"card_name": "Swamp"}], None, client=FakeClient())
+        assert identity is None and fit == {}
+
+    async def test_scores_nonland_cards_with_key_payloads(self, monkeypatch):
+        cards = [card(f"C{i}") for i in range(6)] + [card("Swamp", "Basic Land — Swamp")]
+
+        async def fake_load(db, names):
+            return cards
+        monkeypatch.setattr(deck_fit, "load_payloads", fake_load)
+
+        def answer(state, qs):
+            nouls = {k: 0.0 for k in qs if k.startswith("tag:") or k == "anti_synergy"}
+            scores = {k: float(k.split(":")[1]) if k.startswith("key:") else 1.0
+                      for k in qs if k.startswith("key:") or k in ("plan_fit", "synergy")}
+            return nouls, scores
+        client = FakeClient(answer)
+        identity, fit = await deck_fit.review_deck(
+            None, [{"card_name": c["name"]} for c in cards], "x", client=client)
+        assert identity.key_cards == ["C5", "C4", "C3", "C2", "C1"]
+        assert set(fit) == {f"C{i}" for i in range(6)}
+        fit_state, _ = client.calls[1]
+        assert [k["name"] for k in fit_state["deck"]["key_cards"]] == ["C5", "C4", "C3", "C2", "C1"]
