@@ -170,3 +170,27 @@ async def test_fit_identity_malformed_cache_reinfers(fitenv):
                                       "identity": {"tags": 5, "bogus": object}})
     ident = await svc._fit_identity(conv, deck(2), "tokens")
     assert st["n"] == 1 and ident is not None
+
+
+async def test_land_candidates_never_scored_or_returned(analyzer, monkeypatch):
+    a, pools = analyzer
+    pools["lists"] = {"r1": ["A", "Swamp", "B"]}
+    orig = a._collect_role_candidates
+
+    async def collect(strategy, colors, roles, existing_cards, format, cards_per_role):
+        got = await orig(strategy, colors, roles, existing_cards, format, cards_per_role)
+        for c in got["r1"]:
+            if c["card_name"] == "Swamp":
+                c["type_line"] = "Basic Land — Swamp"
+        return got
+    a._collect_role_candidates = collect
+    sent = []
+
+    async def score(identity, keys, cands, client=None):
+        sent.extend(c["name"] for c in cands)
+        return {c["name"]: FitScore(plan_fit=0.5, synergy=None, anti_synergy=0.0) for c in cands}
+    monkeypatch.setattr(guided_builder, "score_fit", score)
+    out = await a.suggest_cards_for_strategy("s", [], ["r1"], [], cards_per_role=3,
+                                             identity=DeckIdentity(tags=["x"]))
+    assert "Swamp" not in sent
+    assert [c["card_name"] for c in out["r1"]] == ["A", "B"]

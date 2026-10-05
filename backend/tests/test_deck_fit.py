@@ -310,3 +310,22 @@ def test_deck_fit_response_schema():
 def test_generate_response_has_fit_flagged_default():
     from app.schemas.deck import DeckGenerateResponse
     assert DeckGenerateResponse.model_fields["fit_flagged"].default_factory() == []
+
+
+async def test_deck_fit_route_includes_commander(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    from app.api.routes import decks
+
+    seen = {}
+
+    async def fake_review(db, entries, text, overrides=None, client=None):
+        seen["names"] = [e["card_name"] for e in entries]
+        return None, {}
+    monkeypatch.setattr(deck_fit, "review_deck", fake_review)
+    deck = SimpleNamespace(main_deck=[{"card_name": "A"}], commander="Cmdr", identity=None,
+                           strategy_summary="s", description=None)
+    await decks._deck_fit(MagicMock(commit=AsyncMock()), deck)
+    assert seen["names"] == ["A", "Cmdr"]
+    deck.main_deck.append({"card_name": "Cmdr"})
+    await decks._deck_fit(MagicMock(commit=AsyncMock()), deck)
+    assert seen["names"] == ["A", "Cmdr"]

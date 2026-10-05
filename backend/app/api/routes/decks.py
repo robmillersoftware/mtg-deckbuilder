@@ -175,8 +175,11 @@ async def _owned_deck(db: AsyncSession, deck_id: UUID, user: User) -> Deck:
 
 async def _deck_fit(db: AsyncSession, deck: Deck) -> DeckFitResponse:
     overrides = deck_fit.IdentityOverrides(**(deck.identity or {}).get("overrides", {}))
+    entries = list(deck.main_deck or [])
+    if deck.commander and deck.commander not in {e.get("card_name") for e in entries}:
+        entries.append({"card_name": deck.commander})  # commander is stored apart from main_deck
     identity, fit = await deck_fit.review_deck(
-        db, deck.main_deck, deck.strategy_summary or deck.description, overrides)
+        db, entries, deck.strategy_summary or deck.description, overrides)
     if identity is not None:
         deck.identity = identity.model_dump()
         await db.commit()

@@ -11,7 +11,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from app.services.deck_fit import DeckIdentity, card_payload, load_payloads, rank, score_fit
+from app.services.deck_fit import DeckIdentity, card_payload, is_land, load_payloads, rank, score_fit
 from app.services.card_service import CardService, get_format_view, FORMAT_LEGALITY_MAP
 
 logger = logging.getLogger(__name__)
@@ -497,7 +497,7 @@ class DeckAnalyzer:
             got = await self._collect_role_candidates(
                 strategy, colors, [role], existing_cards, format,
                 cards_per_role * self.FIT_POOL_MULTIPLIER)
-            pool[role] = got.get(role, [])
+            pool[role] = [c for c in got.get(role, []) if not is_land(card_payload(c))]
         candidates = [card_payload(c) for cards in pool.values() for c in cards]
         keys = await load_payloads(self.db, identity.key_cards)
         fit = await score_fit(identity, keys, candidates)

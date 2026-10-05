@@ -137,21 +137,25 @@ class DeckGenerator:
         # Run deck validation
         validation = await self.validator.validate(validated_main, validated_sideboard, format=format)
 
-        # Jev fit check: flag generated cards that don't fit the requested deck (no swaps yet)
-        _, fit = await deck_fit.review_deck(self.db, validated_main, prompt)
-        fit_flagged = deck_fit.flag_low_fit(fit)
-
-        # Generate unique deck name if user is logged in
-        deck_name = deck_data.get("name", "Generated Deck")
-        if user_id:
-            deck_name = await self._get_unique_deck_name(user_id, deck_name)
-
         # Determine commander for cEDH/Commander decks
         commander_name = None
         if format in ["cedh", "commander"] and specific_cards:
             # The first specific card mentioned is typically the commander
             commander_name = specific_cards[0]
             logger.info(f"Setting commander for {format} deck: {commander_name}")
+
+        # Jev fit check: flag generated cards that don't fit the requested deck (no swaps yet).
+        # The commander is stored apart from main_deck but belongs in the deck's identity.
+        fit_entries = list(validated_main)
+        if commander_name and commander_name not in {e.get("card_name") for e in fit_entries}:
+            fit_entries.append({"card_name": commander_name})
+        _, fit = await deck_fit.review_deck(self.db, fit_entries, prompt)
+        fit_flagged = deck_fit.flag_low_fit(fit)
+
+        # Generate unique deck name if user is logged in
+        deck_name = deck_data.get("name", "Generated Deck")
+        if user_id:
+            deck_name = await self._get_unique_deck_name(user_id, deck_name)
 
         # Create deck object (not saved to DB - user must explicitly save)
         deck = Deck(
