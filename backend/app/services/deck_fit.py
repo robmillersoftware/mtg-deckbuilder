@@ -42,6 +42,7 @@ RE_INFER_AT = (6, 15, 30)
 
 REQUEST_TIMEOUT = 2.0
 RETRY_BUDGET = 5.0
+FIT_DEADLINE = 6.0  # overall cap per Jev operation, across all waves and retries
 # ponytail: fixed concurrency cap under Jev's 80 req/s limit; make it adaptive if 429s show up
 MAX_CONCURRENT = 32
 
@@ -201,8 +202,9 @@ async def infer_identity(
     if client is None:
         return None
     try:
-        resp = await client.system_one(
-            {"deck": {"request": request_text or "", "cards": nonland}}, questions)
+        async with asyncio.timeout(FIT_DEADLINE):
+            resp = await client.system_one(
+                {"deck": {"request": request_text or "", "cards": nonland}}, questions)
         tags = [t for t in THEME_TAGS if resp.nouls[f"tag:{t}"].noul >= TAG_THRESHOLD]
         key_cards: List[str] = []
         if with_keys:
@@ -266,9 +268,10 @@ async def score_fit(
         )
 
     try:
-        async with asyncio.TaskGroup() as tg:
-            for card in unique.values():
-                tg.create_task(one(card))
+        async with asyncio.timeout(FIT_DEADLINE):
+            async with asyncio.TaskGroup() as tg:
+                for card in unique.values():
+                    tg.create_task(one(card))
     except Exception as e:  # partial fit is worse than none: fall back to existing ordering
         logger.warning(f"Fit scoring failed, falling back: {e}")
         return {}
@@ -307,4 +310,7 @@ async def review_deck(
         return None, {}
     keys = [p for p in nonland if p["name"] in identity.key_cards]
     keys.sort(key=lambda p: identity.key_cards.index(p["name"]))
-    return identity, await score_fit(identity, keys, nonland, client=client)
+    fit = await score_fit(identity, keys, nonland, client=client)
+    if not fit:  # scoring failed: report unavailable rather than "everything fits"
+        return None, {}
+    return identity, fit

@@ -98,7 +98,9 @@ def test_bucket():
 class FakeClient:
     """Stands in for AsyncTypeSafeClient. `answer(state, questions)` -> (nouls, scores) dicts of floats."""
 
-    def __init__(self, answer=None, fail_on=None):
+    def __init__(self, answer=None, fail_on=None, delay=0.0):
+        self.delay = delay
+        self.closed = False
         self.calls = []
         self.answer = answer or (lambda state, qs: (
             {k: 0.0 for k, q in qs.items() if type(q).__name__ == "Noul"},
@@ -108,6 +110,8 @@ class FakeClient:
 
     async def system_one(self, state, questions):
         self.calls.append((state, questions))
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if self.fail_on and self.fail_on(state):
             from typesafe_sdk import TypeSafeAPITimeoutError
             raise TypeSafeAPITimeoutError(2.0)
@@ -267,6 +271,34 @@ class TestReviewDeck:
         assert set(fit) == {f"C{i}" for i in range(6)}
         fit_state, _ = client.calls[1]
         assert [k["name"] for k in fit_state["deck"]["key_cards"]] == ["C5", "C4", "C3", "C2", "C1"]
+
+
+    async def test_fit_failure_with_identity_returns_unavailable(self, monkeypatch):
+        cards = [card(f"C{i}") for i in range(3)]
+
+        async def fake_load(db, names):
+            return cards
+        monkeypatch.setattr(deck_fit, "load_payloads", fake_load)
+        client = FakeClient(fail_on=lambda s: "candidate" in s)  # identity call ok, fit calls fail
+        identity, fit = await deck_fit.review_deck(
+            None, [{"card_name": c["name"]} for c in cards], "x", client=client)
+        assert identity is None and fit == {}
+
+
+class TestDeadline:
+    async def test_score_fit_times_out_to_empty(self, monkeypatch):
+        monkeypatch.setattr(deck_fit, "FIT_DEADLINE", 0.05)
+        client = FakeClient(delay=5)
+        fit = await asyncio.wait_for(
+            deck_fit.score_fit(DeckIdentity(), [], [card("A")], client=client), 1.0)
+        assert fit == {}
+
+    async def test_infer_identity_times_out_to_none(self, monkeypatch):
+        monkeypatch.setattr(deck_fit, "FIT_DEADLINE", 0.05)
+        client = FakeClient(delay=5)
+        ident = await asyncio.wait_for(
+            deck_fit.infer_identity([card("A")], "x", client=client), 1.0)
+        assert ident is None
 
 
 def test_deck_fit_response_schema():
