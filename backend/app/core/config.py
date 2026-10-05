@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     DATABASE_URL_SYNC: str = "postgresql://spellbook:spellbook@localhost:5432/spellbook"
 
     # Redis
-    REDIS_URL: str = "redis://localhost:6380/0"
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     # JWT
     JWT_SECRET_KEY: str = "your-secret-key-change-in-production"
