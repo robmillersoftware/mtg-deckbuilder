@@ -273,3 +273,8 @@ def test_deck_fit_response_schema():
     from app.schemas.deck import DeckFitResponse
     r = DeckFitResponse(identity=None, cards={}, flagged=[], available_tags=list(deck_fit.THEME_TAGS))
     assert r.model_dump()["available_tags"][0] == "graveyard"
+
+
+def test_generate_response_has_fit_flagged_default():
+    from app.schemas.deck import DeckGenerateResponse
+    assert DeckGenerateResponse.model_fields["fit_flagged"].default_factory() == []

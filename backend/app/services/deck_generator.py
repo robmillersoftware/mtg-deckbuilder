@@ -20,6 +20,7 @@ from app.schemas.deck import (
 )
 from app.services.card_service import CardService
 from app.services.deck_validator import DeckValidator
+from app.services import deck_fit
 from app.services.ai_service import AIService
 from app.core.security import generate_share_token
 
@@ -136,6 +137,10 @@ class DeckGenerator:
         # Run deck validation
         validation = await self.validator.validate(validated_main, validated_sideboard, format=format)
 
+        # Jev fit check: flag generated cards that don't fit the requested deck (no swaps yet)
+        _, fit = await deck_fit.review_deck(self.db, validated_main, prompt)
+        fit_flagged = deck_fit.flag_low_fit(fit)
+
         # Generate unique deck name if user is logged in
         deck_name = deck_data.get("name", "Generated Deck")
         if user_id:
@@ -173,6 +178,7 @@ class DeckGenerator:
                 "card": None,
             }
         conversation.current_deck = {
+            "fit_flagged": fit_flagged,
             "name": deck.name,
             "archetype": deck.archetype,
             "commander": commander_entry,
@@ -237,6 +243,7 @@ class DeckGenerator:
             strategy_summary=deck.strategy_summary or "",
             slot_recommendations=slot_recommendations,
             sideboard_guide=sideboard_guide,
+            fit_flagged=fit_flagged,
         )
 
     async def iterate(

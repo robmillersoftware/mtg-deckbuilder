@@ -187,6 +187,7 @@ class DeckGenerateResponse(BaseModel):
     strategy_summary: str
     slot_recommendations: List[SlotRecommendation]
     sideboard_guide: List[SideboardEntry]
+    fit_flagged: List[str] = Field(default_factory=list)
 
 
 class DeckIterateRequest(BaseModel):

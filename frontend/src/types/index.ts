@@ -75,6 +75,7 @@ export interface Deck {
   archetype?: string;
   commander?: DeckEntry; // For Commander/cEDH formats
   main_deck: DeckEntry[];
+  fit_flagged?: string[];
   sideboard: DeckEntry[];
   strategy_summary?: string;
   card_explanations?: Record<string, string>;
