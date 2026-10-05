@@ -241,3 +241,13 @@ class SideboardMatrixResponse(BaseModel):
     generated_at: datetime
     matchups: List[MatchupSideboardPlan]
     general_sideboard_notes: str
+
+
+from app.services.deck_fit import DeckIdentity, FitScore  # noqa: E402
+
+
+class DeckFitResponse(BaseModel):
+    identity: Optional[DeckIdentity] = None
+    cards: Dict[str, FitScore] = Field(default_factory=dict)
+    flagged: List[str] = Field(default_factory=list)
+    available_tags: List[str] = Field(default_factory=list)

@@ -52,6 +52,7 @@ class Deck(Base):
     strategy_summary = Column(Text, nullable=True)
     card_explanations = Column(JSONB, nullable=True)  # {card_id: explanation}
     matchup_notes = Column(JSONB, nullable=True)  # {archetype: notes}
+    identity = Column(JSONB, nullable=True)  # deck_fit.DeckIdentity: tags, key cards, overrides
 
     # Visibility and sharing
     visibility = Column(String(20), default=DeckVisibility.PRIVATE.value)

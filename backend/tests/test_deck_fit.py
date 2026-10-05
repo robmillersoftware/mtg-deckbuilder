@@ -267,3 +267,9 @@ class TestReviewDeck:
         assert set(fit) == {f"C{i}" for i in range(6)}
         fit_state, _ = client.calls[1]
         assert [k["name"] for k in fit_state["deck"]["key_cards"]] == ["C5", "C4", "C3", "C2", "C1"]
+
+
+def test_deck_fit_response_schema():
+    from app.schemas.deck import DeckFitResponse
+    r = DeckFitResponse(identity=None, cards={}, flagged=[], available_tags=list(deck_fit.THEME_TAGS))
+    assert r.model_dump()["available_tags"][0] == "graveyard"
