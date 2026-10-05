@@ -38,7 +38,7 @@ async def get_bulk_data_url() -> Optional[str]:
 
         for item in data.get("data", []):
             if item.get("type") == "default_cards":
-                return item.get("download_uri")
+                return pick_bulk_download_uri(item)
 
     return None
 
@@ -72,14 +72,23 @@ async def download_bulk_cards(url: str) -> List[Dict[str, Any]]:
         response = await client.get(url)
         response.raise_for_status()
 
-        # The file may be gzipped
-        content = response.content
-        if url.endswith(".gz"):
-            content = gzip.decompress(content)
-
-        cards = json.loads(content)
+        cards = parse_bulk_cards(response.content)
         logger.info(f"Downloaded {len(cards)} cards")
         return cards
+
+
+def pick_bulk_download_uri(item: Dict[str, Any]) -> Optional[str]:
+    """Scryfall dropped `download_uri` (JSON array) for `jsonl_download_uri` (gzipped JSONL)."""
+    return item.get("download_uri") or item.get("jsonl_download_uri")
+
+
+def parse_bulk_cards(content: bytes) -> List[Dict[str, Any]]:
+    """Parse bulk data: gzipped or plain, JSON array or JSON Lines."""
+    if content[:2] == b"\x1f\x8b":  # gzip magic; httpx may already have decoded it
+        content = gzip.decompress(content)
+    if content.lstrip()[:1] == b"[":
+        return json.loads(content)
+    return [json.loads(line) for line in content.splitlines() if line.strip()]
 
 
 def extract_card_data(card: Dict[str, Any], standard_sets: set) -> Optional[Dict[str, Any]]:
