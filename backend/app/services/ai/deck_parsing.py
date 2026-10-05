@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from app.core.config import settings
+from app.services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +21,12 @@ async def parse_deck_request(prompt: str, db: AsyncSession) -> Dict[str, Any]:
     - Specific card requests
     - colors_specified: Whether the user explicitly wanted specific colors for their deck
 
-    Uses Haiku for fast parsing (~0.5s vs 2-3s with Sonnet).
     """
-    if not settings.ANTHROPIC_API_KEY:
+    if not llm.is_configured():
         return await fallback_parse(prompt, db)
 
     try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-        response = client.messages.create(
-            model="claude-3-5-haiku-20241022",
+        content = llm.complete(
             max_tokens=512,
             system="""Parse MTG deck request into JSON:
 {"archetype": "aggro|control|midrange|combo|tempo", "colors": ["W","U","B","R","G"], "colors_specified": true|false, "strategy": "brief description", "specific_cards": ["card names mentioned"]}
@@ -58,11 +52,10 @@ IMPORTANT for colors_specified:
   - "beat mono-red" -> colors_specified: false (red is the opponent, not their deck)
   - "Dimir control" -> colors_specified: true (user wants UB)
   - "aggro deck" -> colors_specified: false (no color preference stated)""",
-            messages=[{"role": "user", "content": prompt}],
+            user=prompt,
         )
 
-        if response.content:
-            content = response.content[0].text
+        if content:
             if "{" in content:
                 json_start = content.index("{")
                 json_end = content.rindex("}") + 1

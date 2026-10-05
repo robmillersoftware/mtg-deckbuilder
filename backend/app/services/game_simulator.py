@@ -16,11 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.core.config import settings
 from app.models.deck import Deck
 from app.models.meta import Decklist, Event
 from app.models.card import Card
 from app.models.simulation import SimulationRun
+from app.services import llm
 from app.services.card_service import CardService
 from app.schemas.simulation import (
     DeckInput,
@@ -602,11 +602,9 @@ class GameSimulator:
     ) -> GameResult:
         """Simulate a single game using the LLM with streaming for live updates."""
 
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             # Return mock result if no API key
             return self._mock_game_result(game_number)
-
-        import anthropic
 
         # Build the game prompt
         prompt = self._build_game_prompt(
@@ -629,35 +627,28 @@ class GameSimulator:
                 flag_modified(sim_run, "current_game_turns")
                 await self.db.commit()
 
-            # Use async client for proper async streaming
-            async_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+            async for text in llm.stream_text(
+                system=GAME_SYSTEM_PROMPT, user=prompt, max_tokens=4096,
+            ):
+                accumulated_text += text
 
-            async with async_client.messages.stream(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
-                system=GAME_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
-            ) as stream:
-                async for text in stream.text_stream:
-                    accumulated_text += text
+                # Try to extract complete turns from the accumulated text
+                raw_turns, turn_count = self._extract_turns_from_partial_json(accumulated_text)
 
-                    # Try to extract complete turns from the accumulated text
-                    raw_turns, turn_count = self._extract_turns_from_partial_json(accumulated_text)
+                # If we found new turns, parse and save them
+                if turn_count > last_parsed_turn_count:
+                    for raw_turn in raw_turns[last_parsed_turn_count:]:
+                        turn_action = self._parse_turn_from_raw(raw_turn, is_multiplayer=False)
+                        live_turns.append(turn_action)
 
-                    # If we found new turns, parse and save them
-                    if turn_count > last_parsed_turn_count:
-                        for raw_turn in raw_turns[last_parsed_turn_count:]:
-                            turn_action = self._parse_turn_from_raw(raw_turn, is_multiplayer=False)
-                            live_turns.append(turn_action)
+                        # Save to database for live updates
+                        if sim_run:
+                            sim_run.current_game_turns = [t.model_dump() for t in live_turns]
+                            sim_run.current_game_turn = turn_action.turn_number
+                            flag_modified(sim_run, "current_game_turns")
+                            await self.db.commit()
 
-                            # Save to database for live updates
-                            if sim_run:
-                                sim_run.current_game_turns = [t.model_dump() for t in live_turns]
-                                sim_run.current_game_turn = turn_action.turn_number
-                                flag_modified(sim_run, "current_game_turns")
-                                await self.db.commit()
-
-                        last_parsed_turn_count = turn_count
+                    last_parsed_turn_count = turn_count
 
             # Parse the complete response
             response_text = accumulated_text
@@ -710,10 +701,8 @@ class GameSimulator:
     ) -> GameResult:
         """Simulate a multiplayer Commander game using the LLM with streaming for live updates."""
 
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             return self._mock_multiplayer_result(game_number, num_players)
-
-        import anthropic
 
         # Build the multiplayer game prompt
         prompt = self._build_multiplayer_prompt(
@@ -735,35 +724,28 @@ class GameSimulator:
                 flag_modified(sim_run, "current_game_turns")
                 await self.db.commit()
 
-            # Use async client for proper async streaming
-            async_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+            async for text in llm.stream_text(
+                system=MULTIPLAYER_SYSTEM_PROMPT, user=prompt, max_tokens=6000,  # Multiplayer games need more tokens
+            ):
+                accumulated_text += text
 
-            async with async_client.messages.stream(
-                model="claude-sonnet-4-20250514",
-                max_tokens=6000,  # Multiplayer games need more tokens
-                system=MULTIPLAYER_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
-            ) as stream:
-                async for text in stream.text_stream:
-                    accumulated_text += text
+                # Try to extract complete turns from the accumulated text
+                raw_turns, turn_count = self._extract_turns_from_partial_json(accumulated_text)
 
-                    # Try to extract complete turns from the accumulated text
-                    raw_turns, turn_count = self._extract_turns_from_partial_json(accumulated_text)
+                # If we found new turns, parse and save them
+                if turn_count > last_parsed_turn_count:
+                    for raw_turn in raw_turns[last_parsed_turn_count:]:
+                        turn_action = self._parse_turn_from_raw(raw_turn, is_multiplayer=True, num_players=num_players)
+                        live_turns.append(turn_action)
 
-                    # If we found new turns, parse and save them
-                    if turn_count > last_parsed_turn_count:
-                        for raw_turn in raw_turns[last_parsed_turn_count:]:
-                            turn_action = self._parse_turn_from_raw(raw_turn, is_multiplayer=True, num_players=num_players)
-                            live_turns.append(turn_action)
+                        # Save to database for live updates
+                        if sim_run:
+                            sim_run.current_game_turns = [t.model_dump() for t in live_turns]
+                            sim_run.current_game_turn = turn_action.turn_number
+                            flag_modified(sim_run, "current_game_turns")
+                            await self.db.commit()
 
-                            # Save to database for live updates
-                            if sim_run:
-                                sim_run.current_game_turns = [t.model_dump() for t in live_turns]
-                                sim_run.current_game_turn = turn_action.turn_number
-                                flag_modified(sim_run, "current_game_turns")
-                                await self.db.commit()
-
-                        last_parsed_turn_count = turn_count
+                    last_parsed_turn_count = turn_count
 
             response_text = accumulated_text
             game_data = self._parse_game_response(response_text)
@@ -1132,16 +1114,13 @@ Return the complete game as JSON."""
     ) -> Dict[str, Any]:
         """Generate strategic analysis and sideboard guide."""
 
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             return {
                 "sideboard_guide": {"in": [], "out": []},
                 "strategic_advice": ["Configure API key for detailed analysis"],
                 "mulligan_advice": "Keep balanced hands with lands and spells.",
                 "deck_recommendations": [],
             }
-
-        import anthropic
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
         # Summarize game results
         game_summaries = []
@@ -1224,13 +1203,7 @@ Priorities: "high", "medium", "low"
 Provide 2-4 specific, actionable recommendations."""
 
         try:
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2048,  # Increased for recommendations
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            response_text = response.content[0].text
+            response_text = llm.complete(system="", user=prompt, max_tokens=2048)
 
             # Parse JSON response
             if "```json" in response_text:

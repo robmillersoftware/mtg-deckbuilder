@@ -4,7 +4,7 @@ AI-powered Magic: The Gathering deck builder for competitive Standard play.
 
 ## Overview
 
-Spellbook is a full-stack application that uses AI to generate tournament-ready Magic: The Gathering decks. It combines real-time metagame data with Claude AI to create optimized decks tailored to the current competitive landscape.
+Spellbook is a full-stack application that uses AI to generate tournament-ready Magic: The Gathering decks. It combines real-time metagame data with an LLM (via OpenRouter) to create optimized decks tailored to the current competitive landscape.
 
 ## Features
 
@@ -42,7 +42,7 @@ Spellbook is a full-stack application that uses AI to generate tournament-ready 
 - **ORM**: SQLAlchemy (async)
 - **Migrations**: Alembic
 - **Job Scheduler**: APScheduler
-- **AI**: Anthropic Claude API
+- **AI**: OpenRouter (OpenAI-compatible; model set by `LLM_MODEL`), TypeSafe Jev for deck-fit judgments
 
 ### Frontend
 - **Framework**: React 18 with TypeScript
@@ -101,7 +101,8 @@ Create `.env` files in both `backend/` and `frontend/` directories:
 ```env
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/spellbook
 SECRET_KEY=your-secret-key
-ANTHROPIC_API_KEY=your-anthropic-key
+OPENROUTER_API_KEY=your-openrouter-key
+LLM_MODEL=deepseek/deepseek-v4-flash
 SENDGRID_API_KEY=your-sendgrid-key
 APP_URL=http://localhost:8000
 ENABLE_SCHEDULER=true
