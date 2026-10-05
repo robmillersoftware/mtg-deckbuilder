@@ -1,5 +1,6 @@
 """Tests for deck_fit: identity overrides, ranking, flagging, and Jev calls (stubbed)."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -199,8 +200,6 @@ class TestScoreFit:
         assert await deck_fit.score_fit(DeckIdentity(), [], [card("A")]) == {}
 
     async def test_cancels_pending_tasks_on_first_failure(self):
-        import asyncio
-
         class CancellationTrackingClient:
             def __init__(self):
                 self.calls = []
@@ -224,6 +223,21 @@ class TestScoreFit:
         )
         assert fit == {}
         assert "B" in client.cancelled  # B was cancelled, not left hanging
+
+    async def test_propagates_caller_cancellation(self):
+        class SlowClient:
+            async def system_one(self, state, questions):
+                # All requests wait forever
+                await asyncio.sleep(float('inf'))
+
+        client = SlowClient()
+        task = asyncio.create_task(
+            deck_fit.score_fit(DeckIdentity(), [], [card("A")], client=client)
+        )
+        await asyncio.sleep(0.01)  # Let task start
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 class TestReviewDeck:

@@ -269,9 +269,8 @@ async def score_fit(
         async with asyncio.TaskGroup() as tg:
             for card in unique.values():
                 tg.create_task(one(card))
-    except BaseException as e:  # partial fit is worse than none: fall back to existing ordering
-        if not isinstance(e, asyncio.CancelledError):
-            logger.warning(f"Fit scoring failed, falling back: {e}")
+    except Exception as e:  # partial fit is worse than none: fall back to existing ordering
+        logger.warning(f"Fit scoring failed, falling back: {e}")
         return {}
     finally:
         if owned:
