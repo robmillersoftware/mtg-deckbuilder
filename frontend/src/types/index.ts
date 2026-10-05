@@ -439,3 +439,24 @@ export interface PaginatedResponse<T> {
   limit: number;
   offset: number;
 }
+
+export interface IdentityOverrides {
+  tags_on: string[];
+  tags_off: string[];
+  pinned: string[];
+  unpinned: string[];
+}
+
+export interface DeckIdentity {
+  tags: string[];
+  key_cards: string[];
+  request_text?: string | null;
+  overrides: IdentityOverrides;
+}
+
+export interface DeckFitResponse {
+  identity: DeckIdentity | null;
+  cards: Record<string, FitScore>;
+  flagged: string[];
+  available_tags: string[];
+}

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { decksApi } from '@/services/api';
-import { Deck } from '@/types';
+import { Deck, DeckFitResponse, IdentityOverrides } from '@/types';
 import { DeckList } from '@/components/DeckList';
+import DeckFitPanel from '@/components/DeckFitPanel';
 import { DeckActions } from '@/components/DeckActions';
 import { useDeckStore } from '@/store/deck';
 import toast from 'react-hot-toast';
@@ -12,6 +13,23 @@ export function DeckViewPage() {
   const navigate = useNavigate();
   const [deck, setDeck] = useState<Deck | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [fit, setFit] = useState<DeckFitResponse | null>(null);
+  const [isCheckingFit, setIsCheckingFit] = useState(false);
+
+  const runFit = async (overrides?: IdentityOverrides) => {
+    if (!deck) return;
+    setIsCheckingFit(true);
+    try {
+      const response = overrides
+        ? await decksApi.updateIdentity(deck.id, overrides)
+        : await decksApi.checkFit(deck.id);
+      setFit(response.data);
+    } catch (error) {
+      console.error('Fit check failed:', error);
+    } finally {
+      setIsCheckingFit(false);
+    }
+  };
   const [isChangingVisibility, setIsChangingVisibility] = useState(false);
   const { setCurrentDeck } = useDeckStore();
 
@@ -141,10 +159,22 @@ export function DeckViewPage() {
           commander={deck.commander}
           format={deck.format}
           title="Deck List"
+          flagged={fit?.flagged}
         />
 
         {/* Stats & Actions */}
         <div className="space-y-4">
+          {fit ? (
+            <DeckFitPanel result={fit} onOverridesChange={runFit} isSaving={isCheckingFit} />
+          ) : (
+            <button
+              onClick={() => runFit()}
+              disabled={isCheckingFit}
+              className="w-full bg-indigo-700 hover:bg-indigo-600 text-white text-sm rounded-lg py-2 disabled:opacity-60"
+            >
+              {isCheckingFit ? 'Checking fit…' : 'Check deck fit'}
+            </button>
+          )}
           {/* Mana Curve (simplified) */}
           <div className="bg-gray-900 rounded-lg p-4">
             <h3 className="text-lg font-semibold text-white mb-4">Statistics</h3>

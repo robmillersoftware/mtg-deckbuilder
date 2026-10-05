@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/store/auth';
+import type { IdentityOverrides } from '@/types';
 
 const API_BASE_URL = '/api';
 
@@ -212,6 +213,11 @@ export const decksApi = {
 
   getSideboardMatrix: (id: string) =>
     api.post(`/decks/${id}/sideboard-matrix`),
+
+  checkFit: (id: string) => api.post(`/decks/${id}/fit`),
+
+  updateIdentity: (id: string, overrides: IdentityOverrides) =>
+    api.patch(`/decks/${id}/identity`, overrides),
 };
 
 // Conversations API
