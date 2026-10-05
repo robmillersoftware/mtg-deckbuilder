@@ -14,6 +14,11 @@ from app.core.config import settings
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
+# Reasoning models (e.g. DeepSeek V4 Flash) otherwise think adaptively on large
+# prompts and can spend the whole max_tokens budget before writing any content.
+# OpenRouter ignores this for models without reasoning.
+NO_REASONING = {"reasoning": {"enabled": False}}
+
 
 def is_configured() -> bool:
     return bool(settings.OPENROUTER_API_KEY)
@@ -33,6 +38,7 @@ def complete(system: str, user: str, max_tokens: int = 4096) -> str:
         model=settings.LLM_MODEL,
         max_tokens=max_tokens,
         messages=_messages(system, [{"role": "user", "content": user}]),
+        extra_body=NO_REASONING,
     )
     return response.choices[0].message.content or ""
 
@@ -46,6 +52,7 @@ async def stream_text(system: str, user: str, max_tokens: int = 4096) -> AsyncIt
             max_tokens=max_tokens,
             messages=_messages(system, [{"role": "user", "content": user}]),
             stream=True,
+            extra_body=NO_REASONING,
         )
         async for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
@@ -83,6 +90,7 @@ def chat_with_tools(
         messages=_messages(system, messages),
         tools=to_openai_tools(tools),
         tool_choice="required" if require_tool else "auto",
+        extra_body=NO_REASONING,
     )
     return parse_tool_reply(response.choices[0].message)
 

@@ -34,3 +34,23 @@ def test_parse_tool_reply_no_calls_and_null_content():
 def test_parse_tool_reply_bad_or_non_object_arguments_become_empty():
     msg = SimpleNamespace(content="", tool_calls=[call("a", "{not json"), call("b", "[1, 2]")])
     assert llm.parse_tool_reply(msg) == ("", [("a", {}), ("b", {})])
+
+
+def test_calls_disable_reasoning(monkeypatch):
+    seen = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen.append(kwargs)
+            msg = SimpleNamespace(content="ok", tool_calls=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+    monkeypatch.setattr(llm, "_client", lambda: SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())))
+    assert llm.complete("sys", "hi") == "ok"
+    assert llm.chat_with_tools("sys", [{"role": "user", "content": "hi"}], []) == ("ok", [])
+    assert all(k["extra_body"] == llm.NO_REASONING for k in seen)
+    assert seen[0]["messages"][0] == {"role": "system", "content": "sys"}
+
+
+def test_empty_system_prompt_is_omitted():
+    assert llm._messages("", [{"role": "user", "content": "hi"}]) == [{"role": "user", "content": "hi"}]
