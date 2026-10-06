@@ -8,7 +8,7 @@ import pytest
 
 from app.models.conversation import Conversation
 from app.services import llm
-from app.services.chat_service import ChatService
+from app.services.chat_service import GROUNDED_ANSWER_SYSTEM, ChatService
 
 SNAPSHOTS = [SimpleNamespace(archetype="Dimir Aggro", meta_percentage=10.9),
              SimpleNamespace(archetype="Mono Green Aggro", meta_percentage=4.6)]
@@ -38,12 +38,16 @@ def conversation(message, deck=None):
 
 
 async def test_analyze_meta_answers_the_question_from_meta_data(chat):
+    chat._archetype_cards = AsyncMock(side_effect=lambda a, f: [f"4.0x {a} Key Card (R Instant): Deal 3."])
     conv = conversation("what is a good card for my deck?")
     resp = await chat._handle_analyze_meta({}, conv)
+    # the top decks' key cards are there to reason from; the canned closing question isn't
+    assert "Dimir Aggro Key Card" in chat.seen["user"] and "Mono Green Aggro Key Card" in chat.seen["user"]
+    assert "What direction interests you" not in chat.seen["user"]
     assert resp.response == "Mono Green Aggro is a fast creature deck; cheap removal and blockers beat it."
     assert "what is a good card for my deck?" in chat.seen["user"]
     assert "**Dimir Aggro** (10.9%)" in chat.seen["user"]
-    assert "only the data" in chat.seen["system"]
+    assert chat.seen["system"] == GROUNDED_ANSWER_SYSTEM
     assert conv.messages[-1]["content"] == resp.response
 
 

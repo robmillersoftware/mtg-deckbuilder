@@ -28,15 +28,17 @@ logger = logging.getLogger(__name__)
 TEXT_ONLY_REPLY = "\n\nFor this turn, reply in text only; no tools are available."
 
 GROUNDED_ANSWER_SYSTEM = (
-    "You are a Magic: The Gathering deckbuilding assistant. Answer the user's message "
-    "conversationally and directly, using only the data given: meta shares and decklist "
-    "cards with their rules text. Don't invent cards, decks, statistics or card abilities; "
-    "describe what cards do only from the rules text shown. The data has no matchup "
-    "results, so don't claim one deck beats another; reason from the cards' rules text. "
-    "If the data doesn't cover the "
-    "question, say what you can from it and suggest a next step, such as naming colors, "
-    "a card or an archetype to build around. Keep it under 200 words; markdown is fine."
+    "You are Spellbook, a Magic: The Gathering deckbuilding partner. Answer the player's "
+    "message directly and commit to a recommendation: name the deck or approach you'd pick "
+    "and why. Don't refuse, hedge or hand back a menu of options. Use only the information "
+    "below: name only cards and decks that appear in it, and describe what a card does only "
+    "from its rules text there. Recommend a deck whose cards are listed, and cite only cards "
+    "from its own list as its cards; cards from other lists are what it plays against. It has no matchup win rates, so argue what beats what from "
+    "what the cards do. Never mention the information itself, data, rules text or where it "
+    "comes from. Write every card name as [[Card Name]] and deck names in bold, never in brackets. End with one concrete offer, such "
+    "as building the deck you recommended. Under 150 words; markdown is fine."
 )
+META_DECKS_WITH_CARDS = 6  # top meta archetypes whose key cards analyze_meta shows the LLM
 OPPONENT_CARDS = 15  # most-played main-deck cards shown for a named opponent archetype
 
 # Tool definitions for Claude - incremental collaborative builder
@@ -407,6 +409,7 @@ RULES:
 - For questions about matchups, strategy, or "how do I beat X" - use get_matchup_info or respond with text advice only.
 - When the user says "what's good" or similar vague exploration, use analyze_meta.
 - Be concise in your text responses. Focus on actionable advice.
+- Write every card name as [[Card Name]].
 - If CARD REFERENCES are provided below, the card has already been identified from the database. Proceed directly with suggest_core using the resolved card.
 - IMPORTANT: When the user asks for "more support", "more help", "more options", or similar continuation requests, continue building on the CURRENT STRATEGY described in the conversation context above. Suggest more cards, offer alternative approaches within the strategy, or advance to the next phase.{card_context}"""
 
@@ -853,7 +856,12 @@ RULES:
             response += "No meta data available yet.\n"
 
         response += "\nWhat direction interests you? Name a card, pick colors, or choose an archetype and I'll start suggesting cards."
-        response = await self._answer_from_data(conversation, response)
+        facts = response.rsplit("\nWhat direction", 1)[0]
+        for snap in snapshots[:META_DECKS_WITH_CARDS]:
+            cards = await self._archetype_cards(snap.archetype, format)
+            if cards:
+                facts += f"\n{snap.archetype}: most-played main-deck cards:\n" + "\n".join(cards) + "\n"
+        response = await self._answer_from_data(conversation, facts, response)
         if ai_text:
             response = ai_text + "\n\n" + response
 
