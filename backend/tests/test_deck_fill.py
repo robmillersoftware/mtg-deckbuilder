@@ -695,10 +695,11 @@ class TestNoFit:
 
 
 class TestBrewNonbasicTarget:
-    async def test_median_of_recent_lists_with_the_same_color_count(self):
+    async def test_lower_quartile_of_recent_lists_with_the_same_color_count(self):
         db = MagicMock()
-        db.execute = AsyncMock(return_value=MagicMock(all=lambda: [(5,), (6,), (3,), (12,), (4,)]))
-        assert await df.brew_nonbasic_target(db, ["R"], "standard") == 5
+        counts = [(c,) for c in (5, 6, 3, 12, 4, 11, 12, 10)]  # sorted: 3 4 5 6 10 11 12 12
+        db.execute = AsyncMock(return_value=MagicMock(all=lambda: counts))
+        assert await df.brew_nonbasic_target(db, ["R"], "standard") == 5  # median would be 10
         stmt, params = db.execute.call_args[0]
         assert params == {"format": "standard", "n_colors": 1}
 

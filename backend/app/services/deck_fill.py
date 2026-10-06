@@ -372,11 +372,13 @@ BREW_NONBASICS_SQL = text(f"""
 
 
 async def brew_nonbasic_target(db: AsyncSession, colors: Sequence[str], format: str) -> int:
-    """Median nonbasic land count of recent decklists with as many colors as the deck
-    (mono-colored lists run 3-12 utility lands, not 0); the fixed rule without data."""
+    """Lower quartile of the nonbasic land counts of recent decklists with as many
+    colors as the deck; the fixed rule without data. Mono-colored lists run 3-12
+    nonbasics, but the high end is land-heavy strategies (green landfall), which a
+    median would hand to every mono brew."""
     rows = (await db.execute(BREW_NONBASICS_SQL, {"format": format, "n_colors": len(colors)})).all()
     counts = sorted(r[0] for r in rows)
-    return counts[len(counts) // 2] if counts else brew_nonbasics(colors)
+    return counts[len(counts) // 4] if counts else brew_nonbasics(colors)
 
 
 def _nonbasic_lands(build: Build) -> int:

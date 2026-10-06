@@ -90,6 +90,8 @@ Each card carries its play count, meaning the number of distinct decklists it ap
 - **Question:** "Which card best fills this slot?" plus the slot description.
 - **Options:** card name → `"{mana_cost} {type_line}. {oracle_text[:200]} [Played in N recent {format} tournament decklists]"`. Names are unique because the pool groups by name; a double-faced card uses its full name.
 
+The options also include "none of these fit". Cards Jev ranks below it are not taken, and the unfilled count moves to other slots like any shortfall. The last-resort catch-all slot and the sideboard don't offer it, so the deck still reaches 60 + 15. (Without it, a brew slot like red "card draw" was filled with Candy Trail, since a Choice always picks something.)
+
 Code then walks the cards by descending probability:
 
 - It takes each card's copies until the slot's count is reached.
@@ -100,7 +102,7 @@ If the pool runs out, the remaining count moves to the next slot with the same r
 
 ### 5. Lands
 
-- **Nonbasic count:** the reference lists' average nonbasic count. For brews it is 0 for mono-color, 4 for two colors and 6 for three or more.
+- **Nonbasic count:** the reference lists' average nonbasic count. For brews it is the lower quartile of the nonbasic counts of recent decklists with the same number of colors (6 for mono-color on 2026-10-06; a median let land-heavy green landfall lists set every mono brew to 11). Without data, the fixed rule applies: 0 for mono-color, 4 for two colors, 6 for three or more.
 - **Pool:** lands played in the last 14 days whose `color_identity` ⊆ deck colors. That covers on-color duals and colorless utility lands (identity `{}`). Any off-color symbol excludes a land. The pool is ordered by play count.
 - **Fetchland guard:** a land whose oracle text searches for a land with basic land types must name at least one of the deck colors' basic types (W Plains, U Island, B Swamp, R Mountain, G Forest) to enter the land pool. Lands that search only for a generic "basic land" stay allowed.
 - **Pick:** Jev picks with the same `Choice` mechanism. The slot description is "a land for this deck's mana: fixing for its colors, or utility".
