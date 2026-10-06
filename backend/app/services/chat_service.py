@@ -497,16 +497,18 @@ RULES:
             .scalar_subquery()
         )
         try:
-            result = await self.db.execute(
-                select(MetaSnapshot.archetype)
-                .where(MetaSnapshot.format == format, MetaSnapshot.snapshot_date == latest)
-                .order_by(MetaSnapshot.meta_percentage.desc().nulls_last())
-                .limit(30)
-            )
-            return list(dict.fromkeys(result.scalars().all()))[:10]
+            # SAVEPOINT: a failure undoes only this query, not the turn's pending work
+            async with self.db.begin_nested():
+                result = await self.db.execute(
+                    select(MetaSnapshot.archetype)
+                    .where(MetaSnapshot.format == format, MetaSnapshot.snapshot_date == latest)
+                    .order_by(MetaSnapshot.meta_percentage.desc().nulls_last())
+                    .limit(30)
+                )
+                names = result.scalars().all()
+            return list(dict.fromkeys(names))[:10]
         except Exception as e:  # meta is optional context; never abort the turn
             logger.warning(f"Meta archetype lookup failed, routing without it: {e}")
-            await self.db.rollback()
             return []
 
     def _build_conversation_context(self, conversation: Conversation) -> str:
