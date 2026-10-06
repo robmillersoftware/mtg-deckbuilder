@@ -484,16 +484,30 @@ RULES:
         return "", [(action, routed.inputs[action])]
 
     async def _meta_archetypes(self, format: str) -> List[str]:
-        """Up to 10 unique current meta archetype names, most-played first."""
+        """Up to 10 unique archetype names from the format's latest snapshot, most-played
+        first. [] when Jev is not configured (nothing to route) or the query fails."""
+        from app.core.config import settings
         from app.models.meta import MetaSnapshot
 
-        result = await self.db.execute(
-            select(MetaSnapshot.archetype)
+        if not settings.TYPESAFE_API_KEY:
+            return []
+        latest = (
+            select(sqlfunc.max(MetaSnapshot.snapshot_date))
             .where(MetaSnapshot.format == format)
-            .order_by(MetaSnapshot.meta_percentage.desc().nulls_last())
-            .limit(30)
+            .scalar_subquery()
         )
-        return list(dict.fromkeys(result.scalars().all()))[:10]
+        try:
+            result = await self.db.execute(
+                select(MetaSnapshot.archetype)
+                .where(MetaSnapshot.format == format, MetaSnapshot.snapshot_date == latest)
+                .order_by(MetaSnapshot.meta_percentage.desc().nulls_last())
+                .limit(30)
+            )
+            return list(dict.fromkeys(result.scalars().all()))[:10]
+        except Exception as e:  # meta is optional context; never abort the turn
+            logger.warning(f"Meta archetype lookup failed, routing without it: {e}")
+            await self.db.rollback()
+            return []
 
     def _build_conversation_context(self, conversation: Conversation) -> str:
         """Build a structured context string from persisted conversation state.

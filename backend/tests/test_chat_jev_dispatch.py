@@ -121,3 +121,37 @@ async def test_empty_text_reply_falls_through_to_llm_tool_call(chat, monkeypatch
     chat.route = routed("reply")
     await chat.process_message("What does trample do?")
     assert chat.llm_calls == ["tools"]
+
+
+async def test_meta_query_filters_latest_snapshot_of_format(chat, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "TYPESAFE_API_KEY", "k")
+    captured = []
+
+    async def execute(stmt):
+        captured.append(str(stmt.compile(compile_kwargs={"literal_binds": True})))
+        return MagicMock(scalars=lambda: MagicMock(all=lambda: ["A", "B", "A"]))
+    chat.db.execute = execute
+    assert await ChatService._meta_archetypes(chat, "modern") == ["A", "B"]
+    sql = captured[0]
+    assert "max(meta_snapshots.snapshot_date)" in sql and "'modern'" in sql
+    assert "meta_snapshots.snapshot_date =" in sql
+
+
+async def test_meta_query_skipped_without_jev_key(chat):
+    chat.db.execute = AsyncMock(side_effect=AssertionError("queried"))
+    assert await ChatService._meta_archetypes(chat, "modern") == []
+
+
+async def test_meta_query_error_rolls_back_and_turn_uses_llm(chat, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "TYPESAFE_API_KEY", "k")
+    chat.db.execute = AsyncMock(side_effect=RuntimeError("db down"))
+    chat.db.rollback = AsyncMock()
+    assert await ChatService._meta_archetypes(chat, "modern") == []
+    chat.db.rollback.assert_awaited_once()
+    # full turn: real _meta_archetypes + real _route_with_jev, route unavailable
+    chat._meta_archetypes = ChatService._meta_archetypes.__get__(chat)
+    chat.route = None
+    await chat.process_message("hello")
+    assert chat.llm_calls == ["tools"]
