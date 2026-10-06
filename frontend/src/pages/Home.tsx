@@ -106,7 +106,7 @@ export function HomePage() {
 
       {/* Left Sidebar - History (desktop only) */}
       <div className="w-64 flex-shrink-0 hidden lg:block">
-        <ConversationList />
+        {isAuthenticated && <ConversationList />}
       </div>
 
       {/* Main Chat Area - visible on desktop, or mobile when chat tab selected */}

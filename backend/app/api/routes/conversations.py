@@ -51,21 +51,16 @@ async def list_conversations(
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
     conversation_id: UUID,
-    current_user: User = Depends(get_current_user_required),
+    current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a specific conversation by ID."""
-    result = await db.execute(
-        select(Conversation).where(
-            and_(
-                Conversation.id == conversation_id,
-                Conversation.user_id == current_user.id,
-            )
-        )
-    )
+    """Get a conversation by ID: the caller's own, or an anonymous one (its id is
+    the only key, as for chat)."""
+    result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
     conversation = result.scalar_one_or_none()
+    owner = current_user.id if current_user else None
 
-    if conversation is None:
+    if conversation is None or conversation.user_id not in (None, owner):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",

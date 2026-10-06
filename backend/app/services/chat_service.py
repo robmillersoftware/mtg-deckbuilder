@@ -1425,8 +1425,11 @@ RULES:
                 select(Conversation).where(Conversation.id == conversation_id)
             )
             conversation = result.scalar_one_or_none()
-            if conversation:
+            if conversation and conversation.user_id in (None, user_id):
+                if conversation.user_id is None and user_id:
+                    conversation.user_id = user_id  # signing in keeps an anonymous chat
                 return conversation
+            # someone else's conversation: start a new one rather than continue it
 
         conversation = Conversation(user_id=user_id, messages=[])
         self.db.add(conversation)
