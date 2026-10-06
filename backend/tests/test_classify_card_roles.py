@@ -70,3 +70,23 @@ async def test_save_stores_noul_as_confidence_and_no_reasoning():
     assert params["confidence"] == 0.83
     assert params["efficiency"] == 5
     assert params["reasoning"] is None
+
+
+async def test_skipped_batch_is_reported_in_stats(monkeypatch):
+    class Session:
+        async def __aenter__(self):
+            return MagicMock(execute=AsyncMock(return_value=MagicMock(scalar=lambda: 2)))
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def pending(db, limit):
+        return [card("A"), card("B")]
+
+    async def none(cards):
+        return []
+    monkeypatch.setattr(job, "async_session_factory", Session)
+    monkeypatch.setattr(job, "get_unclassified_cards", pending)
+    monkeypatch.setattr(job, "classify_cards_batch", none)
+    stats = await job.classify_all_cards()
+    assert stats["errors"] == ["batch 1: skipped (2 cards)"]

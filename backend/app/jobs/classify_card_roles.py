@@ -265,6 +265,7 @@ async def classify_all_cards() -> Dict[str, Any]:
                     logger.info(f"Batch {stats['batches']}: Saved {saved} roles")
                 else:
                     logger.warning(f"Batch {stats['batches']}: No classifications returned")
+                    stats["errors"].append(f"batch {stats['batches']}: skipped ({len(cards)} cards)")
 
                 stats["cards_processed"] += len(cards)
 
