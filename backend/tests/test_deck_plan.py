@@ -37,6 +37,8 @@ class TestHelpers:
             "4/5c control", "boros aggro"]
         assert dp.archetype_keys([]) == []
         assert dp.archetype_keys(["", "  ", "Boros Aggro"]) == ["boros aggro"]  # blanks match nothing
+        # SQL trim() strips spaces only, so other whitespace must stay part of the key
+        assert dp.archetype_keys(["Boros Aggro\t"]) == ["boros aggro\t"]
 
     def test_largest_remainder_hits_the_total(self):
         assert dp.largest_remainder([1.5, 1.5, 1.0], 4) == [2, 1, 1]
@@ -263,6 +265,9 @@ class TestRelativeCandidates:
         assert "NOT LIKE '%Land%'" in sql  # spells only
 
     async def test_no_colors_no_candidates(self):
+        # 1.4 + 2.8 + 3.8 sums to 7.999999999999999 in floats: still exactly 8
+        rows = [cand("Mono Red", 3, n, q) for n, q in (("A", 1.4), ("B", 2.8), ("C", 3.8))]
+        assert [a for a, _, _ in await dp.relative_candidates(fake_db(rows), ["R"], "standard")] == ["Mono Red"]
         db = fake_db(CANDIDATE_ROWS)
         assert await dp.relative_candidates(db, [], "standard") == []
         db.execute.assert_not_called()

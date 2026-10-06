@@ -62,7 +62,7 @@ class Plan:
 def archetype_keys(names: Sequence[str]) -> List[str]:
     """Archetype names as the SQL compares them (lower case, trimmed), deduplicated:
     bind as :archetypes against lower(trim(d.archetype))."""
-    return sorted({n.strip().lower() for n in names if n.strip()})
+    return sorted({n.strip(" ").lower() for n in names if n.strip()})
 
 
 def band_of(cmc: float) -> Tuple[int, int]:
@@ -307,7 +307,7 @@ async def relative_candidates(db: AsyncSession, colors: Sequence[str],
         a["on_color"] += r.avg_copies if r.on_color else 0.0
         a["cards"].append((r.name, round(r.avg_copies, 1)))
     return [(name, a["lists"], a["cards"][:TOP_CARDS]) for name, a in found.items()
-            if a["on_color"] >= MIN_ON_COLOR_SPELLS]
+            if a["on_color"] >= MIN_ON_COLOR_SPELLS - 1e-9]  # float sums of averages
 
 
 async def choose_relatives(client, request_text: str, colors: Sequence[str],
