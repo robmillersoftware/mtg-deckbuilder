@@ -48,6 +48,11 @@ MTG_KEYWORDS = {
 }
 
 
+def front_cost(mana_cost: Optional[str]) -> str:
+    """Front-face cost of a possibly 'front // back' mana cost (what you pay to cast)."""
+    return (mana_cost or "").split(" // ")[0]
+
+
 def _extract_mtg_keywords(role: str) -> List[str]:
     """Extract recognized MTG keywords from a role string.
 
@@ -150,7 +155,7 @@ class DeckAnalyzer:
             type_line = (card_data.get("type_line") or "").lower()
             if "land" in type_line:
                 continue
-            mana_cost = card_data.get("mana_cost", "")
+            mana_cost = front_cost(card_data.get("mana_cost"))
             cmc = self._estimate_cmc(mana_cost)
             bucket = min(cmc, 6)
             curve[bucket] = curve.get(bucket, 0) + entry.get("quantity", 0)
@@ -159,7 +164,7 @@ class DeckAnalyzer:
         colors_used: Dict[str, int] = {}
         for entry in main_deck:
             card_data = entry.get("card", {}) or {}
-            mana_cost = card_data.get("mana_cost", "") or ""
+            mana_cost = front_cost(card_data.get("mana_cost"))
             qty = entry.get("quantity", 0)
             for color in ["W", "U", "B", "R", "G"]:
                 pips = mana_cost.count(f"{{{color}}}")
@@ -694,7 +699,7 @@ class DeckAnalyzer:
                 continue
             qty = entry.get("quantity", 0)
             nonland_count += qty
-            mana_cost = card_data.get("mana_cost", "") or ""
+            mana_cost = front_cost(card_data.get("mana_cost"))
             for color in ["W", "U", "B", "R", "G"]:
                 pips = mana_cost.count(f"{{{color}}}")
                 if pips > 0:
@@ -764,6 +769,7 @@ class DeckAnalyzer:
 
     def _estimate_cmc(self, mana_cost: str) -> int:
         """Estimate CMC from mana cost string like {2}{U}{U}."""
+        mana_cost = front_cost(mana_cost)
         if not mana_cost:
             return 0
         cmc = 0
