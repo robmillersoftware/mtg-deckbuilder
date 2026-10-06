@@ -3,10 +3,10 @@
 import asyncio
 import logging
 import re
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import func, or_, select
 from typesafe_sdk import Choice, Noul
 
 from app.services import jev
@@ -188,56 +188,77 @@ MAX_PROMPT_WORDS = 40  # a pasted decklist must not fan out into hundreds of que
 MAX_CARD_NAMES = 10
 
 
-async def extract_card_names_from_prompt(
-    prompt: str, db: AsyncSession, format: str = "standard"
-) -> List[str]:
-    """Extract card names mentioned in the prompt by checking against database."""
-    from app.models.card import Card
-
-    specific_cards = []
+def _candidate_phrases(prompt: str) -> List[str]:
+    """Lowercased 1-4 word phrases from the first MAX_PROMPT_WORDS words, in order, deduped."""
     words = prompt.split()[:MAX_PROMPT_WORDS]
-    potential_names = []
-
-    # Try to find multi-word card names
+    phrases: List[str] = []
     for i in range(len(words)):
-        # Single word
+        # Single words only when capitalized or a well-known planeswalker name
         if words[i][0:1].isupper() or words[i].lower() in [
             "tezzeret", "jace", "liliana", "chandra", "nissa",
             "garruk", "ajani", "nicol", "bolas", "atraxa"
         ]:
-            potential_names.append(words[i].strip(",.!?"))
-        # Two words
-        if i < len(words) - 1:
-            two_word = f"{words[i]} {words[i+1]}".strip(",.!?")
-            potential_names.append(two_word)
-        # Three words
-        if i < len(words) - 2:
-            three_word = f"{words[i]} {words[i+1]} {words[i+2]}".strip(",.!?")
-            potential_names.append(three_word)
-        # Four words (for cards like "Atraxa, Grand Unifier")
-        if i < len(words) - 3:
-            four_word = f"{words[i]} {words[i+1]} {words[i+2]} {words[i+3]}".strip(",.!?")
-            potential_names.append(four_word)
+            phrases.append(words[i].strip(",.!?"))
+        for n in (2, 3, 4):  # e.g. "Atraxa, Grand Unifier"
+            if i + n <= len(words):
+                phrases.append(" ".join(words[i:i + n]).strip(",.!?"))
+    seen: Dict[str, None] = {}
+    for ph in phrases:
+        if len(ph) >= 3:
+            seen.setdefault(ph.lower(), None)
+    return list(seen)
 
-    # Check each potential name against the database
+
+async def extract_card_names_from_prompt(
+    prompt: str, db: AsyncSession, format: str = "standard"
+) -> List[str]:
+    """Card names mentioned in the prompt, checked against the database in one query.
+
+    A phrase matches a card only as its whole name, the part before a comma
+    ("Atraxa" -> "Atraxa, Grand Unifier") or a double-faced card's front face.
+    Substring matches are not accepted: "Build" must not become "Builder's Talent".
+    """
+    from app.models.card import Card
     from app.services.card_service import get_format_legality_condition
 
-    for name in potential_names:
+    phrases = _candidate_phrases(prompt)
+    if not phrases:
+        return []
+
+    lname = func.lower(Card.name)
+    head = func.split_part(lname, ", ", 1)
+    front = func.split_part(lname, " // ", 1)
+    query = (
+        select(Card.name, lname, head, front)
+        .where(or_(lname.in_(phrases), head.in_(phrases), front.in_(phrases)))
+        .where(get_format_legality_condition(format))
+        .distinct()
+    )
+    rows = (await db.execute(query)).all()
+
+    # phrase -> candidate names, exact whole-name matches first
+    by_phrase: Dict[str, List[Tuple[bool, str]]] = {}
+    for name, full, before_comma, front_face in rows:
+        for key in {full, before_comma, front_face}:
+            by_phrase.setdefault(key, []).append((key != full, name))
+
+    # A phrase inside a longer matched phrase is not its own mention:
+    # "Lightning Strike" matched, so "Lightning" must not add "Lightning, Army of One".
+    matched = [p for p in phrases if p in by_phrase]
+    standalone = [
+        p for p in matched
+        if not any(q != p and f" {p} " in f" {q} " for q in matched)
+    ]
+
+    specific_cards: List[str] = []
+    for phrase in standalone:
+        for _, name in sorted(by_phrase[phrase]):
+            if name not in specific_cards:
+                specific_cards.append(name)
+                logger.info(f"Extracted card name from prompt: {name}")
+                break
         if len(specific_cards) >= MAX_CARD_NAMES:
             break
-        if len(name) < 3:
-            continue
-        query = select(Card.name).where(
-            func.lower(Card.name).like(f"%{name.lower()}%"),
-            get_format_legality_condition(format)
-        )
-        query = query.limit(1)
-        result = await db.execute(query)
-        card = result.scalar_one_or_none()
-        if card and card not in specific_cards:
-            specific_cards.append(card)
-            logger.info(f"Extracted card name from prompt: {card}")
-
     return specific_cards
 
 

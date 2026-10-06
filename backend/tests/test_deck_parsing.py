@@ -71,15 +71,18 @@ async def test_no_key_falls_back_without_lookup(names, monkeypatch):
 
 
 class CountingDb:
-    """Mock db: every execute() counts; `match` decides whether a lookup finds a card."""
+    """Fake session for extract_card_names_from_prompt: every phrase matches a card of the same name."""
 
     def __init__(self, match):
-        self.match, self.calls = match, 0
+        self.match, self.calls, self.queries = match, 0, []
 
     async def execute(self, query):
         self.calls += 1
-        n, hit = self.calls, self.match
-        return type("R", (), {"scalar_one_or_none": lambda self: f"Card {n}" if hit else None})()
+        self.queries.append(query)
+        params = query.compile().params
+        phrases = next(v for v in params.values() if isinstance(v, list))
+        rows = [(p.title(), p, p, p) for p in phrases] if self.match else []
+        return type("R", (), {"all": lambda self: rows})()
 
 
 LONG_PROMPT = " ".join(f"Word{i}" for i in range(200))
@@ -95,11 +98,11 @@ async def test_long_prompt_bounds_queries_and_names(monkeypatch):
     state, qs, _ = client.calls[0]
     assert len(state["cards"]) == deck_parsing.MAX_CARD_NAMES == 10
     assert len([q for q in qs if q.startswith("wants:")]) == 10
-    assert db.calls <= 4 * deck_parsing.MAX_PROMPT_WORDS
+    assert db.calls == 1  # one query for all phrases
 
-    db = CountingDb(match=False)  # no matches: still bounded by the word cap
+    db = CountingDb(match=False)
     await deck_parsing.parse_deck_request(LONG_PROMPT, db=db, client=FakeJev())
-    assert db.calls <= 4 * deck_parsing.MAX_PROMPT_WORDS
+    assert db.calls == 1
 
 
 async def test_failure_looks_up_names_once(monkeypatch):
@@ -123,3 +126,59 @@ async def test_guild_name_adds_its_colors_only_when_wanted(names):
     answers = {"color:R": 0.2, "color:W": 0.1, "colors_specified": 0.9}
     out = await deck_parsing.parse_deck_request("how do I beat Boros?", db=None, client=client)
     assert out["colors"] == [] and out["colors_specified"] is False
+
+
+class RowsDb:
+    """Returns fixed (name, lower(name), before-comma, front-face) rows."""
+
+    def __init__(self, rows):
+        self.rows, self.queries = rows, []
+
+    async def execute(self, query):
+        self.queries.append(query)
+        rows = self.rows
+        return type("R", (), {"all": lambda _: rows})()
+
+
+def _row(name):
+    low = name.lower()
+    return (name, low, low.split(", ")[0], low.split(" // ")[0])
+
+
+async def test_name_lookup_never_uses_substring_matching():
+    db = RowsDb([])
+    await deck_parsing.extract_card_names_from_prompt("Build me a mono-red aggro deck for Standard", db)
+    sql = str(db.queries[0].compile(compile_kwargs={"literal_binds": True})).lower()
+    assert " like " not in sql
+    assert "split_part" in sql
+
+
+async def test_name_lookup_matches_whole_name_comma_head_and_front_face():
+    rows = [_row("Atraxa, Grand Unifier"), _row("Fable of the Mirror-Breaker // Reflection of Kiki-Jiki"),
+            _row("Lightning Bolt")]
+    db = RowsDb(rows)
+    names = await deck_parsing.extract_card_names_from_prompt(
+        "Deck around Atraxa with Lightning Bolt and Fable of the Mirror-Breaker", db)
+    assert names == ["Atraxa, Grand Unifier", "Lightning Bolt",
+                     "Fable of the Mirror-Breaker // Reflection of Kiki-Jiki"]
+
+
+async def test_exact_name_preferred_over_comma_head():
+    rows = [_row("Chandra, Flameshaper"), _row("Chandra")]
+    names = await deck_parsing.extract_card_names_from_prompt("Play Chandra", RowsDb(rows))
+    assert names == ["Chandra"]
+
+
+def test_candidate_phrases_lowercased_deduped_and_capped():
+    phrases = deck_parsing._candidate_phrases("Lightning Bolt, Lightning Bolt! " + " ".join(["x"] * 100))
+    assert phrases[0] == "lightning"
+    assert "lightning bolt" in phrases
+    assert len(phrases) == len(set(phrases))
+    assert all(p == p.lower() for p in phrases)
+
+
+async def test_word_inside_a_matched_longer_name_is_not_a_separate_card():
+    rows = [_row("Lightning Strike"), _row("Lightning, Army of One"), _row("Shock")]
+    names = await deck_parsing.extract_card_names_from_prompt(
+        "Red deck with Lightning Strike and Shock", RowsDb(rows))
+    assert names == ["Lightning Strike", "Shock"]
