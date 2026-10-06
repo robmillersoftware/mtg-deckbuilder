@@ -11,9 +11,9 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
-from typesafe_sdk import AsyncTypeSafeClient, Noul, RetryPolicy, Score
+from typesafe_sdk import Noul, Score
 
-from app.core.config import settings
+from app.services.jev import FIT_DEADLINE, ask, ask_many, session
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +39,6 @@ LOW_FIT_CUTOFF = 0.34
 WEIGHTS = {"plan_fit": 0.4, "synergy": 0.3, "meta": 0.3}
 ORACLE_CHAR_LIMIT = 600
 RE_INFER_AT = (6, 15, 30)
-
-REQUEST_TIMEOUT = 2.0
-RETRY_BUDGET = 5.0
-FIT_DEADLINE = 6.0  # overall cap per Jev operation, across all waves and retries
-# ponytail: fixed concurrency cap under Jev's 80 req/s limit; make it adaptive if 429s show up
-MAX_CONCURRENT = 32
 
 KEY_CARD_LEVELS = [
     "Incidental: could be swapped for a generic card without changing the plan",
@@ -151,26 +145,6 @@ def bucket(nonland_count: int) -> int:
     return sum(nonland_count >= t for t in RE_INFER_AT)
 
 
-def _client() -> Optional[AsyncTypeSafeClient]:
-    if not settings.TYPESAFE_API_KEY:
-        return None
-    return AsyncTypeSafeClient(
-        api_key=settings.TYPESAFE_API_KEY,
-        timeout=REQUEST_TIMEOUT,
-        retry=RetryPolicy(api_timeout_error=False, timeout=RETRY_BUDGET),
-    )
-
-
-async def _close(client: Optional[AsyncTypeSafeClient]) -> None:
-    """Safely close a client, logging and swallowing any errors."""
-    if client is None:
-        return
-    try:
-        await client.aclose()
-    except Exception as e:
-        logger.warning(f"Failed to close Jev client: {e}")
-
-
 async def infer_identity(
     cards: List[Dict[str, str]],
     request_text: Optional[str],
@@ -197,30 +171,27 @@ async def infer_identity(
                 criteria=KEY_CARD_LEVELS,
             )
 
-    owned = client is None
-    client = client or _client()
-    if client is None:
-        return None
-    try:
-        async with asyncio.timeout(FIT_DEADLINE):
-            resp = await client.system_one(
-                {"deck": {"request": request_text or "", "cards": nonland}}, questions)
-        tags = [t for t in THEME_TAGS if resp.nouls[f"tag:{t}"].noul >= TAG_THRESHOLD]
-        key_cards: List[str] = []
-        if with_keys:
-            n = 5 if len(nonland) < 40 else 8
-            order = sorted(range(len(nonland)), key=lambda i: resp.scores[f"key:{i}"].score, reverse=True)
-            key_cards = [nonland[i]["name"] for i in order[:n]]
+    async with session(client) as client:
+        if client is None:
+            return None
+        try:
+            async with asyncio.timeout(FIT_DEADLINE):
+                resp = await ask(
+                    client, {"deck": {"request": request_text or "", "cards": nonland}}, questions)
+            tags = [t for t in THEME_TAGS if resp.nouls[f"tag:{t}"].noul >= TAG_THRESHOLD]
+            key_cards: List[str] = []
+            if with_keys:
+                n = 5 if len(nonland) < 40 else 8
+                order = sorted(range(len(nonland)),
+                               key=lambda i: resp.scores[f"key:{i}"].score, reverse=True)
+                key_cards = [nonland[i]["name"] for i in order[:n]]
 
-        identity = DeckIdentity(tags=tags, key_cards=key_cards, request_text=request_text,
-                                overrides=overrides or IdentityOverrides())
-        return apply_overrides(identity, [c["name"] for c in nonland])
-    except Exception as e:  # Jev must never break deck building
-        logger.warning(f"Deck identity inference failed: {e}")
-        return None
-    finally:
-        if owned:
-            await _close(client)
+            identity = DeckIdentity(tags=tags, key_cards=key_cards, request_text=request_text,
+                                    overrides=overrides or IdentityOverrides())
+            return apply_overrides(identity, [c["name"] for c in nonland])
+        except Exception as e:  # Jev must never break deck building
+            logger.warning(f"Deck identity inference failed: {e}")
+            return None
 
 
 async def score_fit(
@@ -251,34 +222,24 @@ async def score_fit(
             criteria=SYNERGY_LEVELS,
         )
 
-    owned = client is None
-    client = client or _client()
-    if client is None:
-        return {}
-    gate = asyncio.Semaphore(MAX_CONCURRENT)
-    results = {}
-
-    async def one(card: Dict[str, str]) -> None:
-        async with gate:
-            r = await client.system_one({"deck": deck, "candidate": card}, questions)
-        results[card["name"]] = FitScore(
-            plan_fit=r.scores["plan_fit"].score / 3,
-            synergy=r.scores["synergy"].score / 3 if key_cards else None,
-            anti_synergy=r.nouls["anti_synergy"].noul,
-        )
-
-    try:
-        async with asyncio.timeout(FIT_DEADLINE):
-            async with asyncio.TaskGroup() as tg:
-                for card in unique.values():
-                    tg.create_task(one(card))
-    except Exception as e:  # partial fit is worse than none: fall back to existing ordering
-        logger.warning(f"Fit scoring failed, falling back: {e}")
-        return {}
-    finally:
-        if owned:
-            await _close(client)
-    return results
+    async with session(client) as client:
+        if client is None:
+            return {}
+        cards = list(unique.values())
+        try:
+            responses = await ask_many(
+                client, [({"deck": deck, "candidate": c}, questions) for c in cards], FIT_DEADLINE)
+            return {
+                c["name"]: FitScore(
+                    plan_fit=r.scores["plan_fit"].score / 3,
+                    synergy=r.scores["synergy"].score / 3 if key_cards else None,
+                    anti_synergy=r.nouls["anti_synergy"].noul,
+                )
+                for c, r in zip(cards, responses)
+            }
+        except Exception as e:  # partial fit is worse than none: fall back to existing ordering
+            logger.warning(f"Fit scoring failed, falling back: {e}")
+            return {}
 
 
 async def load_payloads(db, names: Sequence[str]) -> List[Dict[str, str]]:

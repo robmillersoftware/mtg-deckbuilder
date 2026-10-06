@@ -199,8 +199,8 @@ class TestScoreFit:
         fit = await deck_fit.score_fit(DeckIdentity(), [], [card("A"), card("B")], client=client)
         assert fit == {}
 
-    async def test_no_api_key_returns_empty(self, monkeypatch):
-        monkeypatch.setattr(deck_fit.settings, "TYPESAFE_API_KEY", None)
+    async def test_no_api_key_returns_empty(self):
+        # conftest blanks TYPESAFE_API_KEY, so no client can be built
         assert await deck_fit.score_fit(DeckIdentity(), [], [card("A")]) == {}
 
     async def test_cancels_pending_tasks_on_first_failure(self):
