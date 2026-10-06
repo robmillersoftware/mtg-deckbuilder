@@ -7,14 +7,16 @@ Design: docs/superpowers/specs/2026-10-06-jev-deck-assembly-design.md
 """
 
 import logging
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+import re
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typesafe_sdk import Choice
 
 from app.services.card_service import FORMAT_LEGALITY_MAP
-from app.services.deck_plan import MAX_OPTIONS, RECENT, Slot, choose
+from app.services.deck_plan import MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, choose, is_land, largest_remainder
+from app.services.guided_builder import front_cost
 
 logger = logging.getLogger(__name__)
 
@@ -161,3 +163,158 @@ async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, 
             build.add(name, q, rows[name])
         short -= sum(q for _, q in picks)
     return short
+
+
+BASICS = {"W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest"}
+BREW_NONBASICS = {1: 0, 2: 4}  # by deck color count; 3+ colors: 6
+LAND_SLOT = "a land for this deck's mana: fixing for its colors, or utility"
+LAND_SEARCH = re.compile(r"search your library for ([^.]*)", re.IGNORECASE)
+
+
+def fetches_for_colors(oracle_text: Optional[str], colors: Sequence[str]) -> bool:
+    """False for a fetchland whose searches name basic land types (Plains, Island,
+    Swamp, Mountain, Forest) but none of the deck colors' types. A generic
+    "basic land card" search, or no search, is fine."""
+    wanted = {BASICS[c] for c in colors}
+    for match in LAND_SEARCH.finditer(oracle_text or ""):
+        types = {t for t in BASICS.values() if t in match.group(1)}
+        if types and not types & wanted:
+            return False
+    return True
+
+
+async def land_pool(db: AsyncSession, colors: List[str], format: str, chosen: Sequence[str]) -> List[Any]:
+    """Played, legal nonbasic lands whose color identity fits the deck (colorless
+    included), most played first. Fetchlands have identity {}, so those that only
+    find other colors' basic types are dropped here."""
+    sql = text(f"""
+        WITH {_plays_cte()}
+        SELECT c.name, MAX(c.mana_cost) AS mana_cost, MAX(c.type_line) AS type_line,
+               MAX(c.oracle_text) AS oracle_text, MAX(c.cmc) AS cmc, MAX(p.plays) AS plays,
+               MAX(c.color_identity) AS color_identity
+        FROM cards c JOIN played p ON p.k = lower(split_part(c.name, ' // ', 1))
+        WHERE c.legalities->>:legality = 'legal'
+          AND split_part(coalesce(c.type_line, ''), ' // ', 1) LIKE '%Land%'
+          AND c.type_line NOT LIKE 'Basic%'
+          AND coalesce(c.color_identity, '{{}}') <@ CAST(:colors AS varchar[])
+          AND NOT (c.name = ANY(CAST(:chosen AS varchar[])))
+        GROUP BY c.name
+        ORDER BY plays DESC, c.name
+        LIMIT {MAX_OPTIONS}
+    """)
+    params = {"format": format, "legality": FORMAT_LEGALITY_MAP[format], "colors": list(colors),
+              "chosen": list(chosen)}
+    rows = (await db.execute(sql, params)).all()
+    return [r for r in rows if fetches_for_colors(r.oracle_text, colors)]
+
+
+REQUESTED_SQL = text(f"""
+    SELECT c.name, c.mana_cost, c.type_line, c.oracle_text, c.cmc, c.color_identity,
+           {CARD_COLORS} AS colors,
+           ARRAY(SELECT DISTINCT r.role FROM card_roles r JOIN cards c2 ON c2.id = r.card_id
+                 WHERE c2.name = c.name) AS roles
+    FROM cards c
+    WHERE (lower(c.name) = lower(:name) OR lower(split_part(c.name, ' // ', 1)) = lower(:name))
+      AND c.legalities->>:legality = 'legal'
+    ORDER BY c.name
+    LIMIT 1
+""")
+
+
+def _fits(slot: Slot, row: Any) -> bool:
+    role_ok = (slot.role in (row.roles or [])
+               or (slot.role == "creature" and "Creature" in (row.type_line or ""))
+               or (slot.role == "noncreature" and "Creature" not in (row.type_line or "")))
+    return role_ok and slot.cmc_min <= (row.cmc or 0) <= slot.cmc_max
+
+
+def _shrink_largest(slots: List[Slot], n: int) -> None:
+    while n > 0 and any(s.copies for s in slots):
+        largest = max(slots, key=lambda s: s.copies)
+        cut = min(n, largest.copies)
+        largest.copies -= cut
+        n -= cut
+
+
+async def reserve_requested(db: AsyncSession, names: Sequence[str], plan: Plan, format: str,
+                            build: Build) -> List[str]:
+    """Put each requested card in `build` (4 copies, 1 if Legendary) and take its
+    space out of the plan: a land from the land counts, a spell from the first
+    slot it fits (any excess from the largest slot). Returns the requested
+    cards' colors. Unknown or format-illegal names are skipped."""
+    colors: set = set()
+    for name in names:
+        row = (await db.execute(REQUESTED_SQL, {"name": name, "legality": FORMAT_LEGALITY_MAP[format]})).first()
+        if row is None:
+            logger.warning(f"[ASSEMBLY] Requested card not found or not legal in {format}: {name}")
+            continue
+        if row.name in build.copies:
+            continue
+        qty = 1 if "Legendary" in (row.type_line or "") else MAX_COPIES
+        build.add(row.name, qty, row)
+        colors.update(row.colors or [])
+        if is_land(row.type_line):
+            plan.lands = max(0, plan.lands - qty)
+            continue
+        slot = next((s for s in plan.slots if s.copies and _fits(s, row)), None)
+        excess = qty
+        if slot is not None:
+            excess = max(0, qty - slot.copies)
+            slot.copies = max(0, slot.copies - qty)
+        _shrink_largest(plan.slots, excess)
+    return [c for c in WUBRG if c in colors]
+
+
+def pips(rows: Sequence[Any]) -> Dict[str, int]:
+    """Colored mana symbols across the cards' mana costs (hybrid counts both
+    colors). A card without a mana cost (DFCs store it per face) counts each
+    color of its identity once."""
+    out = {c: 0 for c in WUBRG}
+    for r in rows:
+        symbols = re.findall(r"\{([^}]*)\}", front_cost(r.mana_cost))
+        letters = [ch for s in symbols for ch in s if ch in WUBRG] if symbols else [
+            ch for ch in (r.color_identity or "") if ch in WUBRG]
+        for ch in letters:
+            out[ch] += 1
+    return out
+
+
+def split_basics(counts: Dict[str, int], colors: Sequence[str], n: int) -> Dict[str, int]:
+    """n basics split by pip share, at least 1 per deck color when n allows."""
+    colors = [c for c in WUBRG if c in colors]
+    if n <= 0 or not colors:
+        return {}
+    weights = [counts.get(c, 0) or 0 for c in colors]
+    if not any(weights):
+        weights = [1] * len(colors)
+    floor = 1 if n >= len(colors) else 0
+    extra = largest_remainder(weights, n - floor * len(colors))
+    return {BASICS[c]: floor + e for c, e in zip(colors, extra) if floor + e > 0}
+
+
+def brew_nonbasics(colors: Sequence[str]) -> int:
+    return BREW_NONBASICS.get(len(colors), 6)
+
+
+def _nonbasic_lands(build: Build) -> int:
+    return sum(q for n, q in build.copies.items() if n in build.rows
+               and is_land(build.rows[n].type_line) and not (build.rows[n].type_line or "").startswith("Basic"))
+
+
+async def fill_lands(db: AsyncSession, client, build: Build, plan: Plan, colors: List[str], format: str,
+                     state: Callable[[], Dict[str, Any]], copies_for: Callable[[str, int], int]) -> None:
+    """Add plan.lands lands (requested lands already took their share): nonbasics
+    by Jev pick up to the nonbasic count, then basics split by the spells' pips."""
+    target = plan.nonbasic_lands if plan.nonbasic_lands is not None else brew_nonbasics(colors)
+    need = max(0, min(target - _nonbasic_lands(build), plan.lands))
+    picked = 0
+    if need:
+        pool = await land_pool(db, colors, format, list(build.copies))
+        rows = {r.name: r for r in pool}
+        for name, q in await fill_slot(client, Slot("land", 0, 99, need, LAND_SLOT), pool, state(),
+                                       format, copies_for):
+            build.add(name, q, rows[name])
+            picked += q
+    spells = [r for r in build.rows.values() if not is_land(r.type_line)]
+    for name, q in split_basics(pips(spells), colors, plan.lands - picked).items():
+        build.add(name, q)
