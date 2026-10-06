@@ -224,6 +224,32 @@ EVOLVING_WILDS = ("{T}, Sacrifice this land: Search your library for a basic lan
                   "put it onto the battlefield tapped, then shuffle.")
 
 
+class TestReserveOverflow:
+    async def reserve(self, rows, p):
+        build = df.Build()
+        await df.reserve_requested(requested_db(*rows), [r.name for r in rows], p, "standard", build)
+        return build, None
+
+    async def test_requested_creatures_spill_into_lands(self):
+        rows = [card(f"Req {i}", "Creature", 2, roles=["threat_cheap"]) for i in range(10)]
+        p = plan(Slot("threat_cheap", 2, 2, 18), Slot("burn", 0, 1, 20), lands=22)
+        build, _ = await self.reserve(rows, p)
+        assert build.total() + sum(s.copies for s in p.slots) + p.lands == 60 and build.total() == 40
+
+    async def test_requested_lands_spill_into_slots(self):
+        rows = [card(f"Land {i}", "Land", 0, "", identity="R") for i in range(7)]
+        p = plan(Slot("burn", 0, 1, 38), lands=22)
+        build, _ = await self.reserve(rows, p)
+        assert build.total() + sum(s.copies for s in p.slots) + p.lands == 60
+
+    async def test_requests_alone_over_60_cut_the_last_requested(self):
+        rows = [card(f"Req {i}", "Creature", 2, roles=["threat_cheap"]) for i in range(17)]
+        p = plan(Slot("threat_cheap", 2, 2, 38), lands=22)
+        build, _ = await self.reserve(rows, p)
+        assert build.total() == 60 and set(build.copies) == {r.name for r in rows}
+        assert build.copies["Req 0"] == 4 and build.copies["Req 16"] == 1
+
+
 class TestFits:
     def test_type_contains_or_role_and_cmc_band(self):
         slot = Slot("burn", 0, 2, 4, "x", type_contains="Saga")
@@ -394,6 +420,11 @@ class TestSideboardPool:
 
 
 class TestFillSideboard:
+    async def test_a_short_sideboard_raises(self, monkeypatch):
+        monkeypatch.setattr(df, "sideboard_pool", fake_side_pool({None: [side_card("Side 0", 4)]}))
+        with pytest.raises(ValueError):
+            await df.fill_sideboard(None, FakeJev(), df.Build(), df.Build(), ["R"], "standard", dict, None)
+
     async def test_reference_cards_then_format_top_up_to_exactly_15(self, monkeypatch):
         pool = fake_side_pool({
             "Boros Aggro": [side_card("Rest in Peace", 2, "W"), side_card("Abrade", 3), side_card("Duress", 2, "B")],
@@ -495,6 +526,21 @@ class TestAssemble:
         await df.assemble(None, "Build the best deck", [], [], "standard", False, "", client=jev)
         assert jev.calls[-1][0]["deck"]["colors"] == ["W", "R"]
 
+    async def test_many_requested_cards_still_make_exactly_60(self, monkeypatch):
+        wire(monkeypatch)
+        monkeypatch.setattr(df, "plan_with_llm", AsyncMock(return_value=Plan(
+            slots=[Slot("threat_cheap", 2, 2, 18, "Bears"), Slot("burn", 0, 1, 20, "Burn")], lands=22)))
+        reqs = [card(f"Req {i}", "Creature", 2, roles=["threat_cheap"]) for i in range(10)] + [
+            card(f"Req Land {i}", "Land", 0, "", identity="R", mana_cost=None) for i in range(7)]
+        res = [MagicMock(first=MagicMock(return_value=r)) for r in reqs]
+        db = MagicMock(execute=AsyncMock(side_effect=res))
+        jev = FakeJev(answer=lambda state, q: {"pick": {"choice": "none", "confidence": 0.9, "probabilities": {}}}
+                      if "none" in q["pick"].criteria else {})
+        deck = await df.assemble(db, "x", ["R"], [r.name for r in reqs], "standard", True, "", client=jev)
+        main = {e["card_name"]: e["quantity"] for e in deck["main_deck"]}
+        assert total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15
+        assert {r.name for r in reqs} <= set(main)
+
     async def test_not_sixty_card_format(self):
         with pytest.raises(ValueError):
             await df.assemble(None, "x", ["B"], [], "cedh", False, client=FakeJev())
@@ -516,5 +562,6 @@ class TestAssemble:
 
     async def test_jev_failure_propagates(self, monkeypatch):
         wire(monkeypatch, reference_plan())
-        with pytest.raises(Exception):
+        with pytest.raises(ExceptionGroup) as err:  # jev.ask_many runs its asks in a TaskGroup
             await df.assemble(None, "x", ["R"], [], "standard", client=FakeJev(fail=lambda s: True))
+        assert err.group_contains(RuntimeError, match="jev unavailable")

@@ -250,6 +250,7 @@ async def reserve_requested(db: AsyncSession, names: Sequence[str], plan: Plan, 
     slot it fits (any excess from the largest slot). Returns the requested
     cards' colors. Unknown or format-illegal names are skipped."""
     colors: set = set()
+    requested: List[str] = []
     for name in names:
         row = (await db.execute(REQUESTED_SQL, {"name": name, "legality": FORMAT_LEGALITY_MAP[format]})).first()
         if row is None:
@@ -259,16 +260,26 @@ async def reserve_requested(db: AsyncSession, names: Sequence[str], plan: Plan, 
             continue
         qty = 1 if "Legendary" in (row.type_line or "") else MAX_COPIES
         build.add(row.name, qty, row)
+        requested.append(row.name)
         colors.update(row.colors or [])
         if is_land(row.type_line):
+            left = max(0, qty - plan.lands)
             plan.lands = max(0, plan.lands - qty)
+            _shrink_largest(plan.slots, left)  # more requested lands than land slots: spells give way
             continue
         slot = next((s for s in plan.slots if s.copies and _fits(s, row)), None)
         excess = qty
         if slot is not None:
             excess = max(0, qty - slot.copies)
             slot.copies = max(0, slot.copies - qty)
+        before = sum(s.copies for s in plan.slots)
         _shrink_largest(plan.slots, excess)
+        left = excess - (before - sum(s.copies for s in plan.slots))
+        plan.lands = max(0, plan.lands - left)  # no spell slots left: lands give way
+    # Requests alone over 60: cut copies toward 1, last requested first.
+    for name in reversed(requested):
+        cut = min(max(0, build.total() - 60), build.copies[name] - 1)
+        build.copies[name] -= cut
     return [c for c in WUBRG if c in colors]
 
 
@@ -388,6 +399,8 @@ async def fill_sideboard(db: AsyncSession, client, main: Build, side: Build, col
                                 lambda name, rank: rows[name].copies, SIDEBOARD_QUESTION)
         for name, q in picks:
             side.add(name, q, rows[name])
+    if side.total() < SIDEBOARD_SIZE:
+        raise ValueError(f"Only {side.total()} sideboard cards played recently in {format}")
 
 
 async def summarize(main: Build, side: Build, request_text: str, reference: Optional[str],
