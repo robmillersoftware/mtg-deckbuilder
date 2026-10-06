@@ -1452,8 +1452,9 @@ RULES:
         format = getattr(self, "_current_format", "standard")
         format_display = "cEDH" if format == "cedh" else format.capitalize()
 
-        # If no colors specified, try to pick from meta
-        if not colors:
+        # With neither colors nor a requested card, pick the top meta deck's colors; a
+        # requested card brings its own colors (the generator adds them)
+        if not colors and not specific_cards:
             from app.models.meta import MetaSnapshot
             result = await self.db.execute(
                 select(MetaSnapshot)
@@ -1467,7 +1468,7 @@ RULES:
                 if not strategy:
                     strategy = top.archetype
 
-        if not colors:
+        if not colors and not specific_cards:
             colors = ["R", "G"]
 
         prompt = full_deck_prompt(colors, archetype, strategy, specific_cards)

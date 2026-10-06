@@ -629,6 +629,22 @@ class TestAssemble:
         assert total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15
         assert {r.name for r in reqs} <= set(main)
 
+    async def test_without_colors_a_requested_card_sets_them_before_planning(self, monkeypatch):
+        # "build around Weapons Manufacturing": no colors stated, so the red card decides them
+        wire(monkeypatch, candidates=[("Boros Aggro", 5, [("Bear 1", 4.0)])])
+        monkeypatch.setattr(df, "plan_with_llm", AsyncMock(return_value=Plan(
+            slots=[Slot("threat_cheap", 2, 2, 18, "Bears"), Slot("burn", 0, 1, 20, "Burn")], lands=22)))
+        req = card("Weapons Manufacturing", "Enchantment", 2, "R", mana_cost="{1}{R}")
+        db = MagicMock(execute=AsyncMock(return_value=MagicMock(first=MagicMock(return_value=req))))
+        jev = FakeJev(answer=lambda state, q: {"relative": 0.3} if "relative" in q else (
+            {"pick": {"choice": "none", "confidence": 0.9, "probabilities": {}}}
+            if "none" in q["pick"].criteria else {}))
+        deck = await df.assemble(db, "around Weapons Manufacturing", None, ["Weapons Manufacturing"],
+                                 "standard", True, "", client=jev)
+        df.relative_candidates.assert_awaited_once_with(db, ["R"], "standard")
+        df.plan_with_llm.assert_awaited_once_with("around Weapons Manufacturing", ["R"], "")
+        assert deck["colors"] == ["R"]
+
     async def test_brew_with_relatives_is_planned_and_filled_from_them(self, monkeypatch):
         candidates = [("Boros Aggro", 5, [("Bear 1", 4.0)]), ("Rakdos Aggro", 4, [("Bolt 0", 4.0)])]
         pool, side_pool = wire(monkeypatch, candidates=candidates)

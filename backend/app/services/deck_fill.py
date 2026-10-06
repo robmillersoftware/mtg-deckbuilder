@@ -273,6 +273,16 @@ def _shrink_largest(slots: List[Slot], n: int) -> None:
         n -= cut
 
 
+async def colors_of_requested(db: AsyncSession, names: Sequence[str], format: str) -> List[str]:
+    """The colors of the requested cards that exist and are legal in `format`."""
+    colors: set = set()
+    for name in names:
+        row = (await db.execute(REQUESTED_SQL, {"name": name, "legality": FORMAT_LEGALITY_MAP[format]})).first()
+        if row is not None:
+            colors.update(row.colors or [])
+    return [c for c in WUBRG if c in colors]
+
+
 async def reserve_requested(db: AsyncSession, names: Sequence[str], plan: Plan, format: str,
                             build: Build) -> List[str]:
     """Put each requested card in `build` (4 copies, 1 if Legendary) and take its
@@ -554,6 +564,8 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
         archetypes = await recent_archetypes(db, format)
         if not archetypes:
             raise ValueError(f"No recent {format} decklists")
+        if not colors and specific_cards:  # no colors asked for: the requested cards' colors
+            colors = await colors_of_requested(db, specific_cards, format) or None
         reference = await choose_reference(client, request_text, colors or [], archetypes, format)
         plan = await plan_from_decklists(db, [reference], format) if reference else None
         scope = [reference] if plan else []  # archetypes whose cards fill the deck first

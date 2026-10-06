@@ -36,3 +36,17 @@ async def test_generate_handler_carries_fit_flagged():
     conv = SimpleNamespace(id=cid)
     resp = await s._handle_generate_full_deck({"colors": ["R"]}, conv, None)
     assert resp.deck["fit_flagged"] == ["Bad Card"]
+
+
+async def test_requested_card_without_colors_does_not_borrow_the_top_decks_colors():
+    # "build around Weapons Manufacturing" once got the top deck's U/B plus the card's R
+    cid = uuid4()
+    result = SimpleNamespace(deck=_deck(), conversation_id=cid, strategy_summary="s", fit_flagged=[])
+    s = _service(generate=AsyncMock(return_value=result))
+    s.db.execute = AsyncMock()
+    conv = SimpleNamespace(id=cid)
+    await s._handle_generate_full_deck({"colors": [], "specific_cards": ["Weapons Manufacturing"]}, conv, None)
+    kwargs = s.deck_generator.generate.await_args.kwargs
+    assert kwargs["colors"] is None  # the generator takes colors from the requested card
+    assert kwargs["specific_cards"] == ["Weapons Manufacturing"]
+    s.db.execute.assert_not_awaited()
