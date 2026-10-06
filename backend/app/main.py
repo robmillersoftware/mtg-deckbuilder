@@ -26,6 +26,7 @@ from app.jobs.scheduler import configure_scheduler, start_scheduler, shutdown_sc
 UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(os.path.join(UPLOADS_DIR, "avatars"), exist_ok=True)
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
