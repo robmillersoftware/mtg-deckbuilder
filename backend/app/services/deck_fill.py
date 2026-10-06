@@ -39,14 +39,16 @@ SLOT_QUESTION = ("Which card best fills this slot in the deck described by `deck
 CARD_COLORS = "coalesce(nullif(c.colors, '{}'), c.color_identity, '{}')"
 
 
-def _plays_cte() -> str:
-    """Main-deck plays per card (front face, lower case) in the window."""
+def _plays_cte(archetype: Optional[str] = None) -> str:
+    """Main-deck plays per card (front face, lower case) in the window, within
+    one archetype's lists when `archetype` is given (bind :archetype)."""
+    scope = "AND lower(trim(d.archetype)) = lower(trim(:archetype))" if archetype else ""
     return f"""
         played AS (
             SELECT lower(split_part(x->>'card_name', ' // ', 1)) AS k, COUNT(DISTINCT d.id) AS plays
             FROM decklists d JOIN events e ON e.id = d.event_id
             CROSS JOIN LATERAL jsonb_array_elements(d.main_deck) AS x
-            WHERE {RECENT}
+            WHERE {RECENT} {scope}
             GROUP BY 1
         )"""
 
@@ -66,11 +68,11 @@ def _role_sql(slot: Slot) -> str:
 
 
 async def slot_pool(db: AsyncSession, slot: Slot, colors: List[str], format: str,
-                    chosen: Sequence[str]) -> List[Any]:
+                    chosen: Sequence[str], archetype: Optional[str] = None) -> List[Any]:
     """Played, legal, on-color nonland cards that fit the slot, most played first
-    (at most MAX_OPTIONS). Rows: name, mana_cost, type_line, oracle_text, cmc, plays."""
+    (at most MAX_OPTIONS); plays are counted within `archetype`'s lists when given. Rows: name, mana_cost, type_line, oracle_text, cmc, plays."""
     sql = text(f"""
-        WITH {_plays_cte()}
+        WITH {_plays_cte(archetype)}
         SELECT c.name, MAX(c.mana_cost) AS mana_cost, MAX(c.type_line) AS type_line,
                MAX(c.oracle_text) AS oracle_text, MAX(c.cmc) AS cmc, MAX(p.plays) AS plays,
                MAX(c.color_identity) AS color_identity
@@ -88,6 +90,8 @@ async def slot_pool(db: AsyncSession, slot: Slot, colors: List[str], format: str
     params = {"format": format, "legality": FORMAT_LEGALITY_MAP[format], "colors": list(colors),
               "cmc_min": slot.cmc_min, "cmc_max": slot.cmc_max, "chosen": list(chosen),
               "role": slot.role, "type_contains": slot.type_contains}
+    if archetype:
+        params["archetype"] = archetype
     return list((await db.execute(sql, params)).all())
 
 
@@ -141,35 +145,45 @@ class Build:
         return [{"card_name": n, "quantity": q} for n, q in self.copies.items() if q > 0]
 
 
+async def _fill_one(db: AsyncSession, client, slot: Slot, build: Build, colors: List[str], format: str,
+                    state: Callable[[], Dict[str, Any]], copies_for: Callable[[str, int], int],
+                    reference: Optional[str]) -> int:
+    """Fill one slot: from the reference archetype's cards first, then (for the
+    shortfall) from the whole format. Returns copies still unfilled."""
+    short = slot.copies
+    for archetype in ([reference] if reference else []) + [None]:
+        if short <= 0:
+            break
+        part = Slot(**{**vars(slot), "copies": short})
+        pool = await slot_pool(db, part, colors, format, list(build.copies), archetype)
+        rows = {r.name: r for r in pool}
+        for name, q in await fill_slot(client, part, pool, state(), format, copies_for):
+            build.add(name, q, rows[name])
+            short -= q
+    return short
+
+
 async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, colors: List[str],
                      format: str, state: Callable[[], Dict[str, Any]],
-                     copies_for: Callable[[str, int], int]) -> int:
-    """Fill `slots` into `build`, largest remaining slot first. A slot's shortfall
-    moves to a remaining slot with the same role, else the largest remaining slot;
-    a final shortfall gets one catch-all slot. Returns copies still unfilled."""
+                     copies_for: Callable[[str, int], int], reference: Optional[str] = None) -> int:
+    """Fill `slots` into `build`, largest remaining slot first, each from the
+    reference archetype's played cards first (when `reference`), then the
+    format's. A slot's shortfall moves to a remaining slot with the same role,
+    else the largest remaining slot; a final shortfall gets one catch-all slot.
+    Returns copies still unfilled."""
     todo = [Slot(**vars(s)) for s in slots if s.copies > 0]  # copies: the plan stays intact
     short = 0
     while todo:
         slot = max(todo, key=lambda s: s.copies)
         todo.remove(slot)
-        pool = await slot_pool(db, slot, colors, format, list(build.copies))
-        rows = {r.name: r for r in pool}
-        picks = await fill_slot(client, slot, pool, state(), format, copies_for)
-        for name, q in picks:
-            build.add(name, q, rows[name])
-        short = slot.copies - sum(q for _, q in picks)
+        short = await _fill_one(db, client, slot, build, colors, format, state, copies_for, reference)
         if short and todo:
             target = next((s for s in todo if s.role == slot.role), None) or max(todo, key=lambda s: s.copies)
             target.copies += short
             short = 0
     if short:
-        catch_all = Slot("any", 0, 99, short, ANY_SLOT)
-        pool = await slot_pool(db, catch_all, colors, format, list(build.copies))
-        rows = {r.name: r for r in pool}
-        picks = await fill_slot(client, catch_all, pool, state(), format, copies_for)
-        for name, q in picks:
-            build.add(name, q, rows[name])
-        short -= sum(q for _, q in picks)
+        short = await _fill_one(db, client, Slot("any", 0, 99, short, ANY_SLOT), build, colors, format, state,
+                                copies_for, reference)
     return short
 
 
@@ -471,7 +485,8 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
         def main_copies(name: str, rank: int) -> int:
             return plan.copies.get(name) or brew_copies(name, rank)
 
-        short = await fill_slots(db, client, plan.slots, main, deck_colors, format, state, main_copies)
+        short = await fill_slots(db, client, plan.slots, main, deck_colors, format, state, main_copies,
+                                 reference)
         plan.lands += short  # a pool too thin to fill the spells: basics keep the deck at 60
         await fill_lands(db, client, main, plan, deck_colors, format, state, main_copies)
         if include_sideboard:

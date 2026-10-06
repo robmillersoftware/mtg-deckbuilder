@@ -57,6 +57,17 @@ class TestSlotPool:
         assert "NOT (c.name = ANY(CAST(:chosen AS varchar[])))" in sql
         assert "ORDER BY plays DESC, c.name" in sql and "LIMIT 255" in sql
 
+    async def test_archetype_scope_is_bound(self):
+        db = fake_db()
+        await df.slot_pool(db, Slot("burn", 0, 1, 8, "Burn"), ["R"], "standard", [], "Boros Aggro")
+        stmt, params = db.execute.call_args[0]
+        assert "AND lower(trim(d.archetype)) = lower(trim(:archetype))" in str(stmt)
+        assert params["archetype"] == "Boros Aggro"
+        db = fake_db()
+        await df.slot_pool(db, Slot("burn", 0, 1, 8, "Burn"), ["R"], "standard", [])
+        assert "archetype" not in str(db.execute.call_args[0][0])
+        assert "archetype" not in db.execute.call_args[0][1]
+
     async def test_type_roles_and_type_contains(self):
         db = fake_db()
         await df.slot_pool(db, Slot("creature", 2, 2, 4, "x", "Equipment"), ["R"], "modern", [])
@@ -123,16 +134,19 @@ CARDS = [
 ]
 
 
-def fake_pool(cards):
-    calls = []
+def fake_pool(cards, ref_names=()):
+    """Pool over `cards`; with an archetype only `ref_names` qualify."""
+    calls, scopes = [], []
 
-    async def pool(db, slot, colors, format, chosen):
+    async def pool(db, slot, colors, format, chosen, archetype=None):
         calls.append((slot.role, slot.copies, list(chosen)))
+        scopes.append(archetype)
         return [c for c in cards
-                if (slot.role == "any" or slot.role in c.roles)
+                if (archetype is None or c.name in ref_names)
+                and (slot.role == "any" or slot.role in c.roles)
                 and slot.cmc_min <= c.cmc <= slot.cmc_max and c.name not in chosen
                 and set(c.colors) <= set(colors)]
-    pool.calls = calls
+    pool.calls, pool.scopes = calls, scopes
     return pool
 
 
@@ -170,6 +184,44 @@ class TestFillSlots:
                             df.brew_copies)
         assert pool.calls[0][2] == ["Bolt A"]
         assert build.copies == {"Bolt A": 4, "Bolt B": 4}
+
+
+class TestReferenceFill:
+    async def test_reference_pool_first_then_format_for_the_shortfall(self, monkeypatch):
+        pool = fake_pool(CARDS, ref_names={"Bolt A"})
+        monkeypatch.setattr(df, "slot_pool", pool)
+        build = df.Build()
+        short = await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 8, "")], build, ["R"], "standard", dict,
+                                    df.brew_copies, "Boros Aggro")
+        assert pool.scopes == ["Boros Aggro", None]
+        assert pool.calls[0][:2] == ("burn", 8) and pool.calls[1][:2] == ("burn", 4)  # shortfall only
+        assert pool.calls[1][2] == ["Bolt A"]  # chosen cards excluded from the format pool
+        assert build.copies == {"Bolt A": 4, "Bolt B": 4} and short == 0
+
+    async def test_full_reference_pool_skips_the_format(self, monkeypatch):
+        pool = fake_pool(CARDS, ref_names={"Bolt A", "Bolt B"})
+        monkeypatch.setattr(df, "slot_pool", pool)
+        await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 8, "")], df.Build(), ["R"], "standard", dict,
+                            df.brew_copies, "Boros Aggro")
+        assert pool.scopes == ["Boros Aggro"]
+
+    async def test_brew_uses_the_format_pool_only(self, monkeypatch):
+        pool = fake_pool(CARDS)
+        monkeypatch.setattr(df, "slot_pool", pool)
+        await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 8, "")], df.Build(), ["R"], "standard", dict,
+                            df.brew_copies)
+        assert pool.scopes == [None]
+
+    async def test_catch_all_is_also_two_stage(self, monkeypatch):
+        pool = fake_pool([card("Bolt A", roles=["burn"]), card("Ogre", "Creature", cmc=3, roles=["x"])],
+                         ref_names={"Bolt A"})
+        monkeypatch.setattr(df, "slot_pool", pool)
+        build = df.Build()
+        short = await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 8, "")], build, ["R"], "standard", dict,
+                                    df.brew_copies, "Boros Aggro")
+        assert build.copies == {"Bolt A": 4, "Ogre": 4} and short == 0  # Ogre only fits the catch-all
+        assert pool.scopes == ["Boros Aggro", None, "Boros Aggro", None]
+        assert pool.calls[2][:2] == ("any", 4)
 
 
 def requested_db(*rows):
