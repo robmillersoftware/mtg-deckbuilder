@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from typesafe_sdk import Choice
+from typesafe_sdk import Choice, Noul
 
 from app.models.card import CARD_ROLES, ROLE_DEFINITIONS
 from app.services import jev, llm
@@ -245,6 +245,86 @@ async def plan_from_decklists(db: AsyncSession, archetypes: Sequence[str], forma
                 else [c for c in WUBRG if lists_with[c] * 2 >= n_lists]),
         reference=" + ".join(archetypes),
     )
+
+
+MIN_ON_COLOR_SPELLS = 8  # a brew relative's lists average this many on-color main-deck spells
+RELATIVE_THRESHOLD = 0.5
+MAX_RELATIVES = 5
+TOP_CARDS = 25  # cards per candidate shown to Jev
+RELATIVE_QUESTION = ("Does `archetype` play the same kind of game as the deck the user asked for "
+                     "(for example fast aggro, midrange, control or ramp)? Judge its game plan from its "
+                     "cards; ignore its other colors.")
+
+# Per (archetype, main-deck spell) in the window: the archetype's list count, the
+# spell's average copies per list, and whether its colors fit :colors (colorless
+# included). Archetypes with fewer than :min_lists lists and unknown names are left out.
+CANDIDATES_SQL = text(f"""
+    WITH lists AS (
+        SELECT d.id, lower(trim(d.archetype)) AS a, trim(d.archetype) AS label, d.main_deck
+        FROM decklists d JOIN events e ON e.id = d.event_id
+        WHERE {RECENT}
+          AND coalesce(trim(d.archetype), '') <> ''
+    ),
+    sizes AS (
+        SELECT a, MIN(label) AS archetype, COUNT(*) AS lists FROM lists GROUP BY a HAVING COUNT(*) >= :min_lists
+    ),
+    entries AS (
+        SELECT l.a, x->>'card_name' AS entry, (x->>'quantity')::int AS qty
+        FROM lists l JOIN sizes s ON s.a = l.a
+        CROSS JOIN LATERAL jsonb_array_elements(l.main_deck) x
+    ),
+    card AS (
+        SELECT DISTINCT ON (k) k, c.name, c.type_line, {CARD_COLORS} AS colors
+        FROM (SELECT DISTINCT lower(split_part(entry, ' // ', 1)) AS k FROM entries) n
+        JOIN cards c ON lower(split_part(c.name, ' // ', 1)) = n.k
+        ORDER BY k, c.name
+    )
+    SELECT s.archetype, s.lists, card.name, SUM(en.qty)::float / s.lists AS avg_copies,
+           bool_and(card.colors <@ CAST(:colors AS varchar[])) AS on_color
+    FROM entries en
+    JOIN card ON card.k = lower(split_part(en.entry, ' // ', 1))
+    JOIN sizes s ON s.a = en.a
+    WHERE split_part(coalesce(card.type_line, ''), ' // ', 1) NOT LIKE '%Land%'
+    GROUP BY s.archetype, s.lists, card.name
+    ORDER BY s.lists DESC, s.archetype, avg_copies DESC, card.name
+""")
+
+
+async def relative_candidates(db: AsyncSession, colors: Sequence[str],
+                              format: str) -> List[Tuple[str, int, List[Tuple[str, float]]]]:
+    """(archetype, list count, top cards) for each current archetype with at least
+    MIN_LISTS lists whose lists average at least MIN_ON_COLOR_SPELLS main-deck
+    spell copies with colors within `colors`, most lists first. Top cards are its
+    TOP_CARDS most-played main-deck spells, any color, with average copies per
+    list. No colors: no candidates."""
+    if not colors:
+        return []
+    rows = (await db.execute(CANDIDATES_SQL, {
+        "format": format, "colors": list(colors), "min_lists": MIN_LISTS})).all()
+    found: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        a = found.setdefault(r.archetype, {"lists": r.lists, "on_color": 0.0, "cards": []})
+        a["on_color"] += r.avg_copies if r.on_color else 0.0
+        a["cards"].append((r.name, round(r.avg_copies, 1)))
+    return [(name, a["lists"], a["cards"][:TOP_CARDS]) for name, a in found.items()
+            if a["on_color"] >= MIN_ON_COLOR_SPELLS]
+
+
+async def choose_relatives(client, request_text: str, colors: Sequence[str],
+                           candidates: Sequence[Tuple[str, int, List[Tuple[str, float]]]]) -> List[str]:
+    """The candidates Jev judges close relatives of the requested deck (one Noul
+    each, judged from the archetype's cards, not only its name): at or above
+    RELATIVE_THRESHOLD, most likely first, at most MAX_RELATIVES. Raises when Jev
+    fails."""
+    if not candidates:
+        return []
+    requests = [({"request": request_text, "colors": list(colors),
+                  "archetype": {"name": name, "lists": lists, "cards": dict(cards)}},
+                 {"relative": Noul(instructions=RELATIVE_QUESTION)}) for name, lists, cards in candidates]
+    answers = await jev.ask_many(client, requests, deadline=CHOICE_DEADLINE, timeout=CHOICE_TIMEOUT)
+    scored = [(a.nouls["relative"].noul, name) for a, (name, _, _) in zip(answers, candidates)]
+    ranked = sorted((s for s in scored if s[0] >= RELATIVE_THRESHOLD), key=lambda s: -s[0])  # stable
+    return [name for _, name in ranked[:MAX_RELATIVES]]
 
 
 TYPE_ROLES = ("creature", "noncreature")  # fallback roles for untagged cards

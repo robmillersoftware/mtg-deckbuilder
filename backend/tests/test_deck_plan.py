@@ -227,6 +227,85 @@ class TestPlanFromRelatives:
         assert ("removal_targeted", 2, 2) in {(s.role, s.cmc_min, s.cmc_max) for s in plan.slots}
 
 
+def cand(archetype, lists, name, avg_copies, on_color=True):
+    return SimpleNamespace(archetype=archetype, lists=lists, name=name, avg_copies=avg_copies, on_color=on_color)
+
+
+CANDIDATE_ROWS = [
+    # 8 on-color copies per list: exactly MIN_ON_COLOR_SPELLS, so a candidate
+    cand("Boros Dragons", 18, "Lightning Helix", 4.0, on_color=False),
+    cand("Boros Dragons", 18, "Burst Lightning", 4.0),
+    cand("Boros Dragons", 18, "Hired Claw", 3.5),
+    cand("Boros Dragons", 18, "Patchwork Beastie", 0.5),  # colorless counts as on-color
+    # 7.9 on-color: out, however many lists it has
+    cand("Dimir Aggro", 19, "Fear of Missing Out", 7.9),
+    cand("Dimir Aggro", 19, "Get Lost", 4.0, on_color=False),
+] + [cand("Rakdos Aggro", 4, f"Spell {i}", 1.0) for i in range(30)]  # 30 on-color spells
+
+
+class TestRelativeCandidates:
+    async def test_on_color_share_and_top_cards(self):
+        db = fake_db(CANDIDATE_ROWS)
+        got = await dp.relative_candidates(db, ["R"], "standard")
+        assert [(a, n) for a, n, _ in got] == [("Boros Dragons", 18), ("Rakdos Aggro", 4)]
+        # cards are the archetype's most-played spells of any color, so Jev sees off-color ones too
+        assert got[0][2] == [("Lightning Helix", 4.0), ("Burst Lightning", 4.0), ("Hired Claw", 3.5),
+                             ("Patchwork Beastie", 0.5)]
+        assert len(got[1][2]) == dp.TOP_CARDS == 25
+        sql, params = sql_of(db)
+        assert params == {"format": "standard", "colors": ["R"], "min_lists": 2}
+        assert "e.date >= CURRENT_DATE - 14" in sql
+        assert "lower(trim(d.archetype)) AS a" in sql  # case and space duplicates are one archetype
+        assert "HAVING COUNT(*) >= :min_lists" in sql
+        assert "lower(split_part(c.name, ' // ', 1)) = n.k" in sql  # DFCs listed by front face
+        assert dp.CARD_COLORS + " AS colors" in sql  # a DFC's colors fall back to its identity
+        assert "colors <@ CAST(:colors AS varchar[])" in sql
+        assert "NOT LIKE '%Land%'" in sql  # spells only
+
+    async def test_no_colors_no_candidates(self):
+        db = fake_db(CANDIDATE_ROWS)
+        assert await dp.relative_candidates(db, [], "standard") == []
+        db.execute.assert_not_called()
+
+
+CANDIDATES = [(f"Deck {i}", 10 - i, [(f"Card {i}", 4.0)]) for i in range(7)]
+
+
+def judges(probabilities):
+    return FakeJev(answer=lambda state, q: {"relative": probabilities.get(state["archetype"]["name"], 0.0)})
+
+
+class TestChooseRelatives:
+    async def test_threshold_cap_and_order(self):
+        jev = judges({"Deck 0": 0.5, "Deck 1": 0.9, "Deck 2": 0.49, "Deck 3": 0.7, "Deck 4": 0.8,
+                      "Deck 5": 0.6, "Deck 6": 0.95})
+        got = await dp.choose_relatives(jev, "mono-red aggro", ["R"], CANDIDATES)
+        assert got == ["Deck 6", "Deck 1", "Deck 4", "Deck 3", "Deck 5"]  # 0.5 is in but past the cap of 5
+        assert len(jev.calls) == len(CANDIDATES)
+
+    async def test_state_holds_the_archetype_cards(self):
+        jev = judges({})
+        await dp.choose_relatives(jev, "mono-red aggro", ["R"], [("Boros Dragons", 18, [("Burst Lightning", 4.0),
+                                                                                         ("Hired Claw", 3.5)])])
+        state, questions, kwargs = jev.calls[0]
+        assert state == {"request": "mono-red aggro", "colors": ["R"], "archetype": {
+            "name": "Boros Dragons", "lists": 18, "cards": {"Burst Lightning": 4.0, "Hired Claw": 3.5}}}
+        assert questions["relative"].instructions == dp.RELATIVE_QUESTION
+        assert kwargs == {"timeout": dp.CHOICE_TIMEOUT}
+
+    async def test_all_below_the_threshold_is_no_relatives(self):
+        assert await dp.choose_relatives(judges({"Deck 0": 0.49}), "x", ["R"], CANDIDATES) == []
+
+    async def test_no_candidates_skips_jev(self):
+        jev = judges({})
+        assert await dp.choose_relatives(jev, "x", ["R"], []) == [] and jev.calls == []
+
+    async def test_jev_failure_raises(self):
+        with pytest.raises(Exception):  # ask_many raises an ExceptionGroup
+            await dp.choose_relatives(FakeJev(fail=lambda s: True), "x", ["R"], CANDIDATES)
+
+
+
 LLM_PLAN = """Here you go:
 [{"role": "threat_cheap", "cmc_min": 1, "cmc_max": 2, "type_contains": "Creature", "copies": 16,
   "description": "Cheap attackers"},
