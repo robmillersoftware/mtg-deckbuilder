@@ -42,3 +42,10 @@ async def test_explanations_skipped_by_default(generator):
     result = await generator.generate("Build me a mono-red aggro deck")
     generator.ai_service.generate_card_explanations.assert_not_awaited()
     assert result.deck.card_explanations is None
+
+
+async def test_tournament_synergy_cards_exists_and_handles_no_themes():
+    # generate_deck calls this when the request names specific cards; it was deleted in 2bb5a0c
+    from app.services.ai_service import AIService
+    service = AIService.__new__(AIService)
+    assert await service._get_tournament_synergy_cards([], format="standard") == []
