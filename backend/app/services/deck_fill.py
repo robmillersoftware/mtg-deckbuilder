@@ -30,7 +30,9 @@ MAX_COPIES = 4
 BREW_COPIES = [4, 4, 3, 2, 1]  # brew copies by Jev rank, then 1
 ANY_SLOT = "Any card that makes this deck stronger"
 SLOT_QUESTION = ("Which card best fills this slot in the deck described by `deck`? Prefer cards proven "
-                 "in recent tournament play (see each option's play count) when they fit the slot.")
+                 "in recent tournament play (see each option's play count) when they fit the slot. "
+                 "The card must support the deck's plan; never pick one that works against it (e.g. a "
+                 "sweeper that kills its own creatures in a creature deck).")
 
 # A card's colors; DFCs store colors per face (top-level colors are empty), so
 # fall back to color identity.
@@ -108,7 +110,7 @@ async def fill_slot(client, slot: Slot, pool: Sequence[Any], state: Dict[str, An
     answer = await choose(client, state, Choice(
         instructions={"question": question, "slot": slot.description},
         criteria={r.name: option_text(r, format) for r in pool}))
-    probs = answer.probabilities or {}
+    probs = answer.probabilities or {answer.choice: 1.0}
     ranked = sorted((r.name for r in pool), key=lambda n: -probs.get(n, 0.0))  # stable: ties keep play order
     picks, need = [], slot.copies
     for rank, name in enumerate(ranked):

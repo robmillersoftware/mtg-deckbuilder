@@ -95,6 +95,15 @@ class TestFillSlot:
                                    "standard", no_copies)
         assert picks == [("A", 1), ("B", 1)]
 
+    async def test_pick_counts_when_probabilities_are_empty(self):
+        jev = FakeJev(answer=lambda s, q: {"pick": {"choice": "B", "confidence": 0.9, "probabilities": {}}})
+        picks = await df.fill_slot(jev, Slot("burn", 0, 1, 4, ""), [card("A"), card("B")], {}, "standard",
+                                   df.brew_copies)
+        assert picks == [("B", 4)]
+
+    async def test_question_forbids_picks_that_work_against_the_plan(self):
+        assert "never pick one that works against it" in df.SLOT_QUESTION
+
     async def test_empty_pool_makes_no_jev_call(self):
         jev = ranks("A")
         assert await df.fill_slot(jev, Slot("burn", 0, 1, 4, ""), [], {}, "standard", df.brew_copies) == []
