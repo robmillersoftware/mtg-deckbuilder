@@ -10,7 +10,7 @@ import asyncio
 import logging
 import re
 import traceback
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
 
@@ -31,6 +31,7 @@ MTGTOP8_BASE_URL = "https://www.mtgtop8.com"
 STANDARD_FORMAT_ID = "ST"
 CEDH_FORMAT_ID = "cEDH"
 REQUEST_DELAY = 1.0  # Be nice to the server
+MAX_EVENT_PAGES = 10  # ponytail: safety stop; the two-week view is 1-2 pages
 
 # Mapping of internal format names to mtgtop8 format IDs and scrape settings
 FORMAT_CONFIG = {
@@ -66,68 +67,57 @@ async def fetch_page(client: httpx.AsyncClient, url: str) -> str:
     return response.text
 
 
+def _dated_event_rows(soup: BeautifulSoup) -> List[Tuple[str, str, date]]:
+    """(event id, name, date) for each event link in a dated table row."""
+    rows = []
+    for link in soup.select("a[href*='event?e=']"):
+        match = re.search(r"e=(\d+)", link.get("href", ""))
+        row = link.find_parent("tr")
+        if not match or row is None:
+            continue
+        cells = row.find_all("td")
+        try:
+            event_date = datetime.strptime(cells[-1].get_text(strip=True), "%d/%m/%y").date()
+        except (ValueError, IndexError):
+            continue
+        rows.append((match.group(1), link.get_text(strip=True), event_date))
+    return rows
+
+
 async def scrape_recent_events(
     client: httpx.AsyncClient,
     format_id: str = STANDARD_FORMAT_ID,
     format_name: str = "standard",
     days: int = 14,
 ) -> List[Dict[str, Any]]:
-    """Scrape recent events from mtgtop8 for a specific format."""
-    events = []
-
-    # Scrape the format events page
+    """Scrape recent events for a format from mtgtop8's two-week view, following
+    its pagination (?f=X&meta=..&cp=N, via the "Next" link) until a page has no
+    dated event rows or no next page."""
+    events: List[Dict[str, Any]] = []
+    seen = set()
+    cutoff = datetime.now().date() - timedelta(days=days)
     url = f"{MTGTOP8_BASE_URL}/format?f={format_id}"
-    html = await fetch_page(client, url)
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Find event links
-    event_links = soup.select("a[href*='event?e=']")
-
-    for link in event_links[:50]:  # Limit to recent events
-        try:
-            href = link.get("href", "")
-            event_id_match = re.search(r"e=(\d+)", href)
-            if not event_id_match:
+    for _ in range(MAX_EVENT_PAGES):
+        soup = BeautifulSoup(await fetch_page(client, url), "html.parser")
+        rows = _dated_event_rows(soup)
+        if not rows:
+            break
+        for event_id, name, event_date in rows:
+            if event_date < cutoff or event_id in seen:
                 continue
-
-            event_id = event_id_match.group(1)
-            event_name = link.get_text(strip=True)
-
-            # Get parent row for date and player count
-            parent = link.find_parent("tr")
-            if parent:
-                cells = parent.find_all("td")
-                date_text = cells[-1].get_text(strip=True) if cells else ""
-                player_count = None
-
-                # Try to parse date
-                event_date = None
-                try:
-                    # mtgtop8 uses format like "21/01/24"
-                    event_date = datetime.strptime(date_text, "%d/%m/%y").date()
-                except ValueError:
-                    pass
-
-                # Skip events without valid dates
-                if not event_date:
-                    continue
-
-                # Check if within date range
-                cutoff = datetime.now().date() - timedelta(days=days)
-                if event_date < cutoff:
-                    continue
-
-                events.append({
-                    "mtgtop8_id": event_id,
-                    "name": event_name,
-                    "date": event_date,
-                    "format": format_name,
-                    "url": f"{MTGTOP8_BASE_URL}/event?e={event_id}",
-                })
-
-        except Exception as e:
-            logger.warning(f"Error parsing event link: {e}")
-            continue
+            seen.add(event_id)
+            events.append({
+                "mtgtop8_id": event_id,
+                "name": name,
+                "date": event_date,
+                "format": format_name,
+                "url": f"{MTGTOP8_BASE_URL}/event?e={event_id}",
+            })
+        next_href = next((a.get("href") for a in soup.select("div.Nav_norm a")
+                          if a.get_text(strip=True) == "Next"), None)
+        if not next_href:
+            break
+        url = f"{MTGTOP8_BASE_URL}/format{next_href}"
 
     logger.info(f"Found {len(events)} recent {format_name} events")
     return events
