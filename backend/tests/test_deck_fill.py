@@ -715,6 +715,62 @@ class TestBrewNonbasicTarget:
         monkeypatch.setattr(df, "brew_nonbasic_target", AsyncMock(return_value=6))
         build = df.Build()
         build.add("Shock", 4, card("Shock"))
-        await df.fill_lands(None, FakeJev(), build, plan(lands=22), ["R"], "standard", dict, df.brew_copies)
+        useful = FakeJev(answer=lambda state, q: {"utility": 0.9} if "utility" in q else {})
+        await df.fill_lands(None, useful, build, plan(lands=22), ["R"], "standard", dict, df.brew_copies)
         assert build.copies["Soulstone Sanctuary"] + build.copies.get("Fabled Passage", 0) == 6
         assert build.copies["Mountain"] == 16
+
+
+# Real Standard oracle texts (2026-10-06)
+LAND_TEXTS = {
+    "Multiversal Passage": "As this land enters, choose a basic land type. Then you may pay 2 life. If you don't, it enters tapped.\nThis land is the chosen type.",
+    "Starting Town": "This land enters tapped unless it's your first, second, or third turn of the game.\n{T}: Add {C}.\n{T}, Pay 1 life: Add one mana of any color.",
+    "Fabled Passage": "{T}, Sacrifice this land: Search your library for a basic land card, put it onto the battlefield tapped, then shuffle. Then if you control four or more lands, untap that land.",
+    "Secluded Courtyard": "As this land enters, choose a creature type.\n{T}: Add {C}.\n{T}: Add one mana of any color. Spend this mana only to cast a creature spell of the chosen type or activate an ability of a creature source of the chosen type.",
+    "Soulstone Sanctuary": "{T}: Add {C}.\n{4}: This land becomes a 3/3 creature with vigilance and all creature types. It's still a land.",
+    "Cavern of Souls": "As this land enters, choose a creature type.\n{T}: Add {C}.\n{T}: Add one mana of any color. Spend this mana only to cast a creature spell of the chosen type, and that spell can't be countered.",
+    "Cori Mountain Monastery": "This land enters tapped unless you control a Plains or an Island.\n{T}: Add {R}.\n{3}{R}, {T}: Exile the top card of your library. Until the end of your next turn, you may play that card.",
+    "Escape Tunnel": "{T}, Sacrifice this land: Search your library for a basic land card, put it onto the battlefield tapped, then shuffle.\n{T}, Sacrifice this land: Target creature with power 2 or less can't be blocked this turn.",
+    "Maelstrom of the Spirit Dragon": "{T}: Add {C}.\n{T}: Add one mana of any color. Spend this mana only to cast a Dragon spell or an Omen spell.\n{4}, {T}, Sacrifice this land: Search your library for a Dragon card, reveal it, put it into your hand, then shuffle.",
+}
+
+
+class TestUtilityLands:
+    async def test_keeps_lands_jev_judges_useful_beyond_mana(self):
+        pool = [card(n, "Land", 0, "", identity="", mana_cost=None, oracle=t) for n, t in LAND_TEXTS.items()]
+        useful = {"Soulstone Sanctuary", "Cavern of Souls", "Cori Mountain Monastery"}
+        jev = FakeJev(answer=lambda state, q: {"utility": 0.9 if state["land"]["name"] in useful else 0.1})
+        kept = await df.utility_lands(jev, pool)
+        assert {r.name for r in kept} == useful
+        assert len(jev.calls) == len(pool)
+        state, questions, _ = jev.calls[0]
+        assert state["land"]["oracle_text"] == pool[0].oracle_text
+        assert questions["utility"].instructions == df.UTILITY_QUESTION
+
+    async def test_empty_pool_makes_no_jev_call(self):
+        jev = FakeJev()
+        assert await df.utility_lands(jev, []) == [] and jev.calls == []
+
+    async def test_one_color_decks_only_get_utility_lands(self, monkeypatch):
+        pool = [card(n, "Land", 0, "", identity="", mana_cost=None, oracle=LAND_TEXTS[n])
+                for n in ("Multiversal Passage", "Soulstone Sanctuary")]
+        monkeypatch.setattr(df, "land_pool", AsyncMock(return_value=pool))
+        jev = FakeJev(answer=lambda state, q: (
+            {"utility": 0.9 if state["land"]["name"] == "Soulstone Sanctuary" else 0.1} if "utility" in q else {}))
+        build = df.Build()
+        build.add("Shock", 4, card("Shock"))
+        await df.fill_lands(None, jev, build, plan(lands=22, nonbasic=4), ["R"], "standard", dict,
+                            df.brew_copies)
+        assert "Multiversal Passage" not in build.copies and build.copies["Soulstone Sanctuary"] == 4
+
+    async def test_multi_color_decks_skip_the_check(self, monkeypatch):
+        pool = [card("Multiversal Passage", "Land", 0, "", identity="", mana_cost=None,
+                     oracle=LAND_TEXTS["Multiversal Passage"])]
+        monkeypatch.setattr(df, "land_pool", AsyncMock(return_value=pool))
+        jev = FakeJev()
+        build = df.Build()
+        build.add("Shock", 4, card("Shock"))
+        await df.fill_lands(None, jev, build, plan(lands=22, nonbasic=4), ["R", "W"], "standard", dict,
+                            df.brew_copies)
+        assert build.copies["Multiversal Passage"] == 4
+        assert all("utility" not in q for _, q, _ in jev.calls)

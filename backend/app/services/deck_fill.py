@@ -14,12 +14,12 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from typesafe_sdk import Choice
+from typesafe_sdk import Choice, Noul
 
 from app.services import jev, llm
 from app.services.card_service import FORMAT_LEGALITY_MAP
 from app.services.deck_plan import (
-    MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, choose, choose_reference, is_land, largest_remainder,
+    CHOICE_DEADLINE, CHOICE_TIMEOUT, MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, choose, choose_reference, is_land, largest_remainder,
     plan_from_decklists, plan_with_llm, recent_archetypes,
 )
 from app.services.guided_builder import front_cost
@@ -386,6 +386,22 @@ def _nonbasic_lands(build: Build) -> int:
                and is_land(build.rows[n].type_line) and not (build.rows[n].type_line or "").startswith("Basic"))
 
 
+UTILITY_QUESTION = ("Does `land` do anything useful besides producing mana or fixing colors "
+                    "(for example becoming a creature, or a sacrifice or activated effect)?")
+UTILITY_THRESHOLD = 0.5
+
+
+async def utility_lands(client, pool: Sequence[Any]) -> List[Any]:
+    """The lands Jev judges to do something beyond making or fixing mana: a one-color
+    deck gains nothing from fixing, so those are no better than a basic."""
+    if not pool:
+        return []
+    requests = [({"land": {"name": r.name, "type_line": r.type_line, "oracle_text": r.oracle_text}},
+                 {"utility": Noul(instructions=UTILITY_QUESTION)}) for r in pool]
+    answers = await jev.ask_many(client, requests, deadline=CHOICE_DEADLINE, timeout=CHOICE_TIMEOUT)
+    return [r for r, a in zip(pool, answers) if a.nouls["utility"].noul >= UTILITY_THRESHOLD]
+
+
 async def fill_lands(db: AsyncSession, client, build: Build, plan: Plan, colors: List[str], format: str,
                      state: Callable[[], Dict[str, Any]], copies_for: Callable[[str, int], int]) -> None:
     """Add plan.lands lands (requested lands already took their share): nonbasics
@@ -396,6 +412,8 @@ async def fill_lands(db: AsyncSession, client, build: Build, plan: Plan, colors:
     picked = 0
     if need:
         pool = await land_pool(db, colors, format, list(build.copies))
+        if len(colors) == 1:
+            pool = await utility_lands(client, pool)
         rows = {r.name: r for r in pool}
         for name, q in await fill_slot(client, Slot("land", 0, 99, need, LAND_SLOT), pool, state(),
                                        format, copies_for):
