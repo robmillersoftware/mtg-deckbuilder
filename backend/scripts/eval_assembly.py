@@ -1,8 +1,9 @@
 """
-Build three Standard decks with real Jev assembly and check each one: legal,
+Build four Standard decks with real Jev assembly and check each one: legal,
 60 main and 15 sideboard, every card played in the last 14
 days or requested, nonbasic lands within the deck colors, at most 4 copies.
-Prints the lists for human review. Not run in CI.
+Brews print the relatives Jev chose and every nonland card from outside the
+relatives' lists (a format top-up). Prints the lists for human review. Not run in CI.
 
 Usage (inside the backend container, which has the DB and keys):
   docker compose exec -T backend python scripts/eval_assembly.py
@@ -21,13 +22,15 @@ from sqlalchemy import text  # noqa: E402
 from app.db.session import async_session_factory  # noqa: E402
 from app.services import deck_fill  # noqa: E402
 from app.services.ai.deck_parsing import parse_deck_request  # noqa: E402
-from app.services.deck_plan import RECENT  # noqa: E402
+from app.services.deck_plan import RECENT, archetype_keys  # noqa: E402
 from app.services.deck_validator import BASIC_LANDS  # noqa: E402
 
-# (request, must have a reference archetype)
+# (request, must have a reference archetype). Brews print their relatives; none is
+# not a failure (the brew then uses the LLM plan).
 CASES = [
     ("Build me a Boros aggro deck", True),
     ("mono-red aggro", False),
+    ("a red-green aggro deck", False),
     ("A black-red midrange deck built around Sephiroth, Fabled SOLDIER", False),
 ]
 
@@ -42,6 +45,24 @@ PLAYED_SQL = text(f"""
     CROSS JOIN LATERAL jsonb_array_elements(d.main_deck || d.sideboard) AS x
     WHERE {RECENT}
 """)
+RELATIVES_SQL = text(f"""
+    SELECT DISTINCT lower(split_part(x->>'card_name', ' // ', 1))
+    FROM decklists d JOIN events e ON e.id = d.event_id
+    CROSS JOIN LATERAL jsonb_array_elements(d.main_deck || d.sideboard) AS x
+    WHERE {RECENT} AND lower(trim(d.archetype)) = ANY(CAST(:archetypes AS varchar[]))
+""")
+
+
+async def top_ups(db, deck) -> list:
+    """Nonland cards from outside the relatives' lists: format top-ups."""
+    if not deck["relatives"]:
+        return []
+    params = {"format": "standard", "archetypes": archetype_keys(deck["relatives"])}
+    theirs = {r[0] for r in (await db.execute(RELATIVES_SQL, params)).all()}
+    names = [e["card_name"] for e in deck["main_deck"] + deck["sideboard"]]
+    cards = {r.name: r for r in (await db.execute(CARD_SQL, {"names": names})).all()}
+    return [n for n in names if n.split(" // ")[0].lower() not in theirs
+            and n in cards and "Land" not in cards[n].type_line.split(" // ")[0]]
 
 
 async def check(db, deck, requested, need_reference) -> list:
@@ -91,8 +112,10 @@ async def main() -> None:
             problems = await check(db, deck, parsed["specific_cards"], need_reference)
             failed += bool(problems)
             print(f"\n=== {request}  ({took:.1f}s)")
-            print(f"reference={deck['reference']} colors={deck['colors']} "
+            print(f"reference={deck['reference']} relatives={deck['relatives']} colors={deck['colors']} "
                   f"requested={parsed['specific_cards']}")
+            if deck["relatives"]:
+                print(f"format top-ups: {await top_ups(db, deck) or 'none'}")
             print(f"{deck['name']}: {deck['strategy_summary']}")
             for e in deck["main_deck"]:
                 print(f"  {e['quantity']} {e['card_name']}")
