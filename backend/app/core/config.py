@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # LLM via OpenRouter (OpenAI-compatible); any OpenRouter model id works
     OPENROUTER_API_KEY: Optional[str] = None
     LLM_MODEL: str = "deepseek/deepseek-v4-flash"
+    # meta and matchup answers: a stronger model invents fewer card abilities
+    ANSWER_MODEL: str = "anthropic/claude-haiku-4.5"
 
     # OpenAI (for embeddings)
     OPENAI_API_KEY: Optional[str] = None

@@ -19,6 +19,7 @@ from app.services.deck_generator import DeckGenerator
 from app.services.ai_service import AIService
 from app.services.guided_builder import DeckAnalyzer
 from app.services import deck_fit
+from app.core.config import settings
 from app.services import llm
 from app.services import chat_routing
 from app.services.deck_plan import RECENT
@@ -1635,7 +1636,8 @@ RULES:
             return fallback
         try:
             answer = await asyncio.to_thread(
-                llm.complete, GROUNDED_ANSWER_SYSTEM, f"Message: {message}\n\nData:\n{facts}", 800)
+                llm.complete, GROUNDED_ANSWER_SYSTEM, f"Message: {message}\n\nData:\n{facts}", 800,
+                settings.ANSWER_MODEL)
         except Exception as e:
             logger.warning(f"Grounded answer failed, using the data as-is: {e}")
             return fallback

@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.conversation import Conversation
+from app.core.config import settings
 from app.services import llm
 from app.services.chat_service import GROUNDED_ANSWER_SYSTEM, ChatService
 
@@ -23,8 +24,8 @@ def chat(monkeypatch):
     svc._current_format = "standard"
     svc.seen = {}
 
-    def complete(system, user, max_tokens=4096):
-        svc.seen.update(system=system, user=user)
+    def complete(system, user, max_tokens=4096, model=None):
+        svc.seen.update(system=system, user=user, model=model)
         return "Mono Green Aggro is a fast creature deck; cheap removal and blockers beat it."
     monkeypatch.setattr(llm, "is_configured", lambda: True)
     monkeypatch.setattr(llm, "complete", complete)
@@ -48,6 +49,7 @@ async def test_analyze_meta_answers_the_question_from_meta_data(chat):
     assert "what is a good card for my deck?" in chat.seen["user"]
     assert "**Dimir Aggro** (10.9%)" in chat.seen["user"]
     assert chat.seen["system"] == GROUNDED_ANSWER_SYSTEM
+    assert chat.seen["model"] == settings.ANSWER_MODEL
     assert conv.messages[-1]["content"] == resp.response
 
 

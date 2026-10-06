@@ -32,10 +32,11 @@ def _messages(system: str, messages: List[Dict[str, str]]) -> List[Dict[str, str
     return ([{"role": "system", "content": system}] if system else []) + messages
 
 
-def complete(system: str, user: str, max_tokens: int = 4096) -> str:
-    """One system + user turn; returns the reply text ('' if the model returned none)."""
+def complete(system: str, user: str, max_tokens: int = 4096, model: Optional[str] = None) -> str:
+    """One system + user turn; returns the reply text ('' if the model returned none).
+    `model` defaults to LLM_MODEL."""
     response = _client().chat.completions.create(
-        model=settings.LLM_MODEL,
+        model=model or settings.LLM_MODEL,
         max_tokens=max_tokens,
         messages=_messages(system, [{"role": "user", "content": user}]),
         extra_body=NO_REASONING,
