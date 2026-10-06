@@ -8,7 +8,7 @@ from sqlalchemy import select, and_, or_, func, text
 
 from typesafe_sdk import Noul
 
-from app.models.card import Card
+from app.models.card import Card, ROLE_MAP
 from app.schemas.card import CardResponse
 from app.services import jev
 from app.services.deck_fit import card_payload
@@ -42,7 +42,12 @@ CARD_TSVECTOR = (
 )
 SHORTLIST_SIZE = 60
 VALID_COLORS = {"W", "U", "B", "R", "G"}
-SEARCH_CUTOFF = 0.5
+SEARCH_CUTOFF = 0.35  # Jev scores short queries low; 0.5 dropped correct cards
+COLOR_WORDS = {"white", "blue", "black", "red", "green", "colorless"}
+FTS_SKIP = {
+    *COLOR_WORDS, *(w + "s" for w in COLOR_WORDS), "w", "u", "b", "r", "g",
+    "card", "cards", "deck", "decks", "spell", "spells",
+}
 
 
 async def score_search(query: str, cards: Sequence[Any], client=None) -> Optional[Dict[str, float]]:
@@ -53,7 +58,10 @@ async def score_search(query: str, cards: Sequence[Any], client=None) -> Optiona
     """
     if not cards:
         return {}
-    question = {"match": Noul(instructions="Does `card` serve the request in `query`?")}
+    question = {"match": Noul(instructions=(
+        "`query` is what a Magic: The Gathering player is searching for. Judging from the card's oracle text, "
+        "is `card` the kind of card they are looking for? Colors and format are already filtered; "
+        "judge the card's function."))}
     payloads = [card_payload(c) for c in cards]
     async with jev.session(client) as client:
         if client is None:
@@ -367,7 +375,7 @@ class CardService:
     ) -> List[Card]:
         """
         Shortlist up to SHORTLIST_SIZE cards (vector hits when OpenAI is configured,
-        then full-text hits, then popular cards), then have Jev re-rank them against
+        then role-tagged cards, full-text hits, then popular cards), then have Jev re-rank them against
         the query and drop those below SEARCH_CUTOFF. Without Jev, returns the
         shortlist in merge order.
         """
@@ -389,7 +397,7 @@ class CardService:
         colors: Optional[List[str]],
     ) -> List[str]:
         """Unique names, already filtered by format and colors, in priority order:
-        vector hits, full-text hits, popular cards. Stops at SHORTLIST_SIZE."""
+        vector hits, role-tagged cards, full-text hits, popular cards. Stops at SHORTLIST_SIZE."""
         names: Dict[str, None] = {}  # insertion-ordered set
 
         def add(found) -> None:
@@ -401,16 +409,18 @@ class CardService:
         embedding = await get_embedding_service().get_query_embedding(query)
         if embedding is not None:
             try:
-                rows = await self._vector_search(
-                    embedding, format=format, standard_only=standard_only,
-                    colors=colors, limit=SHORTLIST_SIZE,
-                )
+                # SAVEPOINT: a failure undoes only this query, not the caller's pending work
+                async with self.db.begin_nested():
+                    rows = await self._vector_search(
+                        embedding, format=format, standard_only=standard_only,
+                        colors=colors, limit=SHORTLIST_SIZE,
+                    )
                 add(row.name for row in rows)
             except Exception as e:
                 logger.error(f"Vector search failed: {e}")
-                await self.db.rollback()  # the aborted transaction would fail the next query
 
         sources = (
+            lambda: self.role_card_names(query, format, standard_only, colors),
             lambda: self.text_search_names(query, format, standard_only, colors),
             lambda: self.popular_card_names(format, standard_only, colors),
         )
@@ -418,10 +428,11 @@ class CardService:
             if len(names) >= SHORTLIST_SIZE:
                 break
             try:
-                add(await source())
+                async with self.db.begin_nested():
+                    found = await source()
+                add(found)
             except Exception as e:
                 logger.error(f"Shortlist query failed: {e}")
-                await self.db.rollback()
         return list(names)
 
     async def _vector_search(
@@ -448,9 +459,10 @@ class CardService:
             source_table = "cards"
 
         try:
-            return await self._execute_vector_query(
-                embedding_str, source_table, format, standard_only, colors, limit,
-            )
+            async with self.db.begin_nested():
+                return await self._execute_vector_query(
+                    embedding_str, source_table, format, standard_only, colors, limit,
+                )
         except Exception as e:
             if source_table != "cards":
                 # View probably doesn't exist yet — fall back to main table
@@ -458,7 +470,6 @@ class CardService:
                     f"Format view '{source_table}' query failed ({e}), "
                     "falling back to cards table with legality filter"
                 )
-                await self.db.rollback()
                 return await self._execute_vector_query(
                     embedding_str, "cards", format, standard_only, colors, limit,
                 )
@@ -529,7 +540,7 @@ class CardService:
         """Card names matching any query word (Postgres full text with english
         stemming and stopwords), best match first. Runs on `cards` so the
         migration-016 index applies."""
-        words = re.findall(r"[a-z0-9]+", query.lower())
+        words = [w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in FTS_SKIP]
         if not words:
             return []
         where = " AND ".join([f"{CARD_TSVECTOR} @@ to_tsquery('english', :q)",
@@ -543,6 +554,34 @@ class CardService:
             LIMIT :limit
         """)
         result = await self.db.execute(sql, {"q": " | ".join(words), "limit": limit})
+        return [row[0] for row in result.all()]
+
+    async def role_card_names(
+        self,
+        query: str,
+        format: Optional[str] = None,
+        standard_only: bool = True,
+        colors: Optional[List[str]] = None,
+        limit: int = SHORTLIST_SIZE,
+    ) -> List[str]:
+        """Cards tagged with a role the query names (ROLE_MAP keys as whole words,
+        singular or plural), most efficient first."""
+        q = query.lower()
+        keys = [k for k in ROLE_MAP
+                if re.search(rf"\b{re.escape(k)}\b", q) or (k.endswith("s") and re.search(rf"\b{re.escape(k[:-1])}\b", q))]
+        roles = sorted({r for k in keys for r in ROLE_MAP[k]})
+        if not roles:
+            return []
+        where = " AND ".join(["r.role = ANY(:roles)", *self._filter_sql(format, standard_only, colors, alias="c")])
+        sql = text(f"""
+            SELECT c.name
+            FROM card_roles r JOIN cards c ON c.id = r.card_id
+            WHERE {where}
+            GROUP BY c.name
+            ORDER BY MAX(r.efficiency) DESC, MAX(r.confidence) DESC, c.name
+            LIMIT :limit
+        """)
+        result = await self.db.execute(sql, {"roles": roles, "limit": limit})
         return [row[0] for row in result.all()]
 
     async def popular_card_names(

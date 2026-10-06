@@ -41,14 +41,52 @@ class TestTextSearchNames:
         names = await s.text_search_names("Cheap red removal!", format="standard", colors=["R"])
         assert names == ["Shock", "Lightning Strike"]
         sql, params = sql_of(s)
-        assert params["q"] == "cheap | red | removal"
+        assert params["q"] == "cheap | removal"
         assert cs.CARD_TSVECTOR in sql and "FROM cards" in sql
         assert "legalities->>'standard' = 'legal'" in sql
         assert "colors <@ ARRAY['R']" in sql
 
+    async def test_colors_and_filler_words_are_dropped(self):
+        s = svc([("Shock",)])
+        await s.text_search_names("cheap Red cards, blue deck, R U")
+        assert sql_of(s)[1]["q"] == "cheap"
+
+    async def test_all_filler_skips_the_query(self):
+        s = svc()
+        assert await s.text_search_names("red cards", colors=["R"]) == []
+        s.db.execute.assert_not_called()
+
     async def test_no_words_skips_the_query(self):
         s = svc()
         assert await s.text_search_names("?! --") == []
+        s.db.execute.assert_not_called()
+
+
+class TestRoleCardNames:
+    async def test_roles_from_query_words_and_filters(self):
+        s = svc([("Shock",), ("Bolt",)])
+        names = await s.role_card_names("cheap red burn", format="modern", colors=["R"])
+        assert names == ["Shock", "Bolt"]
+        sql, params = sql_of(s)
+        assert params == {"roles": ["burn"], "limit": cs.SHORTLIST_SIZE}
+        assert "FROM card_roles r JOIN cards c ON c.id = r.card_id" in sql
+        assert "c.legalities->>'modern' = 'legal'" in sql and "c.colors <@ ARRAY['R']" in sql
+        assert "MAX(r.efficiency) DESC, MAX(r.confidence) DESC, c.name" in sql
+
+    async def test_singular_matches_plural_key_and_expands(self):
+        s = svc()
+        await s.role_card_names("Counterspell and removal")
+        assert sql_of(s)[1]["roles"] == sorted(
+            ["counterspell", "removal_targeted", "removal_mass", "removal_artifact_enchantment"])
+
+    async def test_whole_words_only(self):
+        s = svc()
+        assert await s.role_card_names("burnout rampage") == []
+        s.db.execute.assert_not_called()
+
+    async def test_no_role_skips_the_query(self):
+        s = svc()
+        assert await s.role_card_names("something spooky") == []
         s.db.execute.assert_not_called()
 
 
