@@ -113,7 +113,7 @@ def build_questions(
     }
     for code, name in COLORS.items():
         questions[f"color:{code}"] = Noul(instructions={
-            "question": "Does the user want this color in their own deck (not an opponent's)?",
+            "question": "Does the user want this color in their own deck? No if the color only describes an opponent's deck or a deck to beat.",
             "color": name,
         })
     for role in CORE_ROLES:
