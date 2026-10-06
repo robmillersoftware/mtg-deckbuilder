@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from uuid import UUID
 import logging
 
@@ -19,8 +19,11 @@ from app.services.ai_service import AIService
 from app.services.guided_builder import DeckAnalyzer
 from app.services import deck_fit
 from app.services import llm
+from app.services import chat_routing
 
 logger = logging.getLogger(__name__)
+
+TEXT_ONLY_REPLY = "\n\nFor this turn, reply in text only; no tools are available."
 
 # Tool definitions for Claude - incremental collaborative builder
 TOOLS = [
@@ -56,7 +59,7 @@ TOOLS = [
                 "roles": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Role groups to suggest cards for. MUST use from: threats, creatures, removal, card advantage, card draw, counterspells, protection, ramp, burn, recursion, finishers, interaction, discard, lifegain, graveyard hate, tutors, sacrifice outlets, board wipes, spot removal, cheap threats, big threats"
+                    "description": "Role groups to suggest cards for. MUST use from: " + ", ".join(chat_routing.CORE_ROLES)
                 }
             },
             "required": ["strategy", "colors", "roles"]
@@ -406,13 +409,19 @@ RULES:
             require_tool = bool(
                 (resolved_cards or format_illegal_cards or has_build_intent) and not deck
             )
-            response_text, tool_calls = llm.chat_with_tools(
-                system=system_prompt,
-                messages=api_messages,
-                tools=TOOLS,
-                require_tool=require_tool,
-                max_tokens=2048,
+            response_text, tool_calls = await self._route_with_jev(
+                message, conversation, deck, resolved_cards, format,
+                require_tool, system_prompt, api_messages,
             )
+            if not response_text and not tool_calls:
+                logger.info("[ROUTE] LLM tool call (Jev unavailable, failed, or not confident)")
+                response_text, tool_calls = llm.chat_with_tools(
+                    system=system_prompt,
+                    messages=api_messages,
+                    tools=TOOLS,
+                    require_tool=require_tool,
+                    max_tokens=2048,
+                )
 
             for tool_name, tool_input in tool_calls:
                 logger.debug(f"[CHAT-SERVICE] LLM called tool: {tool_name} with input: {tool_input}")
@@ -438,6 +447,53 @@ RULES:
             logger.error(f"Chat processing error: {e}", exc_info=True)
 
         return await self._fallback_response(message, conversation, user_id)
+
+    async def _route_with_jev(
+        self,
+        message: str,
+        conversation: Conversation,
+        deck: Optional[Dict[str, Any]],
+        resolved_cards: List[Dict[str, Any]],
+        format: str,
+        require_tool: bool,
+        system_prompt: str,
+        api_messages: List[Dict[str, str]],
+    ) -> Tuple[str, List[Tuple[str, Dict[str, Any]]]]:
+        """(reply text, tool calls) decided by Jev, or ("", []) to use the LLM tool call."""
+        ctx = conversation.get_context()
+        routed = await chat_routing.route(
+            message=message,
+            history=conversation.messages or [],
+            summary=chat_routing.deck_summary(deck, ctx.get("colors") or []),
+            strategy=ctx.get("strategy") or "",
+            card_names=[c["name"] for c in resolved_cards],
+            meta_archetypes=await self._meta_archetypes(format),
+            tools=TOOLS,
+        )
+        if routed is None or routed.confidence < chat_routing.ROUTE_CONFIDENCE:
+            return "", []
+        action = routed.action
+        if action == chat_routing.REPLY and require_tool:
+            action = routed.top_tool()
+        logger.info(f"[ROUTE] Jev action={action} confidence={routed.confidence:.2f}")
+        if action == chat_routing.REPLY:
+            transcript = "\n\n".join(f"{m['role']}: {m['content']}" for m in api_messages)
+            return llm.complete(system=system_prompt + TEXT_ONLY_REPLY, user=transcript), []
+        if action not in routed.inputs:
+            return "", []
+        return "", [(action, routed.inputs[action])]
+
+    async def _meta_archetypes(self, format: str) -> List[str]:
+        """Up to 10 unique current meta archetype names, most-played first."""
+        from app.models.meta import MetaSnapshot
+
+        result = await self.db.execute(
+            select(MetaSnapshot.archetype)
+            .where(MetaSnapshot.format == format)
+            .order_by(MetaSnapshot.meta_percentage.desc().nulls_last())
+            .limit(30)
+        )
+        return list(dict.fromkeys(result.scalars().all()))[:10]
 
     def _build_conversation_context(self, conversation: Conversation) -> str:
         """Build a structured context string from persisted conversation state.
