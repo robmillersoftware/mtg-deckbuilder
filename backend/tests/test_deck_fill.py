@@ -222,6 +222,15 @@ EVOLVING_WILDS = ("{T}, Sacrifice this land: Search your library for a basic lan
                   "put it onto the battlefield tapped, then shuffle.")
 
 
+class TestFits:
+    def test_type_contains_or_role_and_cmc_band(self):
+        slot = Slot("burn", 0, 2, 4, "x", type_contains="Saga")
+        assert df._fits(slot, card("Saga", "Enchantment — Saga", cmc=2, roles=[]))
+        assert df._fits(slot, card("Shock", cmc=1, roles=["burn"]))
+        assert not df._fits(slot, card("Saga", "Enchantment — Saga", cmc=3, roles=[]))
+        assert not df._fits(slot, card("Bear", "Creature", cmc=1, roles=[]))
+
+
 class TestLandPool:
     async def test_fetchlands_must_find_a_deck_color(self):
         rows = [card(n, "Land", 0, "", identity="", mana_cost=None, oracle=o) for n, o in (
@@ -249,7 +258,8 @@ class TestBasics:
         rows = [card("A", mana_cost="{1}{R}{R}"), card("B", mana_cost="{R/W}{W}"),
                 card("DFC", mana_cost=None, identity="B"), card("Artifact", mana_cost="{2}", colors="", identity=""),
                 card("Front", mana_cost="{2}{R} // {1}{G}", identity="RG")]
-        assert df.pips(rows) == {"W": 2, "U": 0, "B": 1, "R": 4, "G": 0}
+        assert df.pips([(r, 1) for r in rows]) == {"W": 2, "U": 0, "B": 1, "R": 4, "G": 0}
+        assert df.pips([(rows[0], 4)])["R"] == 8  # weighted by copies
 
     def test_split_by_pips_with_one_per_color(self):
         assert df.split_basics({"R": 30, "W": 0}, ["R", "W"], 10) == {"Plains": 1, "Mountain": 9}
@@ -263,6 +273,15 @@ class TestBasics:
 
 
 class TestFillLands:
+    async def test_basics_are_weighted_by_copies(self, monkeypatch):
+        monkeypatch.setattr(df, "land_pool", AsyncMock(return_value=[]))
+        build = df.Build()
+        build.add("Shock", 4, card("Shock", mana_cost="{R}{R}"))
+        build.add("Get Lost", 1, card("Get Lost", mana_cost="{W}{W}", colors="W"))
+        await df.fill_lands(None, FakeJev(), build, plan(lands=4, nonbasic=0), ["R", "W"], "standard",
+                            dict, df.brew_copies)
+        assert (build.copies["Mountain"], build.copies["Plains"]) == (3, 1)  # unweighted would be 2/2
+
     async def test_reference_nonbasics_then_basics_by_pips(self, monkeypatch):
         lands = [card("Sacred Foundry", "Land — Mountain Plains", 0, "", identity="RW", mana_cost=None),
                  card("Inspiring Vantage", "Land", 0, "", identity="RW", mana_cost=None)]
@@ -276,6 +295,7 @@ class TestFillLands:
         assert build.copies["Inspiring Vantage"] == 4 and build.copies["Sacred Foundry"] == 2
         assert build.copies["Mountain"] + build.copies["Plains"] == 4
         assert build.total() == 6 + 10
+
 
     async def test_requested_nonbasic_counts_and_mono_color_brew_gets_only_basics(self, monkeypatch):
         pool = AsyncMock(return_value=[])

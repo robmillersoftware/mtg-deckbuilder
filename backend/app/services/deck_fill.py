@@ -222,7 +222,8 @@ REQUESTED_SQL = text(f"""
 
 
 def _fits(slot: Slot, row: Any) -> bool:
-    role_ok = (slot.role in (row.roles or [])
+    role_ok = (slot.role in ("any", *(row.roles or []))
+               or (slot.type_contains and slot.type_contains.lower() in (row.type_line or "").lower())
                or (slot.role == "creature" and "Creature" in (row.type_line or ""))
                or (slot.role == "noncreature" and "Creature" not in (row.type_line or "")))
     return role_ok and slot.cmc_min <= (row.cmc or 0) <= slot.cmc_max
@@ -265,17 +266,17 @@ async def reserve_requested(db: AsyncSession, names: Sequence[str], plan: Plan, 
     return [c for c in WUBRG if c in colors]
 
 
-def pips(rows: Sequence[Any]) -> Dict[str, int]:
-    """Colored mana symbols across the cards' mana costs (hybrid counts both
+def pips(rows: Sequence[Tuple[Any, int]]) -> Dict[str, int]:
+    """Colored mana symbols across (row, copies) pairs' mana costs (hybrid counts both
     colors). A card without a mana cost (DFCs store it per face) counts each
     color of its identity once."""
     out = {c: 0 for c in WUBRG}
-    for r in rows:
+    for r, qty in rows:
         symbols = re.findall(r"\{([^}]*)\}", front_cost(r.mana_cost))
         letters = [ch for s in symbols for ch in s if ch in WUBRG] if symbols else [
             ch for ch in (r.color_identity or "") if ch in WUBRG]
         for ch in letters:
-            out[ch] += 1
+            out[ch] += qty
     return out
 
 
@@ -315,6 +316,6 @@ async def fill_lands(db: AsyncSession, client, build: Build, plan: Plan, colors:
                                        format, copies_for):
             build.add(name, q, rows[name])
             picked += q
-    spells = [r for r in build.rows.values() if not is_land(r.type_line)]
+    spells = [(r, build.copies[n]) for n, r in build.rows.items() if not is_land(r.type_line)]
     for name, q in split_basics(pips(spells), colors, plan.lands - picked).items():
         build.add(name, q)
