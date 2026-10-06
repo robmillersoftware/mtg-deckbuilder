@@ -2,87 +2,86 @@
 Card Role Classification Job
 Schedule: Run manually or after Scryfall sync
 
-Uses AI to classify all Standard-legal cards into functional roles
-for deck building (removal, threats, ramp, etc.)
+Uses Jev (TypeSafe System One) to tag Standard-legal cards with functional
+deck-building roles (removal, threats, ramp, etc.): one request per card,
+with a Noul per role and an efficiency Score per role.
 """
 
 import asyncio
 import logging
-import json
 from collections import defaultdict
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, distinct
 from sqlalchemy.dialects.postgresql import insert
+from typesafe_sdk import Noul, Score
 
 from app.db.session import async_session_factory
-from app.models.card import Card, CardRole, CARD_ROLES
-from app.services import llm
+from app.models.card import Card, CardRole, CARD_ROLES, ROLE_DEFINITIONS
+from app.services import jev
 
 logger = logging.getLogger(__name__)
 
-# Batch size for classification (50 cards per API call)
+# Cards per batch; each card is one Jev request, all sent concurrently through the shared cap
 BATCH_SIZE = 50
 
-CLASSIFICATION_PROMPT = """Classify these Magic: The Gathering cards into functional deck-building roles.
+ROLE_THRESHOLD = 0.5
+# ponytail: 44 questions per card can outlast the 2 s chat timeout; offline job, so allow longer
+TAG_REQUEST_TIMEOUT = 15.0
 
-CARDS:
-{cards_json}
-
-AVAILABLE ROLES (only use these exact values):
-- removal_targeted: Destroys/exiles single creature or planeswalker
-- removal_mass: Board wipes, destroys/exiles multiple creatures
-- removal_artifact_enchantment: Removes artifacts or enchantments
-- card_draw: Draws one or more cards
-- card_selection: Scry, surveil, look at top cards, filters draws
-- ramp: Adds mana or fetches lands
-- counterspell: Counters spells
-- discard: Forces opponent to discard
-- threat_cheap: Efficient creature/threat CMC 2 or less
-- threat_midrange: Value creature/planeswalker CMC 3-4
-- threat_finisher: Game-ending threat CMC 5+
-- protection: Gives hexproof, indestructible, prevents damage
-- burn: Deals damage to players/any target
-- lifegain: Gains life (as main purpose, not incidental)
-- recursion: Returns cards from graveyard
-- graveyard_hate: Exiles cards from graveyards
-- tutor: Searches library for non-land cards
-- land_fixing_untapped: Multi-color land that can enter untapped
-- land_fixing_tapped: Multi-color land that enters tapped
-- land_utility: Land with useful activated abilities
-- land_creature: Land that becomes a creature
-- land_basic: Basic land (Plains, Island, Swamp, Mountain, Forest)
-
-EFFICIENCY RATING (1-5):
-5 = Best in Standard for this role (Murder for removal, Consider for card selection)
-4 = Very good, commonly played
-3 = Solid, sees play
-2 = Playable but situational
-1 = Below rate but has the effect
-
-Return a JSON array. Cards can have MULTIPLE roles (e.g., a creature with ETB removal).
-Only include roles that genuinely apply. Omit cards that don't fit any role.
-
-Example output:
-[
-  {{
-    "name": "Murder",
-    "roles": [
-      {{"role": "removal_targeted", "efficiency": 5, "reasoning": "3 mana instant unconditional removal"}}
-    ]
-  }},
-  {{
-    "name": "Bloodtithe Harvester",
-    "roles": [
-      {{"role": "threat_cheap", "efficiency": 4, "reasoning": "2 mana 3/2 with upside"}},
-      {{"role": "removal_targeted", "efficiency": 3, "reasoning": "Can sacrifice to kill small creature"}}
-    ]
-  }}
+EFFICIENCY_LEVELS = [
+    "Pays far more mana or conditions than usual for this effect",
+    "Below rate; the effect is narrow or overcosted",
+    "Fair rate; a typical cost for this effect",
+    "Strong rate; cheap or flexible for what it does",
+    "Exceptional rate; the effect is far cheaper or stronger than typical",
 ]
 
-Only return the JSON array, no other text."""
+
+def _card_state(card: Card) -> Dict[str, Any]:
+    state = {
+        "name": card.name,
+        "mana_cost": card.mana_cost or "",
+        "mana_value": card.cmc,
+        "type_line": card.type_line or "",
+        "oracle_text": card.oracle_text or "",
+    }
+    if card.power and card.toughness:
+        state["power_toughness"] = f"{card.power}/{card.toughness}"
+    return {"card": state}
+
+
+def _role_questions() -> Dict[str, Any]:
+    """One Noul per role plus a speculative efficiency Score per role, all in one request."""
+    questions: Dict[str, Any] = {}
+    for role, definition in ROLE_DEFINITIONS.items():
+        questions[f"is:{role}"] = Noul(instructions={
+            "question": "Does `card` fill this deck-building role, judged from its oracle text and stats?",
+            "role": definition,
+        })
+        questions[f"eff:{role}"] = Score(
+            instructions={
+                "question": "Assuming `card` fills this role, how efficient is it at it relative to its mana cost?",
+                "role": definition,
+            },
+            criteria=EFFICIENCY_LEVELS,
+        )
+    return questions
+
+
+def _roles_from(resp: Any) -> List[Dict[str, Any]]:
+    roles = []
+    for role in ROLE_DEFINITIONS:
+        p = resp.nouls[f"is:{role}"].noul
+        if p >= ROLE_THRESHOLD:
+            roles.append({
+                "role": role,
+                "efficiency": round(resp.scores[f"eff:{role}"].score) + 1,
+                "confidence": round(p, 2),
+            })
+    return roles
 
 
 async def get_unclassified_cards(db: AsyncSession, limit: int = 500) -> List[Card]:
@@ -123,48 +122,26 @@ async def get_unclassified_cards(db: AsyncSession, limit: int = 500) -> List[Car
     return list(result.scalars().all())
 
 
-async def classify_cards_batch(cards: List[Card]) -> List[Dict[str, Any]]:
-    """Classify a batch of cards using the LLM."""
-    if not llm.is_configured():
-        logger.error("OPENROUTER_API_KEY not configured")
+async def classify_cards_batch(cards: List[Card], client=None) -> List[Dict[str, Any]]:
+    """Tag a batch with Jev: one request per card, concurrent through the shared cap.
+
+    Returns [] (the batch is skipped and its cards stay unclassified for the next
+    run) when Jev is not configured, any request fails, or an answer is incomplete.
+    """
+    if not cards:
         return []
-
-    try:
-        # Build card data for prompt
-        cards_data = []
-        for card in cards:
-            card_info = {
-                "name": card.name,
-                "mana_cost": card.mana_cost or "",
-                "cmc": card.cmc,
-                "type": card.type_line or "",
-                "text": card.oracle_text or "",
-            }
-            if card.power and card.toughness:
-                card_info["pt"] = f"{card.power}/{card.toughness}"
-            cards_data.append(card_info)
-
-        cards_json = json.dumps(cards_data, indent=2)
-        prompt = CLASSIFICATION_PROMPT.format(cards_json=cards_json)
-
-        content = llm.complete(system="", user=prompt, max_tokens=4096)
-
-        if not content:
-            logger.error("Empty response from LLM")
+    questions = _role_questions()
+    async with jev.session(client) as client:
+        if client is None:
+            logger.error("TYPESAFE_API_KEY not configured")
             return []
-
-        # Parse JSON from response
-        if "[" in content:
-            json_start = content.index("[")
-            json_end = content.rindex("]") + 1
-            result = json.loads(content[json_start:json_end])
-            return result
-
-        return []
-
-    except Exception as e:
-        logger.error(f"Classification API call failed: {e}")
-        return []
+        try:
+            responses = await jev.ask_many(
+                client, [(_card_state(c), questions) for c in cards], timeout=TAG_REQUEST_TIMEOUT)
+            return [{"name": c.name, "roles": _roles_from(r)} for c, r in zip(cards, responses)]
+        except Exception as e:
+            logger.error(f"Role tagging failed, skipping batch of {len(cards)} cards: {e}")
+            return []
 
 
 async def save_card_roles(
@@ -205,7 +182,8 @@ async def save_card_roles(
                 continue
 
             efficiency = role_data.get("efficiency")
-            reasoning = role_data.get("reasoning", "")
+            confidence = role_data.get("confidence")
+            reasoning = role_data.get("reasoning")
 
             # Save role for ALL printings of this card
             for card_id in card_ids:
@@ -213,13 +191,14 @@ async def save_card_roles(
                     card_id=card_id,
                     role=role,
                     efficiency=efficiency,
-                    confidence=0.9,  # High confidence for Claude classifications
+                    confidence=confidence,
                     reasoning=reasoning,
                 )
                 stmt = stmt.on_conflict_do_update(
                     constraint="uq_card_role",
                     set_={
                         "efficiency": stmt.excluded.efficiency,
+                        "confidence": stmt.excluded.confidence,
                         "reasoning": stmt.excluded.reasoning,
                         "created_at": datetime.utcnow(),
                     },
@@ -278,7 +257,6 @@ async def classify_all_cards() -> Dict[str, Any]:
                 stats["batches"] += 1
                 logger.info(f"Batch {stats['batches']}: Classifying {len(cards)} cards")
 
-                # Classify batch
                 classifications = await classify_cards_batch(cards)
 
                 if classifications:
@@ -289,9 +267,6 @@ async def classify_all_cards() -> Dict[str, Any]:
                     logger.warning(f"Batch {stats['batches']}: No classifications returned")
 
                 stats["cards_processed"] += len(cards)
-
-                # Small delay to avoid rate limits
-                await asyncio.sleep(1)
 
         except Exception as e:
             logger.error(f"Classification job failed: {e}")
