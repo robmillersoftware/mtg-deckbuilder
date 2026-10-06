@@ -7,6 +7,7 @@ Design: docs/superpowers/specs/2026-10-06-jev-deck-assembly-design.md
 """
 
 import asyncio
+import itertools
 import json
 import logging
 import re
@@ -21,7 +22,7 @@ from app.services.card_service import FORMAT_LEGALITY_MAP
 from app.services.deck_plan import (
     CARD_COLORS, CHOICE_DEADLINE, CHOICE_TIMEOUT, MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, archetype_keys, choose,
     choose_reference, choose_relatives, is_land, largest_remainder, plan_from_decklists, plan_with_llm,
-    recent_archetypes, relative_candidates,
+    SPELL_ROLES, TYPE_ROLES, recent_archetypes, relative_candidates,
 )
 from app.services.guided_builder import front_cost
 
@@ -61,6 +62,8 @@ def _plays_cte(scoped: bool = False) -> str:
 def _role_sql(slot: Slot) -> str:
     if slot.role == "any":
         cond = "true"
+    elif slot.role == "type":  # type_contains alone decides
+        cond = "false"
     elif slot.role == "creature":
         cond = "c.type_line LIKE '%Creature%'"
     elif slot.role == "noncreature":
@@ -273,14 +276,119 @@ def _shrink_largest(slots: List[Slot], n: int) -> None:
         n -= cut
 
 
-async def colors_of_requested(db: AsyncSession, names: Sequence[str], format: str) -> List[str]:
-    """The colors of the requested cards that exist and are legal in `format`."""
-    colors: set = set()
+async def requested_rows(db: AsyncSession, names: Sequence[str], format: str) -> List[Any]:
+    """The requested cards that exist and are legal in `format`."""
+    rows = []
     for name in names:
         row = (await db.execute(REQUESTED_SQL, {"name": name, "legality": FORMAT_LEGALITY_MAP[format]})).first()
         if row is not None:
-            colors.update(row.colors or [])
-    return [c for c in WUBRG if c in colors]
+            rows.append(row)
+    return rows
+
+
+def colors_of(rows: Sequence[Any]) -> List[str]:
+    return [c for c in WUBRG if any(c in (r.colors or []) for r in rows)]
+
+
+def card_text(row: Any) -> str:
+    return f"{row.name} ({row.mana_cost or ''} {row.type_line}): {(row.oracle_text or '').replace(chr(10), ' ')}"
+
+
+# A deck built around a card gets one slot of the cards that card needs most.
+SYNERGY_COPIES = (8, 16)
+SYNERGY_SYSTEM = (
+    "A player is building a 60-card Magic: The Gathering deck around the cards below. Judging "
+    "only from their rules text, describe the one group of supporting cards they need most. "
+    "Reply with only a JSON object: {\"role\": one of ROLES, \"type_contains\": one type-line "
+    "word every supporting card has (such as Artifact, Equipment, Creature, Enchantment) or "
+    "null, \"cmc_min\": int, \"cmc_max\": int, \"copies\": int from 8 to 16, "
+    "\"description\": one sentence on what the supporting cards do for them}. When the cards "
+    "reward doing something often, keep the supporting cards cheap. ROLES: "
+    + ", ".join(SPELL_ROLES + list(TYPE_ROLES))
+)
+
+
+def parse_synergy_slot(content: str) -> Optional[Slot]:
+    """The synergy slot from the LLM's JSON, or None if anything is off. With a type
+    filter the slot takes cards of that type only (role "type")."""
+    try:
+        it = json.loads(content[content.index("{"): content.rindex("}") + 1])
+        tc = (it.get("type_contains") or "").strip() or None
+        role = "type" if tc else it["role"]
+        lo, hi, copies = it.get("cmc_min", 0), it.get("cmc_max", 99), it["copies"]
+        if role != "type" and role not in SPELL_ROLES and role not in TYPE_ROLES:
+            return None
+        if any(type(v) is not int or v < 0 for v in (lo, hi, copies)) or lo > hi:
+            return None
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    copies = min(max(copies, SYNERGY_COPIES[0]), SYNERGY_COPIES[1])
+    return Slot(role, lo, hi, copies, str(it.get("description") or "Cards that support the build-around")[:200], tc)
+
+
+async def synergy_slot(rows: Sequence[Any]) -> Optional[Slot]:
+    """One LLM call: the slot of supporting cards the build-around cards need, or None."""
+    if not rows or not llm.is_configured():
+        return None
+    try:
+        content = await asyncio.to_thread(
+            llm.complete, SYNERGY_SYSTEM, "Build-around cards:\n" + "\n".join(map(card_text, rows)), 400)
+    except Exception as e:
+        logger.warning(f"[ASSEMBLY] Synergy slot LLM call failed, planning without it: {e}")
+        return None
+    return parse_synergy_slot(content)
+
+
+MAX_ADDED_COLORS = 2
+SHOWN_SUPPORT = 8  # supporting cards listed per color option
+COLOR_QUESTION = (
+    "Which colors give the build-around cards in `deck` the strongest deck? Judge how well each "
+    "option's added supporting cards work with the build-around cards' rules text, and where the "
+    "build-around cards are already played. A second or third color is worth it when its cards "
+    "make the build-around much stronger.")
+
+PLAYED_IN_SQL = text(f"""
+    SELECT MIN(trim(d.archetype)) AS archetype, COUNT(DISTINCT d.id) AS lists
+    FROM decklists d JOIN events e ON e.id = d.event_id
+    CROSS JOIN LATERAL jsonb_array_elements(d.main_deck) AS x
+    WHERE {RECENT} AND coalesce(trim(d.archetype), '') <> ''
+      AND lower(split_part(x->>'card_name', ' // ', 1)) = ANY(CAST(:names AS varchar[]))
+    GROUP BY lower(trim(d.archetype))
+    ORDER BY lists DESC, archetype
+""")
+
+
+async def played_in(db: AsyncSession, rows: Sequence[Any], format: str) -> List[str]:
+    """The recent archetypes that play the build-around cards, with list counts."""
+    names = [r.name.split(" // ")[0].lower() for r in rows]
+    result = await db.execute(PLAYED_IN_SQL, {"format": format, "names": names})
+    return [f"{a}: {n} recent {format} lists" for a, n in result.all()]
+
+
+async def choose_colors(db: AsyncSession, client, base: List[str], rows: Sequence[Any], slot: Slot,
+                        format: str) -> List[str]:
+    """The build-around cards' colors plus up to MAX_ADDED_COLORS more, by one Jev Choice
+    over what each option adds to the synergy slot's pool of played cards."""
+    others = [c for c in WUBRG if c not in base]
+    options = [[c for c in WUBRG if c in {*base, *extra}]
+               for k in range(MAX_ADDED_COLORS + 1) for extra in itertools.combinations(others, k)]
+    base_names = {r.name for r in await slot_pool(db, slot, base, format, [])}
+    criteria = {}
+    for option in options:
+        pool = await slot_pool(db, slot, option, format, [])
+        added = [r for r in pool if r.name not in base_names][:SHOWN_SUPPORT]
+        text_ = f"{len(pool)} played supporting cards"
+        if added:
+            text_ += "; adds " + ", ".join(f"{r.name} ({r.mana_cost or ''} {r.type_line}, {r.plays} lists)"
+                                           for r in added)
+        criteria["".join(option) or "colorless"] = text_
+    state = {"deck": {"build_around": [card_text(r) for r in rows], "supporting_cards": slot.description,
+                      "build_around_played_in": await played_in(db, rows, format)}}
+    async with asyncio.timeout(CHOICE_DEADLINE):
+        resp = await jev.ask(client, state, {"colors": Choice(instructions=COLOR_QUESTION, criteria=criteria)},
+                             timeout=CHOICE_TIMEOUT)
+    pick = resp.choices["colors"].choice
+    return [] if pick == "colorless" else [c for c in WUBRG if c in pick]
 
 
 async def reserve_requested(db: AsyncSession, names: Sequence[str], plan: Plan, format: str,
@@ -564,8 +672,13 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
         archetypes = await recent_archetypes(db, format)
         if not archetypes:
             raise ValueError(f"No recent {format} decklists")
-        if not colors and specific_cards:  # no colors asked for: the requested cards' colors
-            colors = await colors_of_requested(db, specific_cards, format) or None
+        build_around = [r for r in await requested_rows(db, specific_cards or [], format)
+                        if not is_land(r.type_line)]
+        synergy = await synergy_slot(build_around)
+        if not colors and build_around:  # no colors asked for: the build-around's, plus its support's
+            base = colors_of(build_around)
+            colors = (await choose_colors(db, client, base, build_around, synergy, format) if synergy
+                      else base) or None
         reference = await choose_reference(client, request_text, colors or [], archetypes, format)
         plan = await plan_from_decklists(db, [reference], format) if reference else None
         scope = [reference] if plan else []  # archetypes whose cards fill the deck first
@@ -580,6 +693,10 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
         if plan is None:
             plan = await plan_with_llm(request_text, colors or [], archetype)
 
+        if synergy and reference is None:
+            _shrink_largest(plan.slots, synergy.copies)
+            plan.slots.append(synergy)
+
         main, side = Build(), Build()
         requested_colors = await reserve_requested(db, specific_cards or [], plan, format, main)
         deck_colors = [c for c in WUBRG if c in {*(colors or plan.colors), *requested_colors}]
@@ -592,6 +709,7 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
                          else f"{request_text}, built from the current archetypes closest to it" if relatives
                          else request_text),
                 "request": request_text, "colors": deck_colors,
+                **({"build_around": [card_text(r) for r in build_around]} if build_around else {}),
                 "chosen": [f"{q}x {n}" for n, q in main.copies.items()],
                 "sideboard": [f"{q}x {n}" for n, q in side.copies.items()],
             }}

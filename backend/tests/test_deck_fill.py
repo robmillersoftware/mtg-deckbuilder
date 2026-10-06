@@ -620,8 +620,9 @@ class TestAssemble:
             slots=[Slot("threat_cheap", 2, 2, 18, "Bears"), Slot("burn", 0, 1, 20, "Burn")], lands=22)))
         reqs = [card(f"Req {i}", "Creature", 2, roles=["threat_cheap"]) for i in range(10)] + [
             card(f"Req Land {i}", "Land", 0, "", identity="R", mana_cost=None) for i in range(7)]
-        res = [MagicMock(first=MagicMock(return_value=r)) for r in reqs]
-        db = MagicMock(execute=AsyncMock(side_effect=res))
+        by_name = {r.name: r for r in reqs}
+        db = MagicMock(execute=AsyncMock(side_effect=lambda sql, params: MagicMock(
+            first=MagicMock(return_value=by_name[params["name"]]))))
         jev = FakeJev(answer=lambda state, q: {"pick": {"choice": "none", "confidence": 0.9, "probabilities": {}}}
                       if "none" in q["pick"].criteria else {})
         deck = await df.assemble(db, "x", ["R"], [r.name for r in reqs], "standard", True, "", client=jev)
@@ -644,6 +645,25 @@ class TestAssemble:
         df.relative_candidates.assert_awaited_once_with(db, ["R"], "standard")
         df.plan_with_llm.assert_awaited_once_with("around Weapons Manufacturing", ["R"], "")
         assert deck["colors"] == ["R"]
+
+    async def test_build_around_gets_support_colors_and_a_synergy_slot(self, monkeypatch):
+        pool, _ = wire(monkeypatch)
+        monkeypatch.setattr(df, "plan_with_llm", AsyncMock(return_value=Plan(
+            slots=[Slot("threat_cheap", 2, 2, 18, "Bears"), Slot("burn", 0, 1, 20, "Burn")], lands=22)))
+        synergy = Slot("type", 0, 3, 12, "Cheap artifacts", "Artifact")
+        monkeypatch.setattr(df, "synergy_slot", AsyncMock(return_value=synergy))
+        monkeypatch.setattr(df, "choose_colors", AsyncMock(return_value=["W", "R"]))
+        req = card("Engine", "Enchantment", 2, "R", mana_cost="{1}{R}", oracle="Whenever an artifact enters, ping.")
+        db = MagicMock(execute=AsyncMock(return_value=MagicMock(first=MagicMock(return_value=req))))
+        jev = FakeJev(answer=lambda state, q: {"relative": 0.3} if "relative" in q else (
+            {"pick": {"choice": "none", "confidence": 0.9, "probabilities": {}}}
+            if "none" in q["pick"].criteria else {}))
+        deck = await df.assemble(db, "around Engine", None, ["Engine"], "standard", True, "", client=jev)
+        df.choose_colors.assert_awaited_once_with(db, jev, ["R"], [req], synergy, "standard")
+        df.relative_candidates.assert_awaited_once_with(db, ["W", "R"], "standard")
+        assert deck["colors"] == ["W", "R"] and total(deck["main_deck"]) == 60
+        assert ("type", 12) in [(r, n) for r, n, _ in pool.calls]  # the synergy slot is filled like any other
+        assert any("Engine" in str(state.get("deck", {}).get("build_around")) for state, _, _ in jev.calls)
 
     async def test_brew_with_relatives_is_planned_and_filled_from_them(self, monkeypatch):
         candidates = [("Boros Aggro", 5, [("Bear 1", 4.0)]), ("Rakdos Aggro", 4, [("Bolt 0", 4.0)])]
@@ -867,3 +887,46 @@ class TestUtilityLands:
                             df.brew_copies)
         assert build.copies["Multiversal Passage"] == 4
         assert all("utility" not in q for _, q, _ in jev.calls)
+
+
+class TestSynergySlot:
+    def test_a_type_filter_makes_a_type_only_slot(self):
+        slot = df.parse_synergy_slot('Sure: {"role": "threat_cheap", "type_contains": "Artifact", '
+                                     '"cmc_min": 0, "cmc_max": 3, "copies": 14, '
+                                     '"description": "Cheap nontoken artifacts to trigger it"}')
+        assert slot == Slot("type", 0, 3, 14, "Cheap nontoken artifacts to trigger it", "Artifact")
+        assert df._role_sql(slot) == "(false OR c.type_line ILIKE '%' || :type_contains || '%')"
+        assert df._fits(slot, card("Boots", "Artifact — Equipment", 1))
+        assert not df._fits(slot, card("Bolt", "Instant", 1))
+
+    def test_without_a_type_the_role_must_be_known(self):
+        ok = df.parse_synergy_slot('{"role": "card_draw", "type_contains": null, "cmc_min": 1, '
+                                   '"cmc_max": 3, "copies": 30, "description": "d"}')
+        assert ok.role == "card_draw" and ok.copies == df.SYNERGY_COPIES[1]  # clamped
+        assert df.parse_synergy_slot('{"role": "made_up", "cmc_min": 0, "cmc_max": 3, "copies": 12}') is None
+        assert df.parse_synergy_slot("no json here") is None
+        assert df.parse_synergy_slot('{"role": "card_draw", "cmc_min": 4, "cmc_max": 2, "copies": 12}') is None
+
+
+class TestChooseColors:
+    async def test_options_add_up_to_two_colors_and_show_what_they_add(self, monkeypatch):
+        support = {"R": ["Red Trinket"], "W": ["White Relic"], "U": ["Blue Gadget"]}
+
+        async def pool(db, slot, colors, format, chosen, archetypes=()):
+            return [card(n, "Artifact", 1, c, plays=9, mana_cost="{1}") for c in colors for n in support.get(c, [])]
+        monkeypatch.setattr(df, "slot_pool", pool)
+        jev = FakeJev(answer=lambda state, q: {"colors": "WR"})
+        slot = Slot("type", 0, 3, 14, "Cheap artifacts", "Artifact")
+        build_around = [card("Engine", "Enchantment", 2, "R", oracle="Whenever an artifact enters, ping.")]
+        db = fake_db([("Jeskai Control", 2)])
+        got = await df.choose_colors(db, jev, ["R"], build_around, slot, "standard")
+        assert got == ["W", "R"]
+        sql, params = db.execute.call_args.args
+        assert params == {"format": "standard", "names": ["engine"]}
+        assert "lower(split_part(x->>'card_name', ' // ', 1)) = ANY" in str(sql)
+        state, questions, _ = jev.calls[0]
+        criteria = questions["colors"].criteria
+        assert len(criteria) == 1 + 4 + 6 and "R" in criteria and "WUR" in criteria  # R plus 0-2 colors
+        assert "White Relic" in criteria["WR"] and "Red Trinket" not in criteria["WR"]  # only what W adds
+        assert "Engine" in str(state) and "Cheap artifacts" in str(state)
+        assert state["deck"]["build_around_played_in"] == ["Jeskai Control: 2 recent standard lists"]
