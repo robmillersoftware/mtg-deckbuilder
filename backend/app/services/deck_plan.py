@@ -6,6 +6,8 @@ from one LLM call (with fixed defaults when that fails).
 Design: docs/superpowers/specs/2026-10-06-jev-deck-assembly-design.md
 """
 
+import asyncio
+import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -15,8 +17,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typesafe_sdk import Choice
 
-from app.models.card import ROLE_DEFINITIONS
-from app.services import jev
+from app.models.card import CARD_ROLES, ROLE_DEFINITIONS
+from app.services import jev, llm
 
 logger = logging.getLogger(__name__)
 
@@ -225,3 +227,76 @@ async def plan_from_decklists(db: AsyncSession, archetype: str, format: str) -> 
         colors=[c for c in WUBRG if lists_with[c] * 2 >= n_lists],
         reference=archetype,
     )
+
+
+TYPE_ROLES = ("creature", "noncreature")  # fallback roles for untagged cards
+SPELL_ROLES = [r for r in CARD_ROLES if not r.startswith("land_")]
+LAND_COUNTS = {"control": 24, "midrange": 23}  # brews; everything else 22
+
+# Brew defaults when the LLM plan is missing or invalid: (role, cmc_min, cmc_max, copies).
+DEFAULT_PLANS: Dict[str, List[Tuple[str, int, int, int]]] = {
+    "aggro": [("threat_cheap", 0, 1, 8), ("threat_cheap", 2, 2, 12), ("threat_midrange", 3, 4, 8),
+              ("removal_targeted", 0, 2, 6), ("burn", 0, 3, 4)],
+    "midrange": [("threat_cheap", 0, 2, 8), ("threat_midrange", 3, 4, 10), ("threat_finisher", 5, 99, 4),
+                 ("removal_targeted", 0, 3, 8), ("card_draw", 2, 4, 4), ("removal_mass", 3, 5, 3)],
+    "control": [("removal_targeted", 0, 3, 8), ("counterspell", 1, 3, 6), ("removal_mass", 3, 5, 4),
+                ("card_draw", 1, 4, 8), ("threat_finisher", 4, 99, 5), ("threat_midrange", 2, 4, 5)],
+}
+
+PLAN_SYSTEM = """You plan the nonland card slots of a 60-card Magic: The Gathering deck.
+Reply with only a JSON list. Each item: {"role": one of ROLES, "cmc_min": int,
+"cmc_max": int, "type_contains": a type-line word such as "Creature" or "Equipment" or null,
+"copies": positive int, "description": one sentence on what the slot does}.
+Use 6 to 10 slots. Copies across slots should total about the deck's nonland count.
+ROLES: """ + ", ".join(SPELL_ROLES + list(TYPE_ROLES))
+
+
+def lands_for(archetype_hint: str) -> int:
+    return LAND_COUNTS.get((archetype_hint or "").lower(), 22)
+
+
+def parse_llm_plan(content: str, lands: int) -> Optional[List[Slot]]:
+    """Validated slots scaled to MAIN_SIZE - lands, or None if anything is off."""
+    try:
+        items = json.loads(content[content.index("["): content.rindex("]") + 1])
+        slots = []
+        for it in items:
+            role, copies = it["role"], it["copies"]
+            lo, hi = int(it.get("cmc_min", 0)), int(it.get("cmc_max", 99))
+            if role not in SPELL_ROLES and role not in TYPE_ROLES:
+                return None
+            if not isinstance(copies, int) or isinstance(copies, bool) or copies <= 0 or lo > hi:
+                return None
+            slots.append(Slot(role, lo, hi, copies, str(it.get("description") or describe(role, lo, hi)),
+                              it.get("type_contains") or None))
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if not slots:
+        return None
+    for s, n in zip(slots, largest_remainder([s.copies for s in slots], MAIN_SIZE - lands)):
+        s.copies = n
+    return [s for s in slots if s.copies > 0]
+
+
+def default_plan(archetype_hint: str) -> List[Slot]:
+    spec = DEFAULT_PLANS.get((archetype_hint or "").lower(), DEFAULT_PLANS["midrange"])
+    lands = lands_for(archetype_hint)
+    counts = largest_remainder([c for *_, c in spec], MAIN_SIZE - lands)
+    return [Slot(role, lo, hi, n, describe(role, lo, hi)) for (role, lo, hi, _), n in zip(spec, counts)]
+
+
+async def plan_with_llm(request_text: str, colors: List[str], archetype_hint: str) -> Plan:
+    """Brew plan from one LLM call; the archetype default when that fails."""
+    lands = lands_for(archetype_hint)
+    slots = None
+    if llm.is_configured():
+        try:
+            content = await asyncio.to_thread(
+                llm.complete, PLAN_SYSTEM,
+                f"Deck request: {request_text}\nColors: {', '.join(colors) or 'any'}\n"
+                f"Archetype: {archetype_hint or 'unspecified'}\nNonland cards: {MAIN_SIZE - lands}",
+                1500)
+            slots = parse_llm_plan(content, lands)
+        except Exception as e:
+            logger.warning(f"LLM slot plan failed, using the default: {e}")
+    return Plan(slots=slots or default_plan(archetype_hint), lands=lands)

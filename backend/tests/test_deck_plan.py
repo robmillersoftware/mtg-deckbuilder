@@ -166,3 +166,77 @@ class TestPlanFromDecklists:
 
     async def test_no_lists(self):
         assert await dp.plan_from_decklists(fake_db([]), "Gone", "standard") is None
+
+
+LLM_PLAN = """Here you go:
+[{"role": "threat_cheap", "cmc_min": 1, "cmc_max": 2, "type_contains": "Creature", "copies": 16,
+  "description": "Cheap attackers"},
+ {"role": "burn", "cmc_min": 1, "cmc_max": 3, "type_contains": null, "copies": 12, "description": "Burn"},
+ {"role": "creature", "cmc_min": 3, "cmc_max": 4, "copies": 6, "description": "Top end"}]"""
+
+
+class TestParseLlmPlan:
+    def test_valid_plan_is_scaled_to_the_nonland_count(self):
+        slots = dp.parse_llm_plan(LLM_PLAN, lands=22)
+        assert [(s.role, s.cmc_min, s.cmc_max, s.type_contains) for s in slots] == [
+            ("threat_cheap", 1, 2, "Creature"), ("burn", 1, 3, None), ("creature", 3, 4, None)]
+        assert sum(s.copies for s in slots) == 38
+        assert slots[0].description == "Cheap attackers"
+
+    @pytest.mark.parametrize("bad", [
+        "no json here",
+        "[]",
+        '[{"role": "land_basic", "copies": 4}]',
+        '[{"role": "wizardry", "copies": 4}]',
+        '[{"role": "burn", "copies": 0}]',
+        '[{"role": "burn", "copies": "4"}]',
+        '[{"role": "burn", "copies": true}]',
+        '[{"role": "burn", "copies": 4, "cmc_min": 3, "cmc_max": 1}]',
+        '[{"copies": 4}]',
+        '["burn"]',
+    ])
+    def test_invalid_plans(self, bad):
+        assert dp.parse_llm_plan(bad, lands=22) is None
+
+
+class TestPlanWithLlm:
+    def test_land_counts(self):
+        assert [dp.lands_for(a) for a in ("control", "Midrange", "aggro", "combo", "")] == [24, 23, 22, 22, 22]
+
+    async def test_without_llm_uses_the_archetype_default(self):
+        plan = await dp.plan_with_llm("mono-red aggro", ["R"], "aggro")
+        assert plan.lands == 22 and plan.reference is None
+        assert plan.nonbasic_lands is None  # brew rule applies at land time
+        assert [s.role for s in plan.slots] == [r for r, *_ in dp.DEFAULT_PLANS["aggro"]]
+        assert sum(s.copies for s in plan.slots) == 38
+
+    async def test_llm_plan(self, monkeypatch):
+        seen = {}
+
+        def complete(system, user, max_tokens=4096):
+            seen["user"] = user
+            return LLM_PLAN
+
+        monkeypatch.setattr(dp.llm, "is_configured", lambda: True)
+        monkeypatch.setattr(dp.llm, "complete", complete)
+        plan = await dp.plan_with_llm("UR control", ["U", "R"], "control")
+        assert plan.lands == 24 and sum(s.copies for s in plan.slots) == 36
+        assert plan.slots[0].description == "Cheap attackers"
+        assert "UR control" in seen["user"] and "U, R" in seen["user"]
+
+    async def test_bad_json_uses_the_default(self, monkeypatch):
+        monkeypatch.setattr(dp.llm, "is_configured", lambda: True)
+        monkeypatch.setattr(dp.llm, "complete", lambda *a, **k: '[{"role": "nonsense", "copies": 4}]')
+        plan = await dp.plan_with_llm("control", ["U"], "control")
+        assert [s.role for s in plan.slots] == [r for r, *_ in dp.DEFAULT_PLANS["control"]]
+        assert sum(s.copies for s in plan.slots) == 36
+
+    async def test_llm_error_uses_the_default(self, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("down")
+
+        monkeypatch.setattr(dp.llm, "is_configured", lambda: True)
+        monkeypatch.setattr(dp.llm, "complete", boom)
+        plan = await dp.plan_with_llm("tempo", ["U"], "tempo")  # no tempo default: midrange
+        assert [s.role for s in plan.slots] == [r for r, *_ in dp.DEFAULT_PLANS["midrange"]]
+        assert plan.lands == 22
