@@ -6,6 +6,8 @@ ranking into copies. Requested cards always go in.
 Design: docs/superpowers/specs/2026-10-06-jev-deck-assembly-design.md
 """
 
+import asyncio
+import json
 import logging
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -14,8 +16,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typesafe_sdk import Choice
 
+from app.services import jev, llm
 from app.services.card_service import FORMAT_LEGALITY_MAP
-from app.services.deck_plan import MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, choose, is_land, largest_remainder
+from app.services.deck_plan import (
+    MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, choose, choose_reference, is_land, largest_remainder,
+    plan_from_decklists, plan_with_llm, recent_archetypes,
+)
 from app.services.guided_builder import front_cost
 
 logger = logging.getLogger(__name__)
@@ -319,3 +325,142 @@ async def fill_lands(db: AsyncSession, client, build: Build, plan: Plan, colors:
     spells = [(r, build.copies[n]) for n, r in build.rows.items() if not is_land(r.type_line)]
     for name, q in split_basics(pips(spells), colors, plan.lands - picked).items():
         build.add(name, q)
+
+
+SIXTY_CARD_FORMATS = {f for f in FORMAT_LEGALITY_MAP if f != "cedh"}
+COLOR_WORDS = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+SUMMARY_SYSTEM = """You name and describe a finished Magic: The Gathering deck.
+Reply with only JSON: {"name": "a short deck name", "strategy_summary": "2-4 sentences on how the deck plays and wins"}."""
+SIDEBOARD_SIZE = 15
+SIDEBOARD_QUESTION = "Which card best belongs in this deck's sideboard?"
+SIDEBOARD_SLOT = "A sideboard card: an answer or swap for this deck's hard matchups after game 1"
+
+
+async def sideboard_pool(db: AsyncSession, colors: List[str], format: str, chosen: Sequence[str],
+                         archetype: Optional[str] = None) -> List[Any]:
+    """Legal, on-color, nonbasic cards from sideboards in the window: the
+    archetype's lists, or every list in the format when archetype is None. Most
+    played first, at most MAX_OPTIONS. Rows add `copies`: the card's average
+    sideboard copies there, rounded, at least 1."""
+    scope = "AND lower(trim(d.archetype)) = lower(trim(:archetype))" if archetype else ""
+    sql = text(f"""
+        WITH side AS (
+            SELECT lower(split_part(x->>'card_name', ' // ', 1)) AS k, COUNT(DISTINCT d.id) AS plays,
+                   AVG((x->>'quantity')::int) AS avg_copies
+            FROM decklists d JOIN events e ON e.id = d.event_id
+            CROSS JOIN LATERAL jsonb_array_elements(d.sideboard) AS x
+            WHERE {RECENT} {scope}
+            GROUP BY 1
+        )
+        SELECT c.name, MAX(c.mana_cost) AS mana_cost, MAX(c.type_line) AS type_line,
+               MAX(c.oracle_text) AS oracle_text, MAX(c.cmc) AS cmc, MAX(s.plays) AS plays,
+               GREATEST(1, ROUND(MAX(s.avg_copies)))::int AS copies,
+               MAX(c.color_identity) AS color_identity
+        FROM cards c JOIN side s ON s.k = lower(split_part(c.name, ' // ', 1))
+        WHERE c.legalities->>:legality = 'legal'
+          AND {CARD_COLORS} <@ CAST(:colors AS varchar[])
+          AND coalesce(c.type_line, '') NOT LIKE 'Basic%'
+          AND NOT (c.name = ANY(CAST(:chosen AS varchar[])))
+        GROUP BY c.name
+        ORDER BY plays DESC, c.name
+        LIMIT {MAX_OPTIONS}
+    """)
+    params = {"format": format, "legality": FORMAT_LEGALITY_MAP[format], "colors": list(colors),
+              "chosen": list(chosen)}
+    if archetype:
+        params["archetype"] = archetype
+    return list((await db.execute(sql, params)).all())
+
+
+async def fill_sideboard(db: AsyncSession, client, main: Build, side: Build, colors: List[str], format: str,
+                         state: Callable[[], Dict[str, Any]], reference: Optional[str]) -> None:
+    """Fill `side` to SIDEBOARD_SIZE: one Jev ranking over the reference lists'
+    sideboard cards, then (to top up a short pool, or alone for a brew) one over
+    the format's sideboard cards. Copies are each card's average sideboard copies,
+    capped at 4; main-deck cards are excluded, so no card passes 4 in total."""
+    for archetype in ([reference] if reference else []) + [None]:
+        need = SIDEBOARD_SIZE - side.total()
+        if need <= 0:
+            return
+        pool = await sideboard_pool(db, colors, format, [*main.copies, *side.copies], archetype)
+        rows = {r.name: r for r in pool}
+        picks = await fill_slot(client, Slot("sideboard", 0, 99, need, SIDEBOARD_SLOT), pool, state(), format,
+                                lambda name, rank: rows[name].copies, SIDEBOARD_QUESTION)
+        for name, q in picks:
+            side.add(name, q, rows[name])
+
+
+async def summarize(main: Build, side: Build, request_text: str, reference: Optional[str],
+                    colors: List[str], format: str) -> Tuple[str, str]:
+    """(deck name, strategy summary) from one LLM call; a template without the LLM."""
+    name = reference or f"{'-'.join(COLOR_WORDS[c] for c in colors)} Deck"
+    summary = (f"Built from recent {format.title()} tournament lists of {reference}." if reference
+               else f"A {format.title()} brew for: {request_text}")
+    if not llm.is_configured():
+        return name, summary
+    listing = "\n".join(f"{q} {n}" for n, q in main.copies.items())
+    if side.copies:
+        listing += "\nSideboard:\n" + "\n".join(f"{q} {n}" for n, q in side.copies.items())
+    try:
+        content = await asyncio.to_thread(llm.complete, SUMMARY_SYSTEM,
+                                          f"Request: {request_text}\n\n{listing}", 600)
+        data = json.loads(content[content.index("{"): content.rindex("}") + 1])
+        if isinstance(data.get("name"), str) and isinstance(data.get("strategy_summary"), str) \
+                and data["name"].strip() and data["strategy_summary"].strip():
+            return data["name"].strip(), data["strategy_summary"].strip()
+    except Exception as e:
+        logger.warning(f"[ASSEMBLY] Summary LLM call failed, using the template: {e}")
+    return name, summary
+
+
+async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[str]],
+                   specific_cards: Optional[List[str]], format: str = "standard",
+                   include_sideboard: bool = True, archetype: str = "", client=None) -> Dict[str, Any]:
+    """Build a deck: reference or brew plan, requested cards, Jev-filled slots,
+    lands, sideboard, summary. Returns {name, strategy_summary,
+    main_deck, sideboard} like ai_service.generate_deck, plus the reference
+    archetype (None for a brew) and the deck colors. Raises when Jev is not
+    configured or fails, the format is not 60-card, the format has no recent
+    decklists, or a brew has no colors; the caller falls back to the LLM path."""
+    if format not in SIXTY_CARD_FORMATS:
+        raise ValueError(f"Jev assembly builds 60-card formats only, not {format}")
+    async with jev.session(client) as client:
+        if client is None:
+            raise RuntimeError("Jev is not configured")
+        archetypes = await recent_archetypes(db, format)
+        if not archetypes:
+            raise ValueError(f"No recent {format} decklists")
+        reference = await choose_reference(client, request_text, colors or [], archetypes, format)
+        plan = await plan_from_decklists(db, reference, format) if reference else None
+        if plan is None:
+            reference = None
+            plan = await plan_with_llm(request_text, colors or [], archetype)
+
+        main, side = Build(), Build()
+        requested_colors = await reserve_requested(db, specific_cards or [], plan, format, main)
+        deck_colors = [c for c in WUBRG if c in {*(colors or plan.colors), *requested_colors}]
+        if not deck_colors:
+            raise ValueError("A brew needs colors")
+
+        def state() -> Dict[str, Any]:
+            return {"deck": {
+                "plan": f"{reference}, a current {format.title()} archetype" if reference else request_text,
+                "request": request_text, "colors": deck_colors,
+                "chosen": [f"{q}x {n}" for n, q in main.copies.items()],
+                "sideboard": [f"{q}x {n}" for n, q in side.copies.items()],
+            }}
+
+        def main_copies(name: str, rank: int) -> int:
+            return plan.copies.get(name) or brew_copies(name, rank)
+
+        short = await fill_slots(db, client, plan.slots, main, deck_colors, format, state, main_copies)
+        plan.lands += short  # a pool too thin to fill the spells: basics keep the deck at 60
+        await fill_lands(db, client, main, plan, deck_colors, format, state, main_copies)
+        if include_sideboard:
+            await fill_sideboard(db, client, main, side, deck_colors, format, state, reference)
+
+    name, summary = await summarize(main, side, request_text, reference, deck_colors, format)
+    logger.info(f"[ASSEMBLY] {name}: reference={reference} colors={deck_colors} "
+                f"main={main.total()} sideboard={side.total()}")
+    return {"name": name, "strategy_summary": summary, "main_deck": main.entries(),
+            "sideboard": side.entries(), "reference": reference, "colors": deck_colors}

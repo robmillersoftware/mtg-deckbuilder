@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from app.services import deck_fill as df
 from app.services.deck_plan import Plan, Slot
 from tests.jev_fake import FakeJev
@@ -311,3 +313,208 @@ class TestFillLands:
         await df.fill_lands(None, FakeJev(), build, plan(lands=18), ["R", "W"], "standard", dict, df.brew_copies)
         pool.assert_not_called()  # 2-color brew wants 4 nonbasics; the requested Foundry already is 4
         assert build.copies["Mountain"] + build.copies["Plains"] == 18
+
+
+class TestSummarize:
+    async def test_template_without_llm(self):
+        main = df.Build()
+        assert await df.summarize(main, df.Build(), "Boros aggro", "Boros Aggro", ["W", "R"], "standard") == (
+            "Boros Aggro", "Built from recent Standard tournament lists of Boros Aggro.")
+        assert await df.summarize(main, df.Build(), "mono-red burn", None, ["R"], "standard") == (
+            "Red Deck", "A Standard brew for: mono-red burn")
+
+    async def test_llm_name_and_summary(self, monkeypatch):
+        seen = {}
+
+        def complete(system, user, max_tokens=4096):
+            seen["user"] = user
+            return 'Sure: {"name": "Red Rush", "strategy_summary": "Attack early."}'
+
+        monkeypatch.setattr(df.llm, "is_configured", lambda: True)
+        monkeypatch.setattr(df.llm, "complete", complete)
+        main, side = df.Build(), df.Build()
+        main.add("Shock", 4)
+        side.add("Abrade", 2)
+        assert await df.summarize(main, side, "burn", None, ["R"], "standard") == ("Red Rush", "Attack early.")
+        assert "4 Shock" in seen["user"] and "Sideboard:\n2 Abrade" in seen["user"]
+
+    async def test_bad_llm_reply_uses_the_template(self, monkeypatch):
+        monkeypatch.setattr(df.llm, "is_configured", lambda: True)
+        monkeypatch.setattr(df.llm, "complete", lambda *a, **k: '{"name": ""}')
+        assert (await df.summarize(df.Build(), df.Build(), "x", None, ["U", "R"], "standard"))[0] == "Blue-Red Deck"
+
+
+MAIN_POOL = [
+    card(f"Bear {i}", "Creature", cmc=2, roles=["threat_cheap"], colors="RW"[i % 2]) for i in range(20)
+] + [card(f"Bolt {i}", cmc=1, roles=["burn"]) for i in range(10)] + [
+    card(f"Hate {i}", "Enchantment", cmc=2, roles=["graveyard_hate"], colors="W") for i in range(8)]
+RED = {c.name for c in MAIN_POOL if c.colors == ["R"]}
+LANDS = [card("Sacred Foundry", "Land", 0, "", identity="RW", mana_cost=None),
+         card("Inspiring Vantage", "Land", 0, "", identity="RW", mana_cost=None)]
+
+
+def side_card(name, copies, colors="R"):
+    row = card(name, "Instant", 2, colors)
+    row.copies = copies
+    return row
+
+
+def fake_side_pool(by_scope):
+    calls = []
+
+    async def pool(db, colors, format, chosen, archetype=None):
+        calls.append((archetype, list(chosen)))
+        return [c for c in by_scope.get(archetype, []) if c.name not in chosen and set(c.colors) <= set(colors)]
+    pool.calls = calls
+    return pool
+
+
+class TestSideboardPool:
+    async def test_reference_sideboards(self):
+        db = fake_db([side_card("Abrade", 2)])
+        rows = await df.sideboard_pool(db, ["R", "W"], "standard", ["Shock"], "Boros Aggro")
+        assert [r.name for r in rows] == ["Abrade"]
+        stmt, params = db.execute.call_args[0]
+        sql = str(stmt)
+        assert params == {"format": "standard", "legality": "standard", "colors": ["R", "W"],
+                          "chosen": ["Shock"], "archetype": "Boros Aggro"}
+        assert "jsonb_array_elements(d.sideboard)" in sql and "d.main_deck" not in sql
+        assert "e.date >= CURRENT_DATE - 14" in sql and "JOIN side s" in sql  # played sideboard cards only
+        assert "lower(trim(d.archetype)) = lower(trim(:archetype))" in sql
+        assert df.CARD_COLORS + " <@ CAST(:colors AS varchar[])" in sql
+        assert "GREATEST(1, ROUND(MAX(s.avg_copies)))::int AS copies" in sql
+        assert "NOT (c.name = ANY(CAST(:chosen AS varchar[])))" in sql
+        assert "ORDER BY plays DESC, c.name" in sql and "LIMIT 255" in sql
+
+    async def test_format_sideboards_for_a_brew(self):
+        db = fake_db()
+        await df.sideboard_pool(db, ["R"], "standard", [])
+        stmt, params = db.execute.call_args[0]
+        assert "d.archetype" not in str(stmt) and "archetype" not in params
+
+
+class TestFillSideboard:
+    async def test_reference_cards_then_format_top_up_to_exactly_15(self, monkeypatch):
+        pool = fake_side_pool({
+            "Boros Aggro": [side_card("Rest in Peace", 2, "W"), side_card("Abrade", 3), side_card("Duress", 2, "B")],
+            None: [side_card("Abrade", 3), side_card("Sear", 6), side_card("Get Lost", 2, "W"),
+                   side_card("Ghost Vessel", 1, ""), side_card("Pyroclasm", 4), side_card("Shock", 4)],
+        })
+        monkeypatch.setattr(df, "sideboard_pool", pool)
+        main, side = df.Build(), df.Build()
+        main.add("Shock", 4)
+        jev = FakeJev()
+        await df.fill_sideboard(None, jev, main, side, ["R", "W"], "standard",
+                                lambda: {"deck": {"chosen": ["4x Shock"]}}, "Boros Aggro")
+        assert pool.calls == [("Boros Aggro", ["Shock"]), (None, ["Shock", "Rest in Peace", "Abrade"])]
+        # average copies (Sear's 6 capped at 4), the last pick cut to land on exactly 15
+        assert side.copies == {"Rest in Peace": 2, "Abrade": 3, "Sear": 4, "Get Lost": 2, "Ghost Vessel": 1,
+                               "Pyroclasm": 3}
+        state, questions, _ = jev.calls[0]
+        assert questions["pick"].instructions["question"] == df.SIDEBOARD_QUESTION
+        assert state == {"deck": {"chosen": ["4x Shock"]}}
+
+    async def test_brew_uses_the_format_sideboards(self, monkeypatch):
+        pool = fake_side_pool({None: [side_card(f"Side {i}", 4) for i in range(6)]})
+        monkeypatch.setattr(df, "sideboard_pool", pool)
+        side = df.Build()
+        await df.fill_sideboard(None, FakeJev(), df.Build(), side, ["R"], "standard", dict, None)
+        assert pool.calls == [(None, [])]
+        assert side.copies == {"Side 0": 4, "Side 1": 4, "Side 2": 4, "Side 3": 3}
+
+    async def test_a_full_reference_pool_needs_no_top_up(self, monkeypatch):
+        pool = fake_side_pool({"UW Control": [side_card(f"Side {i}", 3, "W") for i in range(5)]})
+        monkeypatch.setattr(df, "sideboard_pool", pool)
+        side = df.Build()
+        await df.fill_sideboard(None, FakeJev(), df.Build(), side, ["W", "U"], "standard", dict, "UW Control")
+        assert [c[0] for c in pool.calls] == ["UW Control"] and side.total() == 15
+
+
+def wire(monkeypatch, reference_plan=None, archetypes=(("Boros Aggro", 5),)):
+    pool = fake_pool(MAIN_POOL)
+    monkeypatch.setattr(df, "recent_archetypes", AsyncMock(return_value=list(archetypes)))
+    monkeypatch.setattr(df, "plan_from_decklists", AsyncMock(return_value=reference_plan))
+    monkeypatch.setattr(df, "slot_pool", pool)
+    monkeypatch.setattr(df, "land_pool", AsyncMock(return_value=LANDS))
+    side = fake_side_pool({"Boros Aggro": [side_card(f"Side {i}", 3, "RW"[i % 2]) for i in range(6)],
+                           None: [side_card(f"Spare {i}", 2) for i in range(10)]})
+    monkeypatch.setattr(df, "sideboard_pool", side)
+    return pool, side
+
+
+def reference_plan():
+    return Plan(slots=[Slot("threat_cheap", 2, 2, 20, "Bears"), Slot("burn", 0, 1, 16, "Burn")],
+                lands=24, nonbasic_lands=8, copies={"Bear 0": 4, "Bear 1": 2, "Sacred Foundry": 4},
+                colors=["W", "R"], reference="Boros Aggro")
+
+
+def total(entries):
+    return sum(e["quantity"] for e in entries)
+
+
+class TestAssemble:
+    async def test_reference_deck_is_60_and_15(self, monkeypatch):
+        _, side_pool = wire(monkeypatch, reference_plan())
+        jev = FakeJev(answer=lambda state, q: (
+            {"pick": {"choice": "Boros Aggro", "confidence": 0.9, "probabilities": {}}}
+            if "none" in q["pick"].criteria else {}))
+        deck = await df.assemble(None, "Boros aggro", ["R", "W"], [], "standard", True, "aggro", client=jev)
+        assert total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15
+        assert deck["name"] == "Boros Aggro" and deck["reference"] == "Boros Aggro"
+        assert deck["colors"] == ["W", "R"]
+        main = {e["card_name"]: e["quantity"] for e in deck["main_deck"]}
+        assert main["Bear 0"] == 4 and main["Bear 1"] == 2  # reference copies
+        assert main["Sacred Foundry"] == 4
+        side = {e["card_name"] for e in deck["sideboard"]}
+        assert not side & set(main)  # copies stay within 4 across main and sideboard
+        assert side_pool.calls[0][0] == "Boros Aggro" and set(side_pool.calls[0][1]) == set(main)
+        state = jev.calls[-1][0]["deck"]
+        assert state["plan"] == "Boros Aggro, a current Standard archetype" and state["colors"] == ["W", "R"]
+
+    async def test_brew_gets_a_format_sideboard_and_basic_land_split(self, monkeypatch):
+        _, side_pool = wire(monkeypatch)
+        brew = AsyncMock(return_value=Plan(slots=[Slot("threat_cheap", 2, 2, 18, "Bears"),
+                                                  Slot("burn", 0, 1, 20, "Burn")], lands=22))
+        monkeypatch.setattr(df, "plan_with_llm", brew)
+        jev = FakeJev(answer=lambda state, q: (
+            {"pick": {"choice": "none", "confidence": 0.9, "probabilities": {}}}
+            if "none" in q["pick"].criteria else {}))
+        deck = await df.assemble(None, "mono-red aggro", ["R"], [], "standard", True, "aggro", client=jev)
+        main = {e["card_name"]: e["quantity"] for e in deck["main_deck"]}
+        assert total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15 and deck["reference"] is None
+        assert [c[0] for c in side_pool.calls] == [None]  # the format's sideboard cards
+        assert main["Mountain"] == 22 and "Sacred Foundry" not in main  # mono-color brew: basics only
+        assert {n for n in main if n.startswith("Bear")} <= RED  # on-color only
+        brew.assert_awaited_once_with("mono-red aggro", ["R"], "aggro")
+
+    async def test_reference_colors_when_none_were_parsed(self, monkeypatch):
+        wire(monkeypatch, reference_plan())
+        jev = FakeJev(answer=lambda state, q: (
+            {"pick": {"choice": "Boros Aggro", "confidence": 0.9, "probabilities": {}}}
+            if "none" in q["pick"].criteria else {}))
+        await df.assemble(None, "Build the best deck", [], [], "standard", False, "", client=jev)
+        assert jev.calls[-1][0]["deck"]["colors"] == ["W", "R"]
+
+    async def test_not_sixty_card_format(self):
+        with pytest.raises(ValueError):
+            await df.assemble(None, "x", ["B"], [], "cedh", False, client=FakeJev())
+
+    async def test_no_jev_key(self):
+        with pytest.raises(RuntimeError):
+            await df.assemble(None, "x", ["R"], [], "standard")  # conftest blanks TYPESAFE_API_KEY
+
+    async def test_no_recent_decklists(self, monkeypatch):
+        wire(monkeypatch, archetypes=())
+        with pytest.raises(ValueError):
+            await df.assemble(None, "x", ["R"], [], "standard", client=FakeJev())
+
+    async def test_brew_without_colors(self, monkeypatch):
+        wire(monkeypatch)
+        jev = FakeJev(answer=lambda state, q: {"pick": "none"})
+        with pytest.raises(ValueError):
+            await df.assemble(None, "something fun", [], [], "standard", client=jev)
+
+    async def test_jev_failure_propagates(self, monkeypatch):
+        wire(monkeypatch, reference_plan())
+        with pytest.raises(Exception):
+            await df.assemble(None, "x", ["R"], [], "standard", client=FakeJev(fail=lambda s: True))
