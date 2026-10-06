@@ -32,6 +32,11 @@ class TestHelpers:
         assert dp.describe("creature", 5, 99) == "A creature (mana value 5 or more)"
         assert dp.describe("noncreature", 3, 3) == "A noncreature spell (mana value 3)"
 
+    def test_archetype_keys_lower_trim_and_dedupe(self):
+        assert dp.archetype_keys(["Boros Aggro", " boros aggro", "4/5C Control", "4/5c Control "]) == [
+            "4/5c control", "boros aggro"]
+        assert dp.archetype_keys([]) == []
+
     def test_largest_remainder_hits_the_total(self):
         assert dp.largest_remainder([1.5, 1.5, 1.0], 4) == [2, 1, 1]
         assert sum(dp.largest_remainder([3.3, 7.1, 2.2, 9.9], 37)) == 37

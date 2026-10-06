@@ -56,6 +56,12 @@ class Plan:
     reference: Optional[str] = None
 
 
+def archetype_keys(names: Sequence[str]) -> List[str]:
+    """Archetype names as the SQL compares them (lower case, trimmed), deduplicated:
+    bind as :archetypes against lower(trim(d.archetype))."""
+    return sorted({n.strip().lower() for n in names})
+
+
 def band_of(cmc: float) -> Tuple[int, int]:
     return next(b for b in BANDS if cmc <= b[1])
 

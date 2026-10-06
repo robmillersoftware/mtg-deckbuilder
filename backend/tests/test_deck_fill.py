@@ -59,14 +59,22 @@ class TestSlotPool:
 
     async def test_archetype_scope_is_bound(self):
         db = fake_db()
-        await df.slot_pool(db, Slot("burn", 0, 1, 8, "Burn"), ["R"], "standard", [], "Boros Aggro")
+        await df.slot_pool(db, Slot("burn", 0, 1, 8, "Burn"), ["R"], "standard", [], ["Boros Aggro"])
         stmt, params = db.execute.call_args[0]
-        assert "AND lower(trim(d.archetype)) = lower(trim(:archetype))" in str(stmt)
-        assert params["archetype"] == "Boros Aggro"
+        assert "AND lower(trim(d.archetype)) = ANY(CAST(:archetypes AS varchar[]))" in str(stmt)
+        assert params["archetypes"] == ["boros aggro"]
         db = fake_db()
         await df.slot_pool(db, Slot("burn", 0, 1, 8, "Burn"), ["R"], "standard", [])
         assert "archetype" not in str(db.execute.call_args[0][0])
-        assert "archetype" not in db.execute.call_args[0][1]
+        assert "archetypes" not in db.execute.call_args[0][1]
+
+    async def test_a_set_of_archetypes_is_one_bound_list(self):
+        db = fake_db()
+        await df.slot_pool(db, Slot("burn", 0, 1, 8, "Burn"), ["R"], "standard", [],
+                           ["Rakdos Aggro", " rakdos aggro ", "4/5C Control", "4/5c Control"])
+        stmt, params = db.execute.call_args[0]
+        assert params["archetypes"] == ["4/5c control", "rakdos aggro"]  # case and space duplicates merge
+        assert str(stmt).count(":archetypes") == 1
 
     async def test_type_roles_and_type_contains(self):
         db = fake_db()
@@ -135,14 +143,15 @@ CARDS = [
 
 
 def fake_pool(cards, ref_names=()):
-    """Pool over `cards`; with an archetype only `ref_names` qualify."""
+    """Pool over `cards`; with archetypes only `ref_names` qualify. `scopes`
+    records each call's archetypes joined by ", " (None: the whole format)."""
     calls, scopes = [], []
 
-    async def pool(db, slot, colors, format, chosen, archetype=None):
+    async def pool(db, slot, colors, format, chosen, archetypes=()):
         calls.append((slot.role, slot.copies, list(chosen)))
-        scopes.append(archetype)
+        scopes.append(", ".join(archetypes) or None)
         return [c for c in cards
-                if (archetype is None or c.name in ref_names)
+                if (not archetypes or c.name in ref_names)
                 and (slot.role == "any" or slot.role in c.roles)
                 and slot.cmc_min <= c.cmc <= slot.cmc_max and c.name not in chosen
                 and set(c.colors) <= set(colors)]
@@ -192,7 +201,7 @@ class TestReferenceFill:
         monkeypatch.setattr(df, "slot_pool", pool)
         build = df.Build()
         short = await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 8, "")], build, ["R"], "standard", dict,
-                                    df.brew_copies, "Boros Aggro")
+                                    df.brew_copies, ["Boros Aggro"])
         assert pool.scopes == ["Boros Aggro", None]
         assert pool.calls[0][:2] == ("burn", 8) and pool.calls[1][:2] == ("burn", 4)  # shortfall only
         assert pool.calls[1][2] == ["Bolt A"]  # chosen cards excluded from the format pool
@@ -202,8 +211,15 @@ class TestReferenceFill:
         pool = fake_pool(CARDS, ref_names={"Bolt A", "Bolt B"})
         monkeypatch.setattr(df, "slot_pool", pool)
         await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 8, "")], df.Build(), ["R"], "standard", dict,
-                            df.brew_copies, "Boros Aggro")
+                            df.brew_copies, ["Boros Aggro"])
         assert pool.scopes == ["Boros Aggro"]
+
+    async def test_a_set_of_relatives_is_one_scope(self, monkeypatch):
+        pool = fake_pool(CARDS, ref_names={"Bolt A"})
+        monkeypatch.setattr(df, "slot_pool", pool)
+        await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 8, "")], df.Build(), ["R"], "standard", dict,
+                            df.brew_copies, ["Rakdos Aggro", "Boros Aggro"])
+        assert pool.scopes == ["Rakdos Aggro, Boros Aggro", None]  # one pool over all of them, then the format
 
     async def test_brew_uses_the_format_pool_only(self, monkeypatch):
         pool = fake_pool(CARDS)
@@ -218,7 +234,7 @@ class TestReferenceFill:
         monkeypatch.setattr(df, "slot_pool", pool)
         build = df.Build()
         short = await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 8, "")], build, ["R"], "standard", dict,
-                                    df.brew_copies, "Boros Aggro")
+                                    df.brew_copies, ["Boros Aggro"])
         assert build.copies == {"Bolt A": 4, "Ogre": 4} and short == 0  # Ogre only fits the catch-all
         assert pool.scopes == ["Boros Aggro", None, "Boros Aggro", None]
         assert pool.calls[2][:2] == ("any", 4)
@@ -449,11 +465,13 @@ def side_card(name, copies, colors="R"):
 
 
 def fake_side_pool(by_scope):
+    """`by_scope` keys: archetypes joined by ", ", or None for the whole format."""
     calls = []
 
-    async def pool(db, colors, format, chosen, archetype=None):
-        calls.append((archetype, list(chosen)))
-        return [c for c in by_scope.get(archetype, []) if c.name not in chosen and set(c.colors) <= set(colors)]
+    async def pool(db, colors, format, chosen, archetypes=()):
+        key = ", ".join(archetypes) or None
+        calls.append((key, list(chosen)))
+        return [c for c in by_scope.get(key, []) if c.name not in chosen and set(c.colors) <= set(colors)]
     pool.calls = calls
     return pool
 
@@ -461,15 +479,15 @@ def fake_side_pool(by_scope):
 class TestSideboardPool:
     async def test_reference_sideboards(self):
         db = fake_db([side_card("Abrade", 2)])
-        rows = await df.sideboard_pool(db, ["R", "W"], "standard", ["Shock"], "Boros Aggro")
+        rows = await df.sideboard_pool(db, ["R", "W"], "standard", ["Shock"], ["Boros Aggro"])
         assert [r.name for r in rows] == ["Abrade"]
         stmt, params = db.execute.call_args[0]
         sql = str(stmt)
         assert params == {"format": "standard", "legality": "standard", "colors": ["R", "W"],
-                          "chosen": ["Shock"], "archetype": "Boros Aggro"}
+                          "chosen": ["Shock"], "archetypes": ["boros aggro"]}
         assert "jsonb_array_elements(d.sideboard)" in sql and "d.main_deck" not in sql
         assert "e.date >= CURRENT_DATE - 14" in sql and "JOIN side s" in sql  # played sideboard cards only
-        assert "lower(trim(d.archetype)) = lower(trim(:archetype))" in sql
+        assert "lower(trim(d.archetype)) = ANY(CAST(:archetypes AS varchar[]))" in sql
         assert df.CARD_COLORS + " <@ CAST(:colors AS varchar[])" in sql
         assert "GREATEST(1, ROUND(MAX(s.avg_copies)))::int AS copies" in sql
         assert "NOT (c.name = ANY(CAST(:chosen AS varchar[])))" in sql
@@ -479,7 +497,7 @@ class TestSideboardPool:
         db = fake_db()
         await df.sideboard_pool(db, ["R"], "standard", [])
         stmt, params = db.execute.call_args[0]
-        assert "d.archetype" not in str(stmt) and "archetype" not in params
+        assert "d.archetype" not in str(stmt) and "archetypes" not in params
 
 
 class TestFillSideboard:
@@ -499,7 +517,7 @@ class TestFillSideboard:
         main.add("Shock", 4)
         jev = FakeJev()
         await df.fill_sideboard(None, jev, main, side, ["R", "W"], "standard",
-                                lambda: {"deck": {"chosen": ["4x Shock"]}}, "Boros Aggro")
+                                lambda: {"deck": {"chosen": ["4x Shock"]}}, ["Boros Aggro"])
         assert pool.calls == [("Boros Aggro", ["Shock"]), (None, ["Shock", "Rest in Peace", "Abrade"])]
         # average copies (Sear's 6 capped at 4), the last pick cut to land on exactly 15
         assert side.copies == {"Rest in Peace": 2, "Abrade": 3, "Sear": 4, "Get Lost": 2, "Ghost Vessel": 1,
@@ -520,7 +538,7 @@ class TestFillSideboard:
         pool = fake_side_pool({"UW Control": [side_card(f"Side {i}", 3, "W") for i in range(5)]})
         monkeypatch.setattr(df, "sideboard_pool", pool)
         side = df.Build()
-        await df.fill_sideboard(None, FakeJev(), df.Build(), side, ["W", "U"], "standard", dict, "UW Control")
+        await df.fill_sideboard(None, FakeJev(), df.Build(), side, ["W", "U"], "standard", dict, ["UW Control"])
         assert [c[0] for c in pool.calls] == ["UW Control"] and side.total() == 15
 
 
@@ -669,7 +687,7 @@ class TestNoFit:
         bolts = [card("Bolt A", roles=["burn"]), card("Bolt B", roles=["burn"])]
         trail = [card("Candy Trail", "Artifact", roles=["card_draw"])]
 
-        async def pool(db, slot, colors, format, chosen, archetype=None):
+        async def pool(db, slot, colors, format, chosen, archetypes=()):
             return {"card_draw": trail, "burn": bolts, "any": bolts + trail}[slot.role]
         monkeypatch.setattr(df, "slot_pool", pool)
 

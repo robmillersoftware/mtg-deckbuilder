@@ -19,8 +19,8 @@ from typesafe_sdk import Choice, Noul
 from app.services import jev, llm
 from app.services.card_service import FORMAT_LEGALITY_MAP
 from app.services.deck_plan import (
-    CHOICE_DEADLINE, CHOICE_TIMEOUT, MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, choose, choose_reference, is_land, largest_remainder,
-    plan_from_decklists, plan_with_llm, recent_archetypes,
+    CHOICE_DEADLINE, CHOICE_TIMEOUT, MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, archetype_keys, choose, choose_reference,
+    is_land, largest_remainder, plan_from_decklists, plan_with_llm, recent_archetypes,
 )
 from app.services.guided_builder import front_cost
 
@@ -43,10 +43,14 @@ SLOT_QUESTION = ("Which card best fills this slot in the deck described by `deck
 CARD_COLORS = "coalesce(nullif(c.colors, '{}'), c.color_identity, '{}')"
 
 
-def _plays_cte(archetype: Optional[str] = None) -> str:
+# Decklists of a set of archetypes (bind :archetypes to archetype_keys(...)).
+ARCHETYPE_SCOPE = "AND lower(trim(d.archetype)) = ANY(CAST(:archetypes AS varchar[]))"
+
+
+def _plays_cte(scoped: bool = False) -> str:
     """Main-deck plays per card (front face, lower case) in the window, within
-    one archetype's lists when `archetype` is given (bind :archetype)."""
-    scope = "AND lower(trim(d.archetype)) = lower(trim(:archetype))" if archetype else ""
+    the :archetypes lists when `scoped`."""
+    scope = ARCHETYPE_SCOPE if scoped else ""
     return f"""
         played AS (
             SELECT lower(split_part(x->>'card_name', ' // ', 1)) AS k, COUNT(DISTINCT d.id) AS plays
@@ -72,11 +76,12 @@ def _role_sql(slot: Slot) -> str:
 
 
 async def slot_pool(db: AsyncSession, slot: Slot, colors: List[str], format: str,
-                    chosen: Sequence[str], archetype: Optional[str] = None) -> List[Any]:
+                    chosen: Sequence[str], archetypes: Sequence[str] = ()) -> List[Any]:
     """Played, legal, on-color nonland cards that fit the slot, most played first
-    (at most MAX_OPTIONS); plays are counted within `archetype`'s lists when given. Rows: name, mana_cost, type_line, oracle_text, cmc, plays."""
+    (at most MAX_OPTIONS); plays are counted within the `archetypes`' lists when
+    given. Rows: name, mana_cost, type_line, oracle_text, cmc, plays."""
     sql = text(f"""
-        WITH {_plays_cte(archetype)}
+        WITH {_plays_cte(bool(archetypes))}
         SELECT c.name, MAX(c.mana_cost) AS mana_cost, MAX(c.type_line) AS type_line,
                MAX(c.oracle_text) AS oracle_text, MAX(c.cmc) AS cmc, MAX(p.plays) AS plays,
                MAX(c.color_identity) AS color_identity
@@ -94,8 +99,8 @@ async def slot_pool(db: AsyncSession, slot: Slot, colors: List[str], format: str
     params = {"format": format, "legality": FORMAT_LEGALITY_MAP[format], "colors": list(colors),
               "cmc_min": slot.cmc_min, "cmc_max": slot.cmc_max, "chosen": list(chosen),
               "role": slot.role, "type_contains": slot.type_contains}
-    if archetype:
-        params["archetype"] = archetype
+    if archetypes:
+        params["archetypes"] = archetype_keys(archetypes)
     return list((await db.execute(sql, params)).all())
 
 
@@ -157,15 +162,15 @@ class Build:
 
 async def _fill_one(db: AsyncSession, client, slot: Slot, build: Build, colors: List[str], format: str,
                     state: Callable[[], Dict[str, Any]], copies_for: Callable[[str, int], int],
-                    reference: Optional[str], allow_none: bool = True) -> int:
-    """Fill one slot: from the reference archetype's cards first, then (for the
+                    scope: Sequence[str], allow_none: bool = True) -> int:
+    """Fill one slot: from the `scope` archetypes' cards first, then (for the
     shortfall) from the whole format. Returns copies still unfilled."""
     short = slot.copies
-    for archetype in ([reference] if reference else []) + [None]:
+    for archetypes in ([scope] if scope else []) + [()]:
         if short <= 0:
             break
         part = Slot(**{**vars(slot), "copies": short})
-        pool = await slot_pool(db, part, colors, format, list(build.copies), archetype)
+        pool = await slot_pool(db, part, colors, format, list(build.copies), archetypes)
         rows = {r.name: r for r in pool}
         for name, q in await fill_slot(client, part, pool, state(), format, copies_for,
                                        allow_none=allow_none):
@@ -176,10 +181,10 @@ async def _fill_one(db: AsyncSession, client, slot: Slot, build: Build, colors: 
 
 async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, colors: List[str],
                      format: str, state: Callable[[], Dict[str, Any]],
-                     copies_for: Callable[[str, int], int], reference: Optional[str] = None) -> int:
+                     copies_for: Callable[[str, int], int], scope: Sequence[str] = ()) -> int:
     """Fill `slots` into `build`, largest remaining slot first, each from the
-    reference archetype's played cards first (when `reference`), then the
-    format's. A slot's shortfall moves to a remaining slot with the same role,
+    `scope` archetypes' played cards first (the reference, or a brew's
+    relatives), then the format's. A slot's shortfall moves to a remaining slot with the same role,
     else the largest remaining slot; a final shortfall gets one catch-all slot.
     Returns copies still unfilled."""
     todo = [Slot(**vars(s)) for s in slots if s.copies > 0]  # copies: the plan stays intact
@@ -187,7 +192,7 @@ async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, 
     while todo:
         slot = max(todo, key=lambda s: s.copies)
         todo.remove(slot)
-        short = await _fill_one(db, client, slot, build, colors, format, state, copies_for, reference)
+        short = await _fill_one(db, client, slot, build, colors, format, state, copies_for, scope)
         if short and todo:
             target = next((s for s in todo if s.role == slot.role), None) or max(todo, key=lambda s: s.copies)
             target.copies += short
@@ -195,7 +200,7 @@ async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, 
     if short:
         # last resort: the deck needs its spell count, so this slot may not answer "none"
         short = await _fill_one(db, client, Slot("any", 0, 99, short, ANY_SLOT), build, colors, format, state,
-                                copies_for, reference, allow_none=False)
+                                copies_for, scope, allow_none=False)
     return short
 
 
@@ -434,12 +439,12 @@ SIDEBOARD_SLOT = "A sideboard card: an answer or swap for this deck's hard match
 
 
 async def sideboard_pool(db: AsyncSession, colors: List[str], format: str, chosen: Sequence[str],
-                         archetype: Optional[str] = None) -> List[Any]:
+                         archetypes: Sequence[str] = ()) -> List[Any]:
     """Legal, on-color, nonbasic cards from sideboards in the window: the
-    archetype's lists, or every list in the format when archetype is None. Most
+    `archetypes`' lists, or every list in the format when none are given. Most
     played first, at most MAX_OPTIONS. Rows add `copies`: the card's average
     sideboard copies there, rounded, at least 1."""
-    scope = "AND lower(trim(d.archetype)) = lower(trim(:archetype))" if archetype else ""
+    scope = ARCHETYPE_SCOPE if archetypes else ""
     sql = text(f"""
         WITH side AS (
             SELECT lower(split_part(x->>'card_name', ' // ', 1)) AS k, COUNT(DISTINCT d.id) AS plays,
@@ -464,22 +469,22 @@ async def sideboard_pool(db: AsyncSession, colors: List[str], format: str, chose
     """)
     params = {"format": format, "legality": FORMAT_LEGALITY_MAP[format], "colors": list(colors),
               "chosen": list(chosen)}
-    if archetype:
-        params["archetype"] = archetype
+    if archetypes:
+        params["archetypes"] = archetype_keys(archetypes)
     return list((await db.execute(sql, params)).all())
 
 
 async def fill_sideboard(db: AsyncSession, client, main: Build, side: Build, colors: List[str], format: str,
-                         state: Callable[[], Dict[str, Any]], reference: Optional[str]) -> None:
-    """Fill `side` to SIDEBOARD_SIZE: one Jev ranking over the reference lists'
-    sideboard cards, then (to top up a short pool, or alone for a brew) one over
-    the format's sideboard cards. Copies are each card's average sideboard copies,
+                         state: Callable[[], Dict[str, Any]], scope: Sequence[str]) -> None:
+    """Fill `side` to SIDEBOARD_SIZE: one Jev ranking over the `scope` archetypes'
+    sideboard cards, then (to top up a short pool, or alone when there is no
+    scope) one over the format's sideboard cards. Copies are each card's average sideboard copies,
     capped at 4; main-deck cards are excluded, so no card passes 4 in total."""
-    for archetype in ([reference] if reference else []) + [None]:
+    for archetypes in ([scope] if scope else []) + [()]:
         need = SIDEBOARD_SIZE - side.total()
         if need <= 0:
             return
-        pool = await sideboard_pool(db, colors, format, [*main.copies, *side.copies], archetype)
+        pool = await sideboard_pool(db, colors, format, [*main.copies, *side.copies], archetypes)
         rows = {r.name: r for r in pool}
         picks = await fill_slot(client, Slot("sideboard", 0, 99, need, SIDEBOARD_SLOT), pool, state(), format,
                                 lambda name, rank: rows[name].copies, SIDEBOARD_QUESTION,
@@ -556,12 +561,12 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
         def main_copies(name: str, rank: int) -> int:
             return plan.copies.get(name) or brew_copies(name, rank)
 
-        short = await fill_slots(db, client, plan.slots, main, deck_colors, format, state, main_copies,
-                                 reference)
+        scope = [reference] if reference else []
+        short = await fill_slots(db, client, plan.slots, main, deck_colors, format, state, main_copies, scope)
         plan.lands += short  # a pool too thin to fill the spells: basics keep the deck at 60
         await fill_lands(db, client, main, plan, deck_colors, format, state, main_copies)
         if include_sideboard:
-            await fill_sideboard(db, client, main, side, deck_colors, format, state, reference)
+            await fill_sideboard(db, client, main, side, deck_colors, format, state, scope)
 
     name, summary = await summarize(main, side, request_text, reference, deck_colors, format)
     logger.info(f"[ASSEMBLY] {name}: reference={reference} colors={deck_colors} "
