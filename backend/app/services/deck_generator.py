@@ -48,6 +48,7 @@ class DeckGenerator:
         format: str = "standard",
         colors: Optional[List[str]] = None,
         specific_cards: Optional[List[str]] = None,
+        include_explanations: bool = False,
     ) -> DeckGenerateResponse:
         """
         Generate a deck based on natural language prompt.
@@ -60,6 +61,7 @@ class DeckGenerator:
             format: Game format (standard, historic, modern, legacy, cedh)
             colors: Optional explicit colors (skip parsing if provided)
             specific_cards: Optional explicit specific cards (skip parsing if provided)
+            include_explanations: Whether to generate per-card explanations (one extra LLM call)
 
         Returns:
             DeckGenerateResponse with complete deck and strategy
@@ -152,6 +154,18 @@ class DeckGenerator:
         _, fit = await deck_fit.review_deck(self.db, fit_entries, prompt)
         fit_flagged = deck_fit.flag_low_fit(fit)
 
+        card_explanations = None
+        if include_explanations:
+            card_explanations = await self.ai_service.generate_card_explanations(
+                deck_data={
+                    "name": deck_data.get("name", "Generated Deck"),
+                    "main_deck": validated_main,
+                    "sideboard": validated_sideboard,
+                },
+                archetype=parsed_request.get("archetype", ""),
+                strategy=deck_data.get("strategy_summary", parsed_request.get("strategy", "")),
+            ) or None
+
         # Generate unique deck name if user is logged in
         deck_name = deck_data.get("name", "Generated Deck")
         if user_id:
@@ -168,6 +182,7 @@ class DeckGenerator:
             main_deck=validated_main,
             sideboard=validated_sideboard,
             strategy_summary=deck_data.get("strategy_summary", ""),
+            card_explanations=card_explanations,
             is_validated=validation.is_valid,
             validation_errors=[e.model_dump() for e in validation.errors] if validation.errors else None,
         )
