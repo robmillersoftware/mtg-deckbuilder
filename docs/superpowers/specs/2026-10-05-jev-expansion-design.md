@@ -58,9 +58,10 @@ In the guided builder's fit path, each candidate already gets one Jev fit reques
 
 1. **Shortlist**: up to `SHORTLIST_SIZE` (60) unique names, already filtered by format and colors, merged in this priority order:
    - vector hits, only when OpenAI is configured and the query embedding succeeds;
-   - Postgres full-text hits: `to_tsvector('english', name || ' ' || type_line || ' ' || oracle_text)` matched against the query words OR'd together (stopwords dropped), ordered by `ts_rank`;
+   - role-tagged cards: `card_roles` rows for the roles named by `ROLE_MAP` keys found as whole words in the query (singular or plural), ordered by efficiency then confidence;
+   - Postgres full-text hits: `to_tsvector('english', name || ' ' || type_line || ' ' || oracle_text)` matched against the query words OR'd together (stopwords, color names and filler words like "card" and "deck" dropped), ordered by `ts_rank`;
    - popular cards in the requested colors and format, by tournament decklist frequency (existing `_rank_cards_by_tournament_frequency` SQL, moved to a `CardService` method).
-2. **Re-rank**: one Jev Noul per shortlisted card, "Does `card` serve the request in `query`?", concurrent through the shared cap under `FIT_DEADLINE`. Sort by probability and drop below `SEARCH_CUTOFF` (0.5). Return the top `limit`.
+2. **Re-rank**: one Jev Noul per shortlisted card, "Does `card` serve the request in `query`?", concurrent through the shared cap under `FIT_DEADLINE`. Sort by probability and drop below `SEARCH_CUTOFF` (0.35; Jev scores short queries low, and 0.5 dropped correct cards in live measurement). Return the top `limit`.
 3. **Fallback**: if Jev fails or is not configured, return the shortlist in its merge order, truncated to `limit`.
 
 Migration `016`: a GIN expression index on that tsvector for `cards`.
