@@ -1,73 +1,79 @@
 """Deck request parsing utilities."""
 
-import json
+import asyncio
 import logging
 from typing import List, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from typesafe_sdk import Choice, Noul
 
-from app.services import llm
+from app.services import jev
 
 logger = logging.getLogger(__name__)
 
 
-async def parse_deck_request(prompt: str, db: AsyncSession) -> Dict[str, Any]:
+ARCHETYPES = {
+    "aggro": "Wins fast with cheap creatures and direct damage",
+    "control": "Answers threats with removal, counterspells and card advantage, and wins late",
+    "midrange": "Efficient threats plus interaction; trades resources and wins with sturdy, value-generating cards",
+    "combo": "Assembles specific cards that win together",
+    "tempo": "Cheap threats backed by cheap disruption to stay ahead",
+}
+COLOR_NAMES = {"W": "white", "U": "blue", "B": "black", "R": "red", "G": "green"}
+WANT_THRESHOLD = 0.5
+
+
+def _parse_questions(n_cards: int) -> Dict[str, Any]:
+    questions: Dict[str, Any] = {
+        "archetype": Choice(
+            instructions="Which archetype does `request` want for the user's own deck?",
+            criteria=ARCHETYPES,
+        ),
+        "colors_specified": Noul(
+            instructions="Did the user state colors for their own deck, not an opponent's?"),
+    }
+    for code, name in COLOR_NAMES.items():
+        questions[f"color:{code}"] = Noul(instructions={
+            "question": "Does the user want this color in their own deck (not an opponent's)?",
+            "color": name,
+        })
+    for i in range(n_cards):
+        questions[f"wants:{i}"] = Noul(
+            instructions=f"Does the user want `cards[{i}]` in their deck, rather than only mentioning it?")
+    return questions
+
+
+async def parse_deck_request(prompt: str, db: AsyncSession, client=None) -> Dict[str, Any]:
     """
-    Parse a natural language deck request to extract:
-    - Archetype (aggro, control, midrange, combo)
-    - Colors
-    - Strategy focus
-    - Specific card requests
-    - colors_specified: Whether the user explicitly wanted specific colors for their deck
+    Parse a natural-language deck request with one Jev request into
+    {archetype, colors, colors_specified, strategy, specific_cards}.
 
+    Card names are resolved from the database first (word n-grams of the prompt);
+    Jev decides which of them the user wants in their deck and which colors are
+    theirs rather than an opponent's. Falls back to keyword parsing when Jev is
+    not configured, fails, or answers incompletely.
     """
-    if not llm.is_configured():
-        return await fallback_parse(prompt, db)
-
-    try:
-        content = llm.complete(
-            max_tokens=512,
-            system="""Parse MTG deck request into JSON:
-{"archetype": "aggro|control|midrange|combo|tempo", "colors": ["W","U","B","R","G"], "colors_specified": true|false, "strategy": "brief description", "specific_cards": ["card names mentioned"]}
-
-Color codes: W=White, U=Blue, B=Black, R=Red, G=Green
-Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, Izzet=UR, Golgari=BG, Boros=RW, Simic=GU
-
-IMPORTANT for specific_cards:
-- Extract ANY card names mentioned in the request (e.g., "Moonshadow", "Lightning Bolt", "Atraxa")
-- Include the card name exactly as mentioned
-- If the request says "using X" or "with X" or "around X", X is likely a card name
-- Examples:
-  - "Build a deck using Moonshadow" -> specific_cards: ["Moonshadow"]
-  - "Red deck with Lightning Bolt" -> specific_cards: ["Lightning Bolt"]
-  - "Atraxa commander deck" -> specific_cards: ["Atraxa"]
-
-IMPORTANT for colors_specified:
-- Set to TRUE only if the user explicitly wants their deck to be certain colors
-- Set to FALSE if colors are only mentioned as opponents/matchups (e.g., "beat mono-red", "good against blue decks")
-- Set to FALSE if no colors are mentioned
-- Examples:
-  - "black aggro deck" -> colors_specified: true (user wants black)
-  - "beat mono-red" -> colors_specified: false (red is the opponent, not their deck)
-  - "Dimir control" -> colors_specified: true (user wants UB)
-  - "aggro deck" -> colors_specified: false (no color preference stated)""",
-            user=prompt,
-        )
-
-        if content:
-            if "{" in content:
-                json_start = content.index("{")
-                json_end = content.rindex("}") + 1
-                result = json.loads(content[json_start:json_end])
-                # Ensure colors_specified is present (default to False if LLM didn't include it)
-                if "colors_specified" not in result:
-                    result["colors_specified"] = False
-                return result
-
-    except Exception as e:
-        logger.warning(f"Haiku parse failed, using fallback: {e}")
-
+    async with jev.session(client) as client:
+        if client is not None:
+            names = await extract_card_names_from_prompt(prompt, db)
+            try:
+                async with asyncio.timeout(jev.FIT_DEADLINE):
+                    r = await jev.ask(client, {"request": prompt, "cards": names},
+                                      _parse_questions(len(names)))
+                colors = [c for c in COLOR_NAMES if r.nouls[f"color:{c}"].noul >= WANT_THRESHOLD]
+                if r.nouls["colors_specified"].noul < WANT_THRESHOLD:
+                    colors = []  # e.g. "beat mono-red": Jev leans toward non-red colors, but none were asked for
+                return {
+                    "archetype": r.choices["archetype"].choice,
+                    "colors": colors,
+                    "colors_specified": bool(colors),
+                    "strategy": prompt,
+                    "specific_cards": [n for i, n in enumerate(names)
+                                       if r.nouls[f"wants:{i}"].noul >= WANT_THRESHOLD],
+                }
+            except Exception as e:
+                logger.warning(f"Jev deck-request parse failed, using fallback: {e}")
     return await fallback_parse(prompt, db)
 
 
