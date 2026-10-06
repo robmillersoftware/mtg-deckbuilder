@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 MAX_COPIES = 4
 BREW_COPIES = [4, 4, 3, 2, 1]  # brew copies by Jev rank, then 1
 ANY_SLOT = "Any card that makes this deck stronger"
+# A slot Choice can answer "none of these fit": cards ranked below it are not taken,
+# and the slot's count moves to other slots (thin pools otherwise force off-plan picks).
+NO_FIT = "(none of these fit)"
+NO_FIT_TEXT = "No card here fits this deck's plan; leave these copies to other slots"
 SLOT_QUESTION = ("Which card best fills this slot in the deck described by `deck`? Prefer cards proven "
                  "in recent tournament play (see each option's play count) when they fit the slot. "
                  "The card must support the deck's plan; never pick one that works against it (e.g. a "
@@ -106,16 +110,22 @@ def brew_copies(name: str, rank: int) -> int:
 
 
 async def fill_slot(client, slot: Slot, pool: Sequence[Any], state: Dict[str, Any], format: str,
-                    copies_for: Callable[[str, int], int], question: str = SLOT_QUESTION) -> List[Tuple[str, int]]:
+                    copies_for: Callable[[str, int], int], question: str = SLOT_QUESTION,
+                    allow_none: bool = True) -> List[Tuple[str, int]]:
     """Jev ranks the pool for the slot; code takes copies down that ranking until
-    the slot is full. Fewer than slot.copies when the pool runs out."""
+    the slot is full. Fewer than slot.copies when the pool runs out or, with
+    `allow_none`, when Jev ranks the rest below "none of these fit"."""
     if not pool or slot.copies <= 0:
         return []
+    criteria = {r.name: option_text(r, format) for r in pool}
+    if allow_none:
+        criteria[NO_FIT] = NO_FIT_TEXT
     answer = await choose(client, state, Choice(
-        instructions={"question": question, "slot": slot.description},
-        criteria={r.name: option_text(r, format) for r in pool}))
+        instructions={"question": question, "slot": slot.description}, criteria=criteria))
     probs = answer.probabilities or {answer.choice: 1.0}
-    ranked = sorted((r.name for r in pool), key=lambda n: -probs.get(n, 0.0))  # stable: ties keep play order
+    floor = probs.get(NO_FIT, 0.0) if allow_none else 0.0
+    ranked = sorted((r.name for r in pool if probs.get(r.name, 0.0) >= floor),
+                    key=lambda n: -probs.get(n, 0.0))  # stable: ties keep play order
     picks, need = [], slot.copies
     for rank, name in enumerate(ranked):
         if need <= 0:
@@ -147,7 +157,7 @@ class Build:
 
 async def _fill_one(db: AsyncSession, client, slot: Slot, build: Build, colors: List[str], format: str,
                     state: Callable[[], Dict[str, Any]], copies_for: Callable[[str, int], int],
-                    reference: Optional[str]) -> int:
+                    reference: Optional[str], allow_none: bool = True) -> int:
     """Fill one slot: from the reference archetype's cards first, then (for the
     shortfall) from the whole format. Returns copies still unfilled."""
     short = slot.copies
@@ -157,7 +167,8 @@ async def _fill_one(db: AsyncSession, client, slot: Slot, build: Build, colors: 
         part = Slot(**{**vars(slot), "copies": short})
         pool = await slot_pool(db, part, colors, format, list(build.copies), archetype)
         rows = {r.name: r for r in pool}
-        for name, q in await fill_slot(client, part, pool, state(), format, copies_for):
+        for name, q in await fill_slot(client, part, pool, state(), format, copies_for,
+                                       allow_none=allow_none):
             build.add(name, q, rows[name])
             short -= q
     return short
@@ -182,8 +193,9 @@ async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, 
             target.copies += short
             short = 0
     if short:
+        # last resort: the deck needs its spell count, so this slot may not answer "none"
         short = await _fill_one(db, client, Slot("any", 0, 99, short, ANY_SLOT), build, colors, format, state,
-                                copies_for, reference)
+                                copies_for, reference, allow_none=False)
     return short
 
 
@@ -327,7 +339,44 @@ def split_basics(counts: Dict[str, int], colors: Sequence[str], n: int) -> Dict[
 
 
 def brew_nonbasics(colors: Sequence[str]) -> int:
+    """Fallback when there's no data: by deck color count."""
     return BREW_NONBASICS.get(len(colors), 6)
+
+
+# Nonbasic land count of each recent decklist whose spells use exactly :n_colors colors.
+BREW_NONBASICS_SQL = text(f"""
+    WITH lists AS (
+        SELECT d.id, d.main_deck FROM decklists d JOIN events e ON e.id = d.event_id
+        WHERE {RECENT}
+    ), entries AS (
+        SELECT l.id, x->>'card_name' AS n, (x->>'quantity')::int AS q
+        FROM lists l, jsonb_array_elements(l.main_deck) x
+    ), joined AS (
+        SELECT en.id, en.q, c.type_line, {CARD_COLORS} AS cols
+        FROM entries en
+        LEFT JOIN LATERAL (
+            SELECT * FROM cards c
+            WHERE lower(split_part(c.name, ' // ', 1)) = lower(split_part(en.n, ' // ', 1)) LIMIT 1
+        ) c ON true
+    ), deck_colors AS (
+        SELECT id, count(DISTINCT col) AS n FROM joined, unnest(cols) col
+        WHERE split_part(coalesce(type_line, ''), ' // ', 1) NOT LIKE '%Land%'
+        GROUP BY id
+    )
+    SELECT coalesce(sum(j.q) FILTER (WHERE split_part(coalesce(j.type_line, ''), ' // ', 1) LIKE '%Land%'
+                                      AND j.type_line NOT LIKE 'Basic%'), 0) AS nonbasic
+    FROM joined j JOIN deck_colors dc ON dc.id = j.id
+    WHERE dc.n = :n_colors
+    GROUP BY j.id
+""")
+
+
+async def brew_nonbasic_target(db: AsyncSession, colors: Sequence[str], format: str) -> int:
+    """Median nonbasic land count of recent decklists with as many colors as the deck
+    (mono-colored lists run 3-12 utility lands, not 0); the fixed rule without data."""
+    rows = (await db.execute(BREW_NONBASICS_SQL, {"format": format, "n_colors": len(colors)})).all()
+    counts = sorted(r[0] for r in rows)
+    return counts[len(counts) // 2] if counts else brew_nonbasics(colors)
 
 
 def _nonbasic_lands(build: Build) -> int:
@@ -339,7 +388,8 @@ async def fill_lands(db: AsyncSession, client, build: Build, plan: Plan, colors:
                      state: Callable[[], Dict[str, Any]], copies_for: Callable[[str, int], int]) -> None:
     """Add plan.lands lands (requested lands already took their share): nonbasics
     by Jev pick up to the nonbasic count, then basics split by the spells' pips."""
-    target = plan.nonbasic_lands if plan.nonbasic_lands is not None else brew_nonbasics(colors)
+    target = (plan.nonbasic_lands if plan.nonbasic_lands is not None
+              else await brew_nonbasic_target(db, colors, format))
     need = max(0, min(target - _nonbasic_lands(build), plan.lands))
     picked = 0
     if need:
@@ -412,7 +462,8 @@ async def fill_sideboard(db: AsyncSession, client, main: Build, side: Build, col
         pool = await sideboard_pool(db, colors, format, [*main.copies, *side.copies], archetype)
         rows = {r.name: r for r in pool}
         picks = await fill_slot(client, Slot("sideboard", 0, 99, need, SIDEBOARD_SLOT), pool, state(), format,
-                                lambda name, rank: rows[name].copies, SIDEBOARD_QUESTION)
+                                lambda name, rank: rows[name].copies, SIDEBOARD_QUESTION,
+                                allow_none=False)
         for name, q in picks:
             side.add(name, q, rows[name])
     if side.total() < SIDEBOARD_SIZE:

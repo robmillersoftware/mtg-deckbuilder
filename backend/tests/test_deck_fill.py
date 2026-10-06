@@ -92,7 +92,7 @@ class TestFillSlot:
         state, questions, _ = jev.calls[0]
         q = questions["pick"]
         assert q.instructions == {"question": df.SLOT_QUESTION, "slot": "Burn"}
-        assert list(q.criteria) == ["A", "B", "C", "D", "E", "F"]
+        assert list(q.criteria) == ["A", "B", "C", "D", "E", "F", df.NO_FIT]
 
     async def test_reference_copies_capped_at_four_and_at_the_slot(self):
         pool = [card("A"), card("B"), card("C")]
@@ -389,6 +389,8 @@ class TestFillLands:
     async def test_requested_nonbasic_counts_and_mono_color_brew_gets_only_basics(self, monkeypatch):
         pool = AsyncMock(return_value=[])
         monkeypatch.setattr(df, "land_pool", pool)
+        monkeypatch.setattr(df, "brew_nonbasic_target",
+                            AsyncMock(side_effect=lambda db, colors, format: df.brew_nonbasics(colors)))
         build = df.Build()
         build.add("Shock", 4, card("Shock"))
         await df.fill_lands(None, FakeJev(), build, plan(lands=22), ["R"], "standard", dict, df.brew_copies)
@@ -528,6 +530,8 @@ def wire(monkeypatch, reference_plan=None, archetypes=(("Boros Aggro", 5),)):
     monkeypatch.setattr(df, "plan_from_decklists", AsyncMock(return_value=reference_plan))
     monkeypatch.setattr(df, "slot_pool", pool)
     monkeypatch.setattr(df, "land_pool", AsyncMock(return_value=LANDS))
+    monkeypatch.setattr(df, "brew_nonbasic_target",
+                        AsyncMock(side_effect=lambda db, colors, format: df.brew_nonbasics(colors)))
     side = fake_side_pool({"Boros Aggro": [side_card(f"Side {i}", 3, "RW"[i % 2]) for i in range(6)],
                            None: [side_card(f"Spare {i}", 2) for i in range(10)]})
     monkeypatch.setattr(df, "sideboard_pool", side)
@@ -633,3 +637,83 @@ class TestAssemble:
         with pytest.raises(ExceptionGroup) as err:  # jev.ask_many runs its asks in a TaskGroup
             await df.assemble(None, "x", ["R"], [], "standard", client=FakeJev(fail=lambda s: True))
         assert err.group_contains(RuntimeError, match="jev unavailable")
+
+
+
+def ranks_with_no_fit(*names_then_none):
+    """FakeJev ranking `names_then_none` in order; df.NO_FIT may appear among them."""
+    def answer(state, questions):
+        probs = {n: 1.0 - i / 100 for i, n in enumerate(names_then_none)}
+        return {"pick": {"choice": names_then_none[0], "confidence": 0.9, "probabilities": probs}}
+    return FakeJev(answer=answer)
+
+
+class TestNoFit:
+    async def test_cards_ranked_below_no_fit_are_not_taken(self):
+        pool = [card(n) for n in ("Bolt", "Candy Trail", "Blade")]
+        jev = ranks_with_no_fit("Bolt", df.NO_FIT, "Candy Trail", "Blade")
+        picks = await df.fill_slot(jev, Slot("card_draw", 0, 3, 8, "Card draw"), pool, {}, "standard",
+                                   df.brew_copies)
+        assert picks == [("Bolt", 4)]
+        assert df.NO_FIT in jev.calls[0][1]["pick"].criteria
+
+    async def test_forced_slot_offers_no_no_fit(self):
+        pool = [card(n) for n in ("Bolt", "Candy Trail")]
+        jev = ranks_with_no_fit("Bolt", "Candy Trail")
+        picks = await df.fill_slot(jev, Slot("any", 0, 99, 8, ""), pool, {}, "standard", df.brew_copies,
+                                   allow_none=False)
+        assert picks == [("Bolt", 4), ("Candy Trail", 4)]
+        assert df.NO_FIT not in jev.calls[0][1]["pick"].criteria
+
+    async def test_rejected_slot_overflows_and_catch_all_is_forced(self, monkeypatch):
+        bolts = [card("Bolt A", roles=["burn"]), card("Bolt B", roles=["burn"])]
+        trail = [card("Candy Trail", "Artifact", roles=["card_draw"])]
+
+        async def pool(db, slot, colors, format, chosen, archetype=None):
+            return {"card_draw": trail, "burn": bolts, "any": bolts + trail}[slot.role]
+        monkeypatch.setattr(df, "slot_pool", pool)
+
+        def answer(state, questions):
+            names = list(questions["pick"].criteria)
+            order = [n for n in names if n != "Candy Trail"]
+            if df.NO_FIT in names:  # slot Choice: Candy Trail ranks below "none of these fit"
+                order = [n for n in order if n != df.NO_FIT] + [df.NO_FIT, "Candy Trail"]
+            probs = {n: 1.0 - i / 100 for i, n in enumerate(order + ["Candy Trail"])}
+            return {"pick": {"choice": order[0], "confidence": 0.9, "probabilities": probs}}
+        build = df.Build()
+        short = await df.fill_slots(None, FakeJev(answer=answer),
+                                    [Slot("card_draw", 0, 3, 4, ""), Slot("burn", 0, 1, 4, "")],
+                                    build, ["R"], "standard", dict, df.brew_copies)
+        assert "Candy Trail" not in build.copies  # rejected in its slot; the burn slot took the 4
+        assert build.copies == {"Bolt A": 4, "Bolt B": 4} and short == 0
+
+    async def test_sideboard_never_offers_no_fit(self, monkeypatch):
+        monkeypatch.setattr(df, "sideboard_pool", fake_side_pool({None: [side_card(f"Side {i}", 4) for i in range(5)]}))
+        jev = FakeJev()
+        await df.fill_sideboard(None, jev, df.Build(), df.Build(), ["R"], "standard", dict, None)
+        assert all(df.NO_FIT not in q["pick"].criteria for _, q, _ in jev.calls)
+
+
+class TestBrewNonbasicTarget:
+    async def test_median_of_recent_lists_with_the_same_color_count(self):
+        db = MagicMock()
+        db.execute = AsyncMock(return_value=MagicMock(all=lambda: [(5,), (6,), (3,), (12,), (4,)]))
+        assert await df.brew_nonbasic_target(db, ["R"], "standard") == 5
+        stmt, params = db.execute.call_args[0]
+        assert params == {"format": "standard", "n_colors": 1}
+
+    async def test_falls_back_to_the_fixed_rule_without_data(self):
+        db = MagicMock()
+        db.execute = AsyncMock(return_value=MagicMock(all=lambda: []))
+        assert await df.brew_nonbasic_target(db, ["R", "W"], "standard") == df.brew_nonbasics(["R", "W"])
+
+    async def test_fill_lands_uses_it_for_brews(self, monkeypatch):
+        lands = [card("Soulstone Sanctuary", "Land", 0, "", identity="", mana_cost=None),
+                 card("Fabled Passage", "Land", 0, "", identity="", mana_cost=None)]
+        monkeypatch.setattr(df, "land_pool", AsyncMock(return_value=lands))
+        monkeypatch.setattr(df, "brew_nonbasic_target", AsyncMock(return_value=6))
+        build = df.Build()
+        build.add("Shock", 4, card("Shock"))
+        await df.fill_lands(None, FakeJev(), build, plan(lands=22), ["R"], "standard", dict, df.brew_copies)
+        assert build.copies["Soulstone Sanctuary"] + build.copies.get("Fabled Passage", 0) == 6
+        assert build.copies["Mountain"] == 16
