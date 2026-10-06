@@ -1,7 +1,7 @@
 # Jev deck assembly
 
 Date: 2026-10-06
-Status: approved in conversation, pending spec review
+Status: approved in conversation, pending spec review. Revised the same day: brews get a sideboard, sideboards are not slot-planned, and a fetchland guard on the land pool.
 Builds on: `2026-10-05-jev-expansion-design.md`; PR #51 (deck generation fixes)
 
 ## Goal
@@ -53,7 +53,7 @@ Slot sizes:
 - Rounding is adjusted so the total equals the average nonland count, rounded.
 - The land count is the average land count, rounded.
 
-Sideboard slots are built the same way from the lists' sideboards, totalling 15.
+Only the main deck is slot-planned; the sideboard is picked separately (step 6).
 
 ### 2b. Slot plan for brews
 
@@ -62,7 +62,7 @@ Sideboard slots are built the same way from the lists' sideboards, totalling 15.
 - It returns JSON: a list of `{role, cmc_min, cmc_max, type_contains, copies, description}`.
 - Validation: roles must be in `CARD_ROLES` or be `creature` / `noncreature`, and copies are positive integers.
 - Copies are scaled so the nonland total is 60 minus the land count. The land count is 24 for control, 23 for midrange and 22 otherwise.
-- Brews get no sideboard.
+- Brews get a sideboard from the format's sideboard cards (step 6).
 - If the JSON is invalid, a fixed archetype default plan is used for aggro, midrange and control. These live in code.
 
 ### 3. Requested cards
@@ -102,12 +102,18 @@ If the pool runs out, the remaining count moves to the next slot with the same r
 
 - **Nonbasic count:** the reference lists' average nonbasic count. For brews it is 0 for mono-color, 4 for two colors and 6 for three or more.
 - **Pool:** lands played in the last 14 days whose `color_identity` ⊆ deck colors. That covers on-color duals and colorless utility lands (identity `{}`). Any off-color symbol excludes a land. The pool is ordered by play count.
+- **Fetchland guard:** a land whose oracle text searches for a land with basic land types must name at least one of the deck colors' basic types (W Plains, U Island, B Swamp, R Mountain, G Forest) to enter the land pool. Lands that search only for a generic "basic land" stay allowed.
 - **Pick:** Jev picks with the same `Choice` mechanism. The slot description is "a land for this deck's mana: fixing for its colors, or utility".
 - **Basics:** they fill the remaining land count, split by the colored mana symbols across the chosen nonland cards' mana costs. Every deck color gets at least 1 basic when basics are used.
 
 ### 6. Sideboard
 
-When a reference exists, the sideboard slots are filled the same way. The candidates come from cards played in the last 14 days (main or side), so sideboard staples qualify.
+Sideboards are not slot-planned.
+
+- **Candidates:** the cards in the reference lists' sideboards; for a brew, the format's sideboard cards from the last 14 days, any archetype. They are color-filtered by the same rule as the main pools (including the DFC `color_identity` fallback), played-only, exclude main-deck cards, ordered by play count and capped at 255.
+- **Pick:** one Jev `Choice` ranks them: "Which card best belongs in this deck's sideboard?", with the deck plan and the main deck in the state.
+- **Copies:** code walks the cards by descending probability, taking the card's average sideboard copies in the reference lists, rounded, at least 1 (brews: its average sideboard copies across the format), capped at 4 total copies across main and sideboard, until exactly 15.
+- Every deck, brew or reference, is 60 + 15 and validates.
 
 ### 7. Summary
 
@@ -116,14 +122,14 @@ One `llm.complete` call writes `strategy_summary` and the deck name from the fin
 ## Components
 
 - `backend/app/services/deck_plan.py`: `Slot` dataclass, `choose_reference`, `plan_from_decklists`, `plan_with_llm`, archetype default plans.
-- `backend/app/services/deck_fill.py`: `slot_pool`, `fill_slot`, `fill_lands`, `assemble(request_text, colors, specific_cards, format, include_sideboard) -> {name, strategy_summary, main_deck, sideboard}`, the same shape `ai_service.generate_deck` returns.
+- `backend/app/services/deck_fill.py`: `slot_pool`, `fill_slot`, `fill_lands`, `sideboard_pool`, `fill_sideboard`, `assemble(request_text, colors, specific_cards, format, include_sideboard) -> {name, strategy_summary, main_deck, sideboard}`, the same shape `ai_service.generate_deck` returns.
 - `backend/app/services/deck_generator.py`: calls `deck_fill.assemble` when Jev is configured. It falls back to `ai_service.generate_deck` when Jev is unavailable or `assemble` raises.
 - `backend/app/jobs/mtgtop8_scrape.py`: follows the two-week view's pagination (`format?f=X&meta=..&cp=N`) until a page has no dated event rows. Standard yields 22 events instead of 20.
 - Jev calls go through `app/services/jev.py`, with its shared cap and deadline.
 
 ## Speed
 
-There are about 10-15 sequential `Choice` calls, at roughly 0.5 s each, plus one LLM summary call. That makes about 10-15 s per deck, against about 56 s today.
+There are about 10-15 sequential `Choice` calls, at roughly 0.5 s each, plus one or two sideboard `Choice` calls and one LLM summary call. That makes about 10-15 s per deck, against about 56 s today.
 
 ## Testing
 
@@ -136,7 +142,8 @@ There are about 10-15 sequential `Choice` calls, at roughly 0.5 s each, plus one
 - pool filters: played-only, color subset, role and type, mana value, excluding chosen, 255 cap;
 - copy rules for reference and brew decks;
 - slot overflow;
-- lands: identity subset including colorless, basics split;
+- lands: identity subset including colorless, the fetchland guard (a Plains/Island fetch excluded from mono-red, a generic basic-land fetch allowed), basics split;
+- sideboard: reference sideboard candidates, format candidates for brews, average sideboard copies, the 4-copy cap across main and sideboard, exactly 15;
 - `assemble` totals of 60 and 15;
 - fallback to the LLM path on Jev failure.
 
@@ -149,7 +156,7 @@ There are about 10-15 sequential `Choice` calls, at roughly 0.5 s each, plus one
 Each must pass all of these checks:
 
 - legal;
-- 60 main and 15 sideboard when a reference exists;
+- 60 main and 15 sideboard;
 - every card played in the last 14 days or requested;
 - every nonbasic land's identity a subset of the deck colors;
 - no more than 4 copies of a nonbasic.

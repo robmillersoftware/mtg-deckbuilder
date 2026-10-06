@@ -4,7 +4,7 @@
 
 **Goal:** Build 60-card decks from a slot plan (taken from recent tournament decklists, or from the LLM for brews) with Jev choosing each slot's cards from cards played in the last 14 days, falling back to today's LLM path whenever Jev is unavailable or fails.
 
-**Architecture:** `deck_plan.py` decides what the deck needs: it picks a reference archetype with one Jev `Choice`, then turns that archetype's decklists into role-and-mana-value slots, or asks the LLM for a brew plan. `deck_fill.py` fills the plan: one Jev `Choice` per slot over that slot's pool of played cards, code turning the ranking into copies, then requested cards, lands, basics, sideboard and a summary. `DeckGenerator.generate()` calls `deck_fill.assemble` in place of `ai_service.generate_deck` and keeps the LLM call as the fallback. The mtgtop8 scraper follows the two-week view's second page.
+**Architecture:** `deck_plan.py` decides what the deck needs: it picks a reference archetype with one Jev `Choice`, then turns that archetype's decklists into role-and-mana-value slots, or asks the LLM for a brew plan. `deck_fill.py` fills the plan: one Jev `Choice` per slot over that slot's pool of played cards, code turning the ranking into copies, then requested cards, lands and basics. The sideboard is one Jev `Choice` over recent sideboard cards (the reference lists', or the whole format's for a brew), and the LLM writes the summary. `DeckGenerator.generate()` calls `deck_fill.assemble` in place of `ai_service.generate_deck` and keeps the LLM call as the fallback. The mtgtop8 scraper follows the two-week view's second page.
 
 **Tech Stack:** FastAPI, SQLAlchemy async (`text()` SQL on Postgres JSONB), `typesafe-sdk==0.7.2` (`Choice`), OpenRouter via `app.services.llm`, BeautifulSoup, pytest + pytest-asyncio (`asyncio_mode=auto`).
 
@@ -18,8 +18,10 @@
 - "If the pick isn't `none` and confidence is at least `REFERENCE_CONFIDENCE` (0.5), return the archetype name. Otherwise return `None`, meaning a brew." Reference candidates are archetypes with "at least 2 lists".
 - Copy rules: "With a reference, copies are the card's average copies in the reference lists, rounded, at least 1. For brews, they are 4, 4, 3, 2, 1 by rank, then 1." "Copies are capped at 4 for nonbasics." Requested cards: "4 copies, or 1 if the type line contains `Legendary`."
 - Land rules: "**Nonbasic count:** the reference lists' average nonbasic count. For brews it is 0 for mono-color, 4 for two colors and 6 for three or more." "**Pool:** lands played in the last 14 days whose `color_identity` ⊆ deck colors. That covers on-color duals and colorless utility lands (identity `{}`). Any off-color symbol excludes a land." "**Basics:** they fill the remaining land count, split by the colored mana symbols across the chosen nonland cards' mana costs. Every deck color gets at least 1 basic when basics are used." "Requested lands count toward the land total."
-- Brew land counts: "The land count is 24 for control, 23 for midrange and 22 otherwise." "Brews get no sideboard."
-- Slot planning: "A slot under 2 copies merges into the same role's nearest band, then into the same band's largest slot." Bands are "0-1, 2, 3, 4, 5+". "Sideboard slots are built the same way from the lists' sideboards, totalling 15."
+- Fetchland guard: "**Fetchland guard:** a land whose oracle text searches for a land with basic land types must name at least one of the deck colors' basic types (W Plains, U Island, B Swamp, R Mountain, G Forest) to enter the land pool. Lands that search only for a generic "basic land" stay allowed."
+- Brew land counts: "The land count is 24 for control, 23 for midrange and 22 otherwise."
+- Slot planning (main deck only): "A slot under 2 copies merges into the same role's nearest band, then into the same band's largest slot." Bands are "0-1, 2, 3, 4, 5+".
+- Sideboard: "Sideboards are not slot-planned." "**Candidates:** the cards in the reference lists' sideboards; for a brew, the format's sideboard cards from the last 14 days, any archetype. They are color-filtered by the same rule as the main pools (including the DFC `color_identity` fallback), played-only, exclude main-deck cards, ordered by play count and capped at 255." "**Pick:** one Jev `Choice` ranks them: 'Which card best belongs in this deck's sideboard?', with the deck plan and the main deck in the state." "**Copies:** code walks the cards by descending probability, taking the card's average sideboard copies in the reference lists, rounded, at least 1 (brews: its average sideboard copies across the format), capped at 4 total copies across main and sideboard, until exactly 15." "Every deck, brew or reference, is 60 + 15 and validates."
 - Option text: card name → `"{mana_cost} {type_line}. {oracle_text[:200]} [Played in N recent {format} tournament decklists]"`.
 - "A Jev failure never blocks generation: the generator falls back to today's LLM path." "Jev calls go through `app/services/jev.py`, with its shared cap and deadline."
 - "Formats other than 60-card constructed" are out of scope: "cEDH and Commander keep the LLM path."
@@ -43,7 +45,9 @@
 - **Reference copies for a card not in the reference lists** use the brew rank rule.
 - **Slot order.** "Largest first" means the largest *remaining* slot, re-checked after each overflow. When the pools run out after the last slot, one catch-all slot (role `any`, any mana value, still played-only) takes the shortfall. Anything still short becomes basic lands, so the main deck stays at 60.
 - **Requested cards** must be legal in the format; unknown or illegal names are skipped with a warning, like the LLM path's `find_valid_card`. A name repeated in the request goes in once. Requested nonbasic lands count toward the nonbasic target as well as the land total.
-- **Sideboard.** Sideboard pools exclude main-deck cards, which keeps a card at no more than 4 copies across main and sideboard. Sideboard slot descriptions start with "Sideboard card: ", so Jev knows what it is picking.
+- **Sideboard top-up.** When a reference's sideboard cards (after the color filter) can't make 15, a second Jev `Choice` over the format's sideboard cards fills the rest, so every deck still has 15. That is the brew pool, so it adds no new rule. "Play count" for a sideboard pool means decklists in that scope (the reference lists or the format) with the card in their sideboard. Copies are `GREATEST(1, ROUND(AVG(quantity)))` there. The last pick is cut to land on exactly 15. Basic lands are left out of sideboard pools.
+- **Sideboards and the 4-copy cap.** Sideboard pools exclude main-deck cards, so a card is in the main deck or the sideboard, never both. That keeps it at 4 copies or fewer in total.
+- **Fetchland guard** is a code post-filter on `land_pool` rows (`fetches_for_colors`). Each "search your library for ..." clause is matched case-insensitively; one that names basic land types must name one of the deck colors' types. Searches for a generic "basic land card", or for something else (a Gate, an artifact), are fine. Against the live Modern data, mono-red keeps Arid Mesa, Scalding Tarn, Wooded Foothills and Bloodstained Mire and drops Flooded Strand and Polluted Delta. The filter runs after the 255 cap, which can cost a slot or two in a huge pool.
 - **Jev timeouts.** The client's default 2 s timeout is too short for a 255-option `Choice`, so each one passes `timeout=CHOICE_TIMEOUT` (10 s) through `jev.ask_many` with `deadline=CHOICE_DEADLINE` (15 s). A timeout raises, and the generator falls back. One of four live eval runs while writing this plan hit a 10 s timeout.
 - **`llm.complete` is synchronous**, so the plan and summary calls run in `asyncio.to_thread`.
 - **`assemble` also returns `reference` and `colors`.** `DeckGenerator` ignores the extra keys; the eval uses them.
@@ -52,17 +56,12 @@
 - **"When Jev is configured."** `DeckGenerator` always tries `assemble`, which raises when there is no `TYPESAFE_API_KEY`. That gives the same fallback with one code path.
 - **Scraper pagination.** The scraper follows the page's "Next" link (`?f=ST&meta=50&cp=2`; the `meta` id differs per format). It stops when a page has no dated event rows or no "Next" link, and gives up after `MAX_EVENT_PAGES` (10) pages. Each event appears twice on page 1, so ids are deduplicated. On 2026-10-06 it found 25 Standard events over two pages; the spec's 22 was counted earlier.
 
-### Known consequences (from the spec, not fixed here)
-
-- Brews have no sideboard, so `DeckValidator` reports a `sideboard_size` error on brew decks and `is_validated` is false for them.
-- Fetchlands have color identity `{}` and pass the land filter for any colors. Jev's land-slot description ("fixing for its colors, or utility") is the only guard. This is marked `ponytail:` in `land_pool`.
-
 ## Review Focus
 
-1. **Double-faced cards** (listed by front face in decklists, empty top-level `colors` and `mana_cost` in `cards`). Expected: they join to their card rows, get filtered by color identity so an off-color DFC never passes as colorless, are found when requested by front face, and count toward basics by identity. Tests: Task 3 (`test_slots_lands_copies_and_sideboard` checks the front-face join), Task 5 (`test_filters_and_params` checks `CARD_COLORS`), Task 6 (`test_takes_four_copies_from_the_first_fitting_slot`, `test_legendary_is_one_copy_and_overflow_cuts_the_largest_slot`, `test_pips_count_hybrid_and_fall_back_to_identity`).
-2. **A slot whose pool is empty or too thin** (an off-meta role, a narrow mana range, a mono-color deck). Expected: no Jev call for an empty pool; the shortfall moves to a same-role slot, then the largest slot, then one catch-all slot, then basics; the main deck is still 60. Tests: Task 5 (`test_empty_pool_makes_no_jev_call`, `test_largest_first_and_shortfall_moves_to_same_role`, `test_returns_what_cannot_be_filled`), Task 7 (`test_brew_has_no_sideboard_and_basic_land_split`).
+1. **Double-faced cards** (listed by front face in decklists, empty top-level `colors` and `mana_cost` in `cards`). Expected: they join to their card rows, get filtered by color identity so an off-color DFC never passes as colorless, are found when requested by front face, and count toward basics by identity. Tests: Task 3 (`test_slots_lands_and_copies` checks the front-face join), Task 5 (`test_filters_and_params` checks `CARD_COLORS`), Task 6 (`test_takes_four_copies_from_the_first_fitting_slot`, `test_legendary_is_one_copy_and_overflow_cuts_the_largest_slot`, `test_pips_count_hybrid_and_fall_back_to_identity`).
+2. **A pool that is empty or too thin** (an off-meta role, a narrow mana range, a mono-color deck, a reference whose sideboards are mostly off-color). Expected: no Jev call for an empty pool. A main slot's shortfall moves to a same-role slot, then the largest slot, then one catch-all slot, then basics, so the main deck is still 60. A short reference sideboard is topped up from the format's sideboards to 15. Tests: Task 5 (`test_empty_pool_makes_no_jev_call`, `test_largest_first_and_shortfall_moves_to_same_role`, `test_returns_what_cannot_be_filled`), Task 7 (`test_reference_cards_then_format_top_up_to_exactly_15`, `test_brew_gets_a_format_sideboard_and_basic_land_split`).
 3. **Requested cards that are odd**: a land, an off-color card, a Legendary DFC, an unknown or illegal name, or the same card twice. Expected: a land comes out of the land count, an off-color card adds its colors, a Legendary card is 1 copy, unknown or illegal names are skipped, and repeats go in once. Any copies beyond the fitting slot come out of the largest slot. Tests: Task 6 `TestReserveRequested`.
-4. **Rounding and odd decklists** (a 23.5 average land count, 61-card lists, decklist names with no card row, untagged cards). Expected: nonland slots plus lands are exactly 60 and sideboard slots exactly 15. Untagged cards fall back to `creature` / `noncreature`, and unknown names count as `noncreature` at mana value 0. Tests: Task 2 (`test_largest_remainder_hits_the_total`), Task 3 (`test_untagged_cards_fall_back_to_type`, `test_slots_lands_copies_and_sideboard`), Task 7 (`test_reference_deck_is_60_and_15`).
+4. **Rounding and odd decklists** (a 23.5 average land count, 61-card lists, decklist names with no card row, untagged cards). Expected: nonland slots plus lands are exactly 60, and the sideboard is exactly 15 even when average copies overshoot. Untagged cards fall back to `creature` / `noncreature`, and unknown names count as `noncreature` at mana value 0. Tests: Task 2 (`test_largest_remainder_hits_the_total`), Task 3 (`test_untagged_cards_fall_back_to_type`, `test_slots_lands_and_copies`), Task 7 (`test_reference_deck_is_60_and_15`, `test_reference_cards_then_format_top_up_to_exactly_15`).
 5. **Archetype names as Choice options**: case and whitespace duplicates, an archetype named "None", more than 254 names, and one-list archetypes. Expected: grouped case-insensitively in SQL, "none" reserved, at most 255 options, and archetypes with fewer than 2 lists left out; no Jev call when nothing qualifies. Tests: Task 2 (`test_groups_names_case_insensitively_in_the_window`, `test_cap_and_reserved_none_name`, `test_no_candidates_skips_jev`).
 
 ## File Structure
@@ -71,7 +70,7 @@
 |---|---|---|
 | `backend/app/jobs/mtgtop8_scrape.py` | Event list follows the two-week view's pagination | 1 |
 | `backend/app/services/deck_plan.py` (new) | `Slot`, `Plan`, `choose`, `recent_archetypes`, `choose_reference`, `plan_from_decklists`, `plan_with_llm`, default plans | 2, 3, 4 |
-| `backend/app/services/deck_fill.py` (new) | `slot_pool`, `fill_slot`, `fill_slots`, `reserve_requested`, `land_pool`, `fill_lands`, basics, `summarize`, `assemble` | 5, 6, 7 |
+| `backend/app/services/deck_fill.py` (new) | `slot_pool`, `fill_slot`, `fill_slots`, `reserve_requested`, `land_pool` (with the fetchland guard), `fill_lands`, basics, `sideboard_pool`, `fill_sideboard`, `summarize`, `assemble` | 5, 6, 7 |
 | `backend/app/services/deck_generator.py` | Calls `deck_fill.assemble`; LLM path as fallback | 8 |
 | `backend/scripts/eval_assembly.py` (new) | Live eval: three Standard decks against real Jev | 9 |
 | `backend/tests/test_mtgtop8_pagination.py`, `test_deck_plan.py`, `test_deck_fill.py`, `test_deck_generator_assembly.py` (new) | Unit tests | 1-8 |
@@ -269,7 +268,7 @@ Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
 - Produces (in `app.services.deck_plan`):
   - constants `WINDOW_DAYS = 14`, `REFERENCE_CONFIDENCE = 0.5`, `MAX_OPTIONS = 255`, `MIN_LISTS = 2`, `CHOICE_TIMEOUT = 10.0`, `CHOICE_DEADLINE = 15.0`, `NONE_OPTION = "none"`, `WUBRG = "WUBRG"`, `BANDS`, and `RECENT` (a SQL fragment for `e` = events with a `:format` parameter)
   - `@dataclass Slot(role: str, cmc_min: int, cmc_max: int, copies: int, description: str = "", type_contains: Optional[str] = None)`
-  - `@dataclass Plan(slots: List[Slot], lands: int, nonbasic_lands: Optional[int] = None, sideboard: List[Slot] = [], copies: Dict[str, int] = {}, side_copies: Dict[str, int] = {}, colors: List[str] = [], reference: Optional[str] = None)`. `nonbasic_lands=None` means the brew rule applies.
+  - `@dataclass Plan(slots: List[Slot], lands: int, nonbasic_lands: Optional[int] = None, copies: Dict[str, int] = {}, colors: List[str] = [], reference: Optional[str] = None)`. `nonbasic_lands=None` means the brew rule applies. There are no sideboard fields: sideboards are not slot-planned (Task 7).
   - `band_of(cmc) -> Tuple[int, int]`, `describe(role, cmc_min, cmc_max) -> str`, `largest_remainder(sizes, total) -> List[int]`
   - `async choose(client, state, question: Choice)` returns the answer (`.choice`, `.confidence`, `.probabilities`) and raises when Jev fails
   - `async recent_archetypes(db, format) -> List[Tuple[str, int]]`
@@ -430,9 +429,7 @@ class Plan:
     slots: List[Slot]
     lands: int
     nonbasic_lands: Optional[int] = None  # None: brew rule by color count
-    sideboard: List[Slot] = field(default_factory=list)
     copies: Dict[str, int] = field(default_factory=dict)  # reference main-deck copies by card name
-    side_copies: Dict[str, int] = field(default_factory=dict)
     colors: List[str] = field(default_factory=list)  # reference lists' colors, WUBRG order
     reference: Optional[str] = None
 
@@ -527,17 +524,17 @@ Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
 **Interfaces:**
 - Consumes: `Slot`, `Plan`, `RECENT`, `band_of`, `describe`, `largest_remainder`, `WUBRG` (Task 2).
 - Produces:
-  - constants `MIN_SLOT = 2`, `MAIN_SIZE = 60`, `SIDEBOARD_SIZE = 15`; `REFERENCE_SQL`
+  - constants `MIN_SLOT = 2`, `MAIN_SIZE = 60`; `REFERENCE_SQL` (main-deck entries only)
   - `is_land(type_line) -> bool` (front face only, so a spell // land MDFC is a spell)
-  - `async plan_from_decklists(db, archetype, format) -> Optional[Plan]`: slots totalling `60 - lands`, `lands`, `nonbasic_lands`, `sideboard` totalling 15 (or `[]`), `copies` / `side_copies` (average copies per card name, rounded, at least 1), `colors` (played by at least half the lists), `reference=archetype`. `None` when the archetype has no lists in the window.
+  - `async plan_from_decklists(db, archetype, format) -> Optional[Plan]`: slots totalling `60 - lands`, `lands`, `nonbasic_lands`, `copies` (average main-deck copies per card name, rounded, at least 1), `colors` (played by at least half the lists), `reference=archetype`. `None` when the archetype has no lists in the window.
   - helpers `_slot_sizes`, `_merge_small`, `_to_slots`, `_avg_copies`
 
 - [ ] **Step 1: Write the failing tests**
 
 In `backend/tests/test_deck_plan.py`, add `from types import SimpleNamespace` as the first import line (above `from unittest.mock import AsyncMock, MagicMock`), then append:
 ```python
-def entry(deck, name, qty, type_line, cmc, colors=(), role=None, section="main"):
-    return SimpleNamespace(deck_id=deck, section=section, name=name, qty=qty, type_line=type_line,
+def entry(deck, name, qty, type_line, cmc, colors=(), role=None):
+    return SimpleNamespace(deck_id=deck, name=name, qty=qty, type_line=type_line,
                            cmc=cmc, colors=list(colors), role=role)
 
 
@@ -548,13 +545,11 @@ LISTS = [
     entry(1, "Mystery Card", 1, None, None),  # decklist name with no card row
     entry(1, "Sacred Foundry", 4, "Land — Mountain Plains", 0),
     entry(1, "Mountain", 10, MOUNTAIN, 0),
-    entry(1, "Rest in Peace", 2, "Enchantment", 2, "W", "graveyard_hate", "side"),
     entry(2, "Hired Claw", 3, "Creature — Lizard Mercenary", 1, "R", "threat_cheap"),
     entry(2, "Burst Lightning", 4, "Instant", 1, "R", "burn"),
     entry(2, "Lightning Helix", 2, "Instant", 2, "RW", "removal_targeted"),
     entry(2, "Sacred Foundry", 4, "Land — Mountain Plains", 0),
     entry(2, "Mountain", 9, MOUNTAIN, 0),
-    entry(2, "Rest in Peace", 2, "Enchantment", 2, "W", "graveyard_hate", "side"),
 ]
 
 
@@ -584,7 +579,7 @@ class TestMergeSmall:
 
 
 class TestPlanFromDecklists:
-    async def test_slots_lands_copies_and_sideboard(self):
+    async def test_slots_lands_and_copies(self):
         db = fake_db(LISTS)
         plan = await dp.plan_from_decklists(db, "Boros Aggro", "standard")
         sql, params = sql_of(db)
@@ -592,6 +587,7 @@ class TestPlanFromDecklists:
         assert "lower(trim(d.archetype)) = lower(trim(:archetype))" in sql
         assert "lower(split_part(c.name, ' // ', 1)) = n.k" in sql  # DFCs listed by front face
         assert "r.role NOT LIKE 'land%'" in sql
+        assert "l.sideboard" not in sql  # sideboards are not slot-planned
 
         assert plan.reference == "Boros Aggro"
         assert plan.lands == 14 and plan.nonbasic_lands == 4  # (14 + 13) / 2 rounds to 14
@@ -603,9 +599,6 @@ class TestPlanFromDecklists:
         assert plan.slots[0].description == dp.describe("threat_cheap", 0, 1)
         assert plan.copies["Hired Claw"] == 4 and plan.copies["Lightning Helix"] == 2
         assert plan.copies["Mountain"] == 10
-        assert [(s.role, s.copies) for s in plan.sideboard] == [("graveyard_hate", 15)]
-        assert plan.sideboard[0].description.startswith("Sideboard card: ")
-        assert plan.side_copies == {"Rest in Peace": 2}
 
     async def test_colors_played_by_at_least_half_the_lists(self):
         rows = [entry(d, "Shock", 4, "Instant", 1, "R", "burn") for d in (1, 2, 3)]
@@ -643,24 +636,20 @@ Append to the end of the file:
 ```python
 MIN_SLOT = 2  # slots under this many copies merge into a neighbor
 MAIN_SIZE = 60
-SIDEBOARD_SIZE = 15
 
 
-# One row per decklist entry in the archetype's lists, resolved to a card name
+# One row per main-deck entry in the archetype's lists, resolved to a card name
 # (decklists list DFCs by front face; cards store "Front // Back").
 REFERENCE_SQL = text(f"""
     WITH lists AS (
-        SELECT d.id, d.main_deck, d.sideboard
+        SELECT d.id, d.main_deck
         FROM decklists d JOIN events e ON e.id = d.event_id
         WHERE {RECENT}
           AND lower(trim(d.archetype)) = lower(trim(:archetype))
     ),
     entries AS (
-        SELECT l.id AS deck_id, 'main' AS section, x->>'card_name' AS entry, (x->>'quantity')::int AS qty
+        SELECT l.id AS deck_id, x->>'card_name' AS entry, (x->>'quantity')::int AS qty
         FROM lists l CROSS JOIN LATERAL jsonb_array_elements(l.main_deck) x
-        UNION ALL
-        SELECT l.id, 'side', x->>'card_name', (x->>'quantity')::int
-        FROM lists l CROSS JOIN LATERAL jsonb_array_elements(l.sideboard) x
     ),
     card AS (
         SELECT DISTINCT ON (k) k, c.name, c.type_line, c.cmc,
@@ -675,7 +664,7 @@ REFERENCE_SQL = text(f"""
         WHERE c.name IN (SELECT name FROM card) AND r.role NOT LIKE 'land%'
         ORDER BY c.name, r.confidence DESC NULLS LAST, r.efficiency DESC NULLS LAST
     )
-    SELECT en.deck_id, en.section, coalesce(card.name, en.entry) AS name, en.qty,
+    SELECT en.deck_id, coalesce(card.name, en.entry) AS name, en.qty,
            card.type_line, card.cmc, card.colors, top_role.role
     FROM entries en
     LEFT JOIN card ON card.k = lower(split_part(en.entry, ' // ', 1))
@@ -717,12 +706,12 @@ def _merge_small(sizes: Dict[Tuple[str, Tuple[int, int]], float]) -> List[List[A
     return slots
 
 
-def _to_slots(sizes: Dict[Tuple[str, Tuple[int, int]], float], total: int, prefix: str = "") -> List[Slot]:
+def _to_slots(sizes: Dict[Tuple[str, Tuple[int, int]], float], total: int) -> List[Slot]:
     merged = _merge_small(sizes)
     if not merged or total <= 0:
         return []
     counts = largest_remainder([s[3] for s in merged], total)
-    return [Slot(role, lo, hi, n, prefix + describe(role, lo, hi))
+    return [Slot(role, lo, hi, n, describe(role, lo, hi))
             for (role, lo, hi, _), n in zip(merged, counts) if n > 0]
 
 
@@ -735,16 +724,15 @@ def _avg_copies(rows: Sequence[Any]) -> Dict[str, int]:
 
 
 async def plan_from_decklists(db: AsyncSession, archetype: str, format: str) -> Optional[Plan]:
-    """Slot plan from the archetype's decklists in the window; None without lists."""
+    """Main-deck slot plan from the archetype's decklists in the window; None
+    without lists. Sideboards are not slot-planned (deck_fill.fill_sideboard)."""
     rows = (await db.execute(REFERENCE_SQL, {
         "format": format, "archetype": archetype})).all()
     n_lists = len({r.deck_id for r in rows})
     if not n_lists:
         return None
-    main = [r for r in rows if r.section == "main"]
-    side = [r for r in rows if r.section == "side"]
-    lands = [r for r in main if is_land(r.type_line)]
-    spells = [r for r in main if not is_land(r.type_line)]
+    lands = [r for r in rows if is_land(r.type_line)]
+    spells = [r for r in rows if not is_land(r.type_line)]
     land_count = round(sum(r.qty for r in lands) / n_lists)
     nonbasic = round(sum(r.qty for r in lands if not (r.type_line or "").startswith("Basic")) / n_lists)
     # A color counts when at least half the lists play it (splashes in one list don't).
@@ -753,9 +741,7 @@ async def plan_from_decklists(db: AsyncSession, archetype: str, format: str) -> 
         slots=_to_slots(_slot_sizes(spells, n_lists), MAIN_SIZE - land_count),
         lands=land_count,
         nonbasic_lands=min(nonbasic, land_count),
-        sideboard=_to_slots(_slot_sizes(side, n_lists), SIDEBOARD_SIZE, "Sideboard card: ") if side else [],
-        copies=_avg_copies(main),
-        side_copies=_avg_copies(side),
+        copies=_avg_copies(rows),
         colors=[c for c in WUBRG if lists_with[c] * 2 >= n_lists],
         reference=archetype,
     )
@@ -780,11 +766,11 @@ async def main():
         for a in ("Boros Aggro", "Dimir Aggro"):
             p = await dp.plan_from_decklists(db, a, "standard")
             print(a, "lands", p.lands, "nonbasic", p.nonbasic_lands, "colors", p.colors,
-                  "main", sum(s.copies for s in p.slots) + p.lands, "side", sum(s.copies for s in p.sideboard))
+                  "main", sum(s.copies for s in p.slots) + p.lands)
 asyncio.run(main())
 EOF
 ```
-Expected (numbers move as the scraper adds events): the top archetypes with counts (for example `('Dimir Aggro', 19)`); `Boros Aggro lands 24 nonbasic 18 colors ['W', 'R'] main 60 side 15`; `Dimir Aggro lands 23 nonbasic 15 colors ['U', 'B'] main 60 side 15`. Every `main` must be 60 and every `side` 15.
+Expected (numbers move as the scraper adds events): the top archetypes with counts (for example `('Dimir Aggro', 19)`); `Boros Aggro lands 24 nonbasic 18 colors ['W', 'R'] main 60`; `Dimir Aggro lands 23 nonbasic 15 colors ['U', 'B'] main 60`. Every `main` must be 60.
 
 - [ ] **Step 6: Commit**
 
@@ -794,8 +780,8 @@ git commit -m "Plan deck slots from a reference archetype's decklists
 
 Each nonland card goes to its top card_roles role (creature/noncreature
 when untagged) and a mana value band. Average copies per slot, small slots
-merged, rounded to 60 minus the average land count. The sideboard is built
-the same way, to 15. Decklist names match cards by front face, so DFCs join.
+merged, rounded to 60 minus the average land count. Sideboards are not
+slot-planned. Decklist names match cards by front face, so DFCs join.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
@@ -816,7 +802,7 @@ Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
   - `lands_for(archetype_hint) -> int` (24 control, 23 midrange, else 22)
   - `parse_llm_plan(content, lands) -> Optional[List[Slot]]` (scaled to `60 - lands`; `None` if anything is invalid)
   - `default_plan(archetype_hint) -> List[Slot]` (unknown hints use `midrange`)
-  - `async plan_with_llm(request_text, colors, archetype_hint) -> Plan` (no sideboard, `nonbasic_lands=None`, `reference=None`)
+  - `async plan_with_llm(request_text, colors, archetype_hint) -> Plan` (`nonbasic_lands=None`, `reference=None`)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -859,7 +845,7 @@ class TestPlanWithLlm:
 
     async def test_without_llm_uses_the_archetype_default(self):
         plan = await dp.plan_with_llm("mono-red aggro", ["R"], "aggro")
-        assert plan.lands == 22 and plan.sideboard == [] and plan.reference is None
+        assert plan.lands == 22 and plan.reference is None
         assert plan.nonbasic_lands is None  # brew rule applies at land time
         assert [s.role for s in plan.slots] == [r for r, *_ in dp.DEFAULT_PLANS["aggro"]]
         assert sum(s.copies for s in plan.slots) == 38
@@ -979,7 +965,7 @@ def default_plan(archetype_hint: str) -> List[Slot]:
 
 
 async def plan_with_llm(request_text: str, colors: List[str], archetype_hint: str) -> Plan:
-    """Brew plan from one LLM call; the archetype default when that fails. No sideboard."""
+    """Brew plan from one LLM call; the archetype default when that fails."""
     lands = lands_for(archetype_hint)
     slots = None
     if llm.is_configured():
@@ -1026,12 +1012,12 @@ Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
 **Interfaces:**
 - Consumes: `Slot`, `choose`, `RECENT`, `MAX_OPTIONS` (Task 2); `FORMAT_LEGALITY_MAP` from `card_service`.
 - Produces (in `app.services.deck_fill`):
-  - constants `MAX_COPIES = 4`, `BREW_COPIES`, `ANY_SLOT`, `SLOT_QUESTION`, `CARD_COLORS`; `_plays_cte(sideboard)`, `_role_sql(slot)` (roles: any `CARD_ROLES` role, `creature`, `noncreature`, `any`)
-  - `async slot_pool(db, slot, colors, format, chosen, sideboard=False) -> List[row]`; rows have `name, mana_cost, type_line, oracle_text, cmc, plays, color_identity`
+  - constants `MAX_COPIES = 4`, `BREW_COPIES`, `ANY_SLOT`, `SLOT_QUESTION`, `CARD_COLORS`; `_plays_cte()` (main-deck plays), `_role_sql(slot)` (roles: any `CARD_ROLES` role, `creature`, `noncreature`, `any`)
+  - `async slot_pool(db, slot, colors, format, chosen) -> List[row]`; rows have `name, mana_cost, type_line, oracle_text, cmc, plays, color_identity`
   - `option_text(row, format) -> str`, `brew_copies(name, rank) -> int`
-  - `async fill_slot(client, slot, pool, state, format, copies_for) -> List[Tuple[str, int]]`, where `copies_for(name, rank) -> int`
+  - `async fill_slot(client, slot, pool, state, format, copies_for, question=SLOT_QUESTION) -> List[Tuple[str, int]]`, where `copies_for(name, rank) -> int` (Task 7 passes the sideboard question)
   - `class Build` with `copies: Dict[str, int]`, `rows: Dict[str, row]`, `add(name, qty, row=None)`, `total()`, `entries() -> [{card_name, quantity}]`
-  - `async fill_slots(db, client, slots, build, colors, format, state, copies_for, exclude=(), sideboard=False) -> int` (copies left unfilled), where `state() -> dict`
+  - `async fill_slots(db, client, slots, build, colors, format, state, copies_for) -> int` (copies left unfilled), where `state() -> dict`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1094,12 +1080,11 @@ class TestSlotPool:
         assert "NOT (c.name = ANY(CAST(:chosen AS varchar[])))" in sql
         assert "ORDER BY plays DESC, c.name" in sql and "LIMIT 255" in sql
 
-    async def test_type_roles_type_contains_and_sideboard_plays(self):
+    async def test_type_roles_and_type_contains(self):
         db = fake_db()
-        await df.slot_pool(db, Slot("creature", 2, 2, 4, "x", "Equipment"), ["R"], "modern", [], sideboard=True)
+        await df.slot_pool(db, Slot("creature", 2, 2, 4, "x", "Equipment"), ["R"], "modern", [])
         sql = str(db.execute.call_args[0][0])
         assert "(c.type_line LIKE '%Creature%' OR c.type_line ILIKE '%' || :type_contains || '%')" in sql
-        assert "jsonb_array_elements(d.main_deck || d.sideboard)" in sql
         assert db.execute.call_args[0][1]["legality"] == "modern"
 
     def test_option_text(self):
@@ -1118,7 +1103,8 @@ class TestFillSlot:
         assert picks == [("F", 4), ("E", 4), ("D", 3), ("C", 2), ("B", 1), ("A", 1)]
         state, questions, _ = jev.calls[0]
         q = questions["pick"]
-        assert q.instructions["slot"] == "Burn" and list(q.criteria) == ["A", "B", "C", "D", "E", "F"]
+        assert q.instructions == {"question": df.SLOT_QUESTION, "slot": "Burn"}
+        assert list(q.criteria) == ["A", "B", "C", "D", "E", "F"]
 
     async def test_reference_copies_capped_at_four_and_at_the_slot(self):
         pool = [card("A"), card("B"), card("C")]
@@ -1154,8 +1140,8 @@ CARDS = [
 def fake_pool(cards):
     calls = []
 
-    async def pool(db, slot, colors, format, chosen, sideboard=False):
-        calls.append((slot.role, slot.copies, list(chosen), sideboard))
+    async def pool(db, slot, colors, format, chosen):
+        calls.append((slot.role, slot.copies, list(chosen)))
         return [c for c in cards
                 if (slot.role == "any" or slot.role in c.roles)
                 and slot.cmc_min <= c.cmc <= slot.cmc_max and c.name not in chosen
@@ -1189,14 +1175,15 @@ class TestFillSlots:
                                     dict, df.brew_copies)
         assert build.copies == {"Bolt A": 4} and short == 4
 
-    async def test_exclude_and_sideboard_reach_the_pool(self, monkeypatch):
+    async def test_cards_already_in_the_deck_are_excluded(self, monkeypatch):
         pool = fake_pool(CARDS)
         monkeypatch.setattr(df, "slot_pool", pool)
         build = df.Build()
+        build.add("Bolt A", 4)  # a requested card
         await df.fill_slots(None, FakeJev(), [Slot("burn", 0, 1, 4, "")], build, ["R"], "standard", dict,
-                            df.brew_copies, exclude=["Bolt A"], sideboard=True)
-        assert pool.calls[0][2:] == (["Bolt A"], True)
-        assert build.copies == {"Bolt B": 4}
+                            df.brew_copies)
+        assert pool.calls[0][2] == ["Bolt A"]
+        assert build.copies == {"Bolt A": 4, "Bolt B": 4}
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -1239,13 +1226,13 @@ SLOT_QUESTION = ("Which card best fills this slot in the deck described by `deck
 CARD_COLORS = "coalesce(nullif(c.colors, '{}'), c.color_identity, '{}')"
 
 
-def _plays_cte(sideboard: bool) -> str:
-    deck = "d.main_deck || d.sideboard" if sideboard else "d.main_deck"
+def _plays_cte() -> str:
+    """Main-deck plays per card (front face, lower case) in the window."""
     return f"""
         played AS (
             SELECT lower(split_part(x->>'card_name', ' // ', 1)) AS k, COUNT(DISTINCT d.id) AS plays
             FROM decklists d JOIN events e ON e.id = d.event_id
-            CROSS JOIN LATERAL jsonb_array_elements({deck}) AS x
+            CROSS JOIN LATERAL jsonb_array_elements(d.main_deck) AS x
             WHERE {RECENT}
             GROUP BY 1
         )"""
@@ -1266,11 +1253,11 @@ def _role_sql(slot: Slot) -> str:
 
 
 async def slot_pool(db: AsyncSession, slot: Slot, colors: List[str], format: str,
-                    chosen: Sequence[str], sideboard: bool = False) -> List[Any]:
+                    chosen: Sequence[str]) -> List[Any]:
     """Played, legal, on-color nonland cards that fit the slot, most played first
     (at most MAX_OPTIONS). Rows: name, mana_cost, type_line, oracle_text, cmc, plays."""
     sql = text(f"""
-        WITH {_plays_cte(sideboard)}
+        WITH {_plays_cte()}
         SELECT c.name, MAX(c.mana_cost) AS mana_cost, MAX(c.type_line) AS type_line,
                MAX(c.oracle_text) AS oracle_text, MAX(c.cmc) AS cmc, MAX(p.plays) AS plays,
                MAX(c.color_identity) AS color_identity
@@ -1302,13 +1289,13 @@ def brew_copies(name: str, rank: int) -> int:
 
 
 async def fill_slot(client, slot: Slot, pool: Sequence[Any], state: Dict[str, Any], format: str,
-                    copies_for: Callable[[str, int], int]) -> List[Tuple[str, int]]:
+                    copies_for: Callable[[str, int], int], question: str = SLOT_QUESTION) -> List[Tuple[str, int]]:
     """Jev ranks the pool for the slot; code takes copies down that ranking until
     the slot is full. Fewer than slot.copies when the pool runs out."""
     if not pool or slot.copies <= 0:
         return []
     answer = await choose(client, state, Choice(
-        instructions={"question": SLOT_QUESTION, "slot": slot.description},
+        instructions={"question": question, "slot": slot.description},
         criteria={r.name: option_text(r, format) for r in pool}))
     probs = answer.probabilities or {}
     ranked = sorted((r.name for r in pool), key=lambda n: -probs.get(n, 0.0))  # stable: ties keep play order
@@ -1343,8 +1330,7 @@ class Build:
 
 async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, colors: List[str],
                      format: str, state: Callable[[], Dict[str, Any]],
-                     copies_for: Callable[[str, int], int], exclude: Sequence[str] = (),
-                     sideboard: bool = False) -> int:
+                     copies_for: Callable[[str, int], int]) -> int:
     """Fill `slots` into `build`, largest remaining slot first. A slot's shortfall
     moves to a remaining slot with the same role, else the largest remaining slot;
     a final shortfall gets one catch-all slot. Returns copies still unfilled."""
@@ -1353,7 +1339,7 @@ async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, 
     while todo:
         slot = max(todo, key=lambda s: s.copies)
         todo.remove(slot)
-        pool = await slot_pool(db, slot, colors, format, [*build.copies, *exclude], sideboard)
+        pool = await slot_pool(db, slot, colors, format, list(build.copies))
         rows = {r.name: r for r in pool}
         picks = await fill_slot(client, slot, pool, state(), format, copies_for)
         for name, q in picks:
@@ -1365,7 +1351,7 @@ async def fill_slots(db: AsyncSession, client, slots: List[Slot], build: Build, 
             short = 0
     if short:
         catch_all = Slot("any", 0, 99, short, ANY_SLOT)
-        pool = await slot_pool(db, catch_all, colors, format, [*build.copies, *exclude], sideboard)
+        pool = await slot_pool(db, catch_all, colors, format, list(build.copies))
         rows = {r.name: r for r in pool}
         picks = await fill_slot(client, catch_all, pool, state(), format, copies_for)
         for name, q in picks:
@@ -1428,7 +1414,8 @@ Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
 - Consumes: `Build`, `fill_slot`, `_plays_cte`, `CARD_COLORS`, `MAX_COPIES` (Task 5); `Plan`, `Slot`, `is_land`, `largest_remainder`, `WUBRG` (Tasks 2-3).
 - Produces:
   - constants `BASICS`, `BREW_NONBASICS`, `LAND_SLOT`; `REQUESTED_SQL`
-  - `async land_pool(db, colors, format, chosen) -> List[row]`
+  - `LAND_SEARCH`, `fetches_for_colors(oracle_text, colors) -> bool` (the fetchland guard)
+  - `async land_pool(db, colors, format, chosen) -> List[row]` (identity ⊆ colors, then the fetchland guard)
   - `async reserve_requested(db, names, plan, format, build) -> List[str]`: adds requested cards to `build`, shrinks `plan.slots` / `plan.lands` in place, and returns the requested cards' colors in WUBRG order
   - `pips(rows) -> Dict[str, int]`, `split_basics(counts, colors, n) -> Dict[basic name, int]`, `brew_nonbasics(colors) -> int`
   - `async fill_lands(db, client, build, plan, colors, format, state, copies_for) -> None`: adds exactly `plan.lands` lands to `build`
@@ -1495,7 +1482,24 @@ class TestReserveRequested:
         assert build.copies == {"Shock": 4} and p.slots[0].copies == 4
 
 
+FLOODED_STRAND = ("{T}, Pay 1 life, Sacrifice this land: Search your library for a Plains or Island card, "
+                  "put it onto the battlefield, then shuffle.")
+BLOODSTAINED_MIRE = ("{T}, Pay 1 life, Sacrifice this land: Search your library for a Swamp or Mountain card, "
+                     "put it onto the battlefield, then shuffle.")
+EVOLVING_WILDS = ("{T}, Sacrifice this land: Search your library for a basic land card, "
+                  "put it onto the battlefield tapped, then shuffle.")
+
+
 class TestLandPool:
+    async def test_fetchlands_must_find_a_deck_color(self):
+        rows = [card(n, "Land", 0, "", identity="", mana_cost=None, oracle=o) for n, o in (
+            ("Flooded Strand", FLOODED_STRAND), ("Bloodstained Mire", BLOODSTAINED_MIRE),
+            ("Evolving Wilds", EVOLVING_WILDS), ("Sunbillow Verge", "{T}: Add {W}."))]
+        got = await df.land_pool(fake_db(rows), ["R"], "standard", [])
+        assert [r.name for r in got] == ["Bloodstained Mire", "Evolving Wilds", "Sunbillow Verge"]
+        got = await df.land_pool(fake_db(rows), ["W", "U"], "standard", [])
+        assert [r.name for r in got] == ["Flooded Strand", "Evolving Wilds", "Sunbillow Verge"]
+
     async def test_identity_subset_played_nonbasics(self):
         db = fake_db()
         await df.land_pool(db, ["R", "W"], "standard", ["Sacred Foundry"])
@@ -1559,7 +1563,7 @@ class TestFillLands:
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `cd backend && python3 -m pytest tests/test_deck_fill.py -v`
-Expected: the 10 new tests FAIL with `AttributeError: module 'app.services.deck_fill' has no attribute 'reserve_requested'` (and `land_pool`, `pips`, `split_basics`, `brew_nonbasics`, `fill_lands`); the 11 Task 5 tests pass.
+Expected: the 11 new tests FAIL with `AttributeError: module 'app.services.deck_fill' has no attribute 'reserve_requested'` (and `land_pool`, `pips`, `split_basics`, `brew_nonbasics`, `fill_lands`); the 11 Task 5 tests pass.
 
 - [ ] **Step 3: Implement**
 
@@ -1567,7 +1571,7 @@ In `backend/app/services/deck_fill.py`, replace the import block (from `import l
 ```python
 import logging
 import re
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1582,14 +1586,27 @@ Append to the end of the file:
 BASICS = {"W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest"}
 BREW_NONBASICS = {1: 0, 2: 4}  # by deck color count; 3+ colors: 6
 LAND_SLOT = "a land for this deck's mana: fixing for its colors, or utility"
+LAND_SEARCH = re.compile(r"search your library for ([^.]*)", re.IGNORECASE)
+
+
+def fetches_for_colors(oracle_text: Optional[str], colors: Sequence[str]) -> bool:
+    """False for a fetchland whose searches name basic land types (Plains, Island,
+    Swamp, Mountain, Forest) but none of the deck colors' types. A generic
+    "basic land card" search, or no search, is fine."""
+    wanted = {BASICS[c] for c in colors}
+    for match in LAND_SEARCH.finditer(oracle_text or ""):
+        types = {t for t in BASICS.values() if t in match.group(1)}
+        if types and not types & wanted:
+            return False
+    return True
 
 
 async def land_pool(db: AsyncSession, colors: List[str], format: str, chosen: Sequence[str]) -> List[Any]:
     """Played, legal nonbasic lands whose color identity fits the deck (colorless
-    included), most played first."""
-    # ponytail: fetchlands have identity {} and pass for any colors; Jev's slot judgment is the only guard
+    included), most played first. Fetchlands have identity {}, so those that only
+    find other colors' basic types are dropped here."""
     sql = text(f"""
-        WITH {_plays_cte(False)}
+        WITH {_plays_cte()}
         SELECT c.name, MAX(c.mana_cost) AS mana_cost, MAX(c.type_line) AS type_line,
                MAX(c.oracle_text) AS oracle_text, MAX(c.cmc) AS cmc, MAX(p.plays) AS plays,
                MAX(c.color_identity) AS color_identity
@@ -1605,7 +1622,8 @@ async def land_pool(db: AsyncSession, colors: List[str], format: str, chosen: Se
     """)
     params = {"format": format, "legality": FORMAT_LEGALITY_MAP[format], "colors": list(colors),
               "chosen": list(chosen)}
-    return list((await db.execute(sql, params)).all())
+    rows = (await db.execute(sql, params)).all()
+    return [r for r in rows if fetches_for_colors(r.oracle_text, colors)]
 
 
 REQUESTED_SQL = text(f"""
@@ -1723,7 +1741,7 @@ async def fill_lands(db: AsyncSession, client, build: Build, plan: Plan, colors:
 - [ ] **Step 4: Run the tests**
 
 Run: `cd backend && python3 -m pytest tests/test_deck_fill.py -v && python3 -m pytest -q`
-Expected: 21 passed; full suite 273 passed.
+Expected: 22 passed; full suite 274 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1734,8 +1752,9 @@ git commit -m "Reserve requested cards and build the mana base
 Requested cards go in first (4 copies, 1 if Legendary) and take their
 space from the first slot they fit, or from the land count for a land;
 their colors join the deck's. Nonbasic lands are a Jev pick from played
-lands within the deck's color identity; basics fill the rest, split by
-the spells' colored pips with at least one per color.
+lands within the deck's color identity; a fetchland must find one of the
+deck colors' basic types. Basics fill the rest, split by the spells'
+colored pips with at least one per color.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
@@ -1743,7 +1762,7 @@ Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
 
 ---
 
-### Task 7: `assemble`: the whole deck, sideboard and summary
+### Task 7: Sideboard, summary and `assemble`
 
 **Files:**
 - Modify: `backend/app/services/deck_fill.py` (imports; append)
@@ -1752,7 +1771,9 @@ Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
 **Interfaces:**
 - Consumes: everything from Tasks 2-6; `jev.session(client)`; `llm.is_configured()`, `llm.complete`.
 - Produces:
-  - `SIXTY_CARD_FORMATS` (`standard`, `historic`, `modern`, `legacy`), `COLOR_WORDS`, `SUMMARY_SYSTEM`
+  - `SIXTY_CARD_FORMATS` (`standard`, `historic`, `modern`, `legacy`), `COLOR_WORDS`, `SUMMARY_SYSTEM`, `SIDEBOARD_SIZE = 15`, `SIDEBOARD_QUESTION`, `SIDEBOARD_SLOT`
+  - `async sideboard_pool(db, colors, format, chosen, archetype=None) -> List[row]`: rows as `slot_pool`'s plus `copies` (average sideboard copies, rounded, at least 1). `archetype=None` means every list in the format.
+  - `async fill_sideboard(db, client, main, side, colors, format, state, reference) -> None`: fills `side` to 15 (reference sideboards, then a format top-up; the format only for a brew)
   - `async summarize(main, side, request_text, reference, colors, format) -> Tuple[name, strategy_summary]`
   - `async assemble(db, request_text, colors, specific_cards, format="standard", include_sideboard=True, archetype="", client=None) -> {"name", "strategy_summary", "main_deck", "sideboard", "reference", "colors"}`. `main_deck` and `sideboard` are `[{card_name, quantity}]`. It raises when Jev is not configured or fails, the format is not 60-card, the format has no recent decklists, or a brew has no colors.
 
@@ -1798,19 +1819,98 @@ LANDS = [card("Sacred Foundry", "Land", 0, "", identity="RW", mana_cost=None),
          card("Inspiring Vantage", "Land", 0, "", identity="RW", mana_cost=None)]
 
 
+def side_card(name, copies, colors="R"):
+    row = card(name, "Instant", 2, colors)
+    row.copies = copies
+    return row
+
+
+def fake_side_pool(by_scope):
+    calls = []
+
+    async def pool(db, colors, format, chosen, archetype=None):
+        calls.append((archetype, list(chosen)))
+        return [c for c in by_scope.get(archetype, []) if c.name not in chosen and set(c.colors) <= set(colors)]
+    pool.calls = calls
+    return pool
+
+
+class TestSideboardPool:
+    async def test_reference_sideboards(self):
+        db = fake_db([side_card("Abrade", 2)])
+        rows = await df.sideboard_pool(db, ["R", "W"], "standard", ["Shock"], "Boros Aggro")
+        assert [r.name for r in rows] == ["Abrade"]
+        stmt, params = db.execute.call_args[0]
+        sql = str(stmt)
+        assert params == {"format": "standard", "legality": "standard", "colors": ["R", "W"],
+                          "chosen": ["Shock"], "archetype": "Boros Aggro"}
+        assert "jsonb_array_elements(d.sideboard)" in sql and "d.main_deck" not in sql
+        assert "e.date >= CURRENT_DATE - 14" in sql and "JOIN side s" in sql  # played sideboard cards only
+        assert "lower(trim(d.archetype)) = lower(trim(:archetype))" in sql
+        assert df.CARD_COLORS + " <@ CAST(:colors AS varchar[])" in sql
+        assert "GREATEST(1, ROUND(MAX(s.avg_copies)))::int AS copies" in sql
+        assert "NOT (c.name = ANY(CAST(:chosen AS varchar[])))" in sql
+        assert "ORDER BY plays DESC, c.name" in sql and "LIMIT 255" in sql
+
+    async def test_format_sideboards_for_a_brew(self):
+        db = fake_db()
+        await df.sideboard_pool(db, ["R"], "standard", [])
+        stmt, params = db.execute.call_args[0]
+        assert "d.archetype" not in str(stmt) and "archetype" not in params
+
+
+class TestFillSideboard:
+    async def test_reference_cards_then_format_top_up_to_exactly_15(self, monkeypatch):
+        pool = fake_side_pool({
+            "Boros Aggro": [side_card("Rest in Peace", 2, "W"), side_card("Abrade", 3), side_card("Duress", 2, "B")],
+            None: [side_card("Abrade", 3), side_card("Sear", 6), side_card("Get Lost", 2, "W"),
+                   side_card("Ghost Vessel", 1, ""), side_card("Pyroclasm", 4), side_card("Shock", 4)],
+        })
+        monkeypatch.setattr(df, "sideboard_pool", pool)
+        main, side = df.Build(), df.Build()
+        main.add("Shock", 4)
+        jev = FakeJev()
+        await df.fill_sideboard(None, jev, main, side, ["R", "W"], "standard",
+                                lambda: {"deck": {"chosen": ["4x Shock"]}}, "Boros Aggro")
+        assert pool.calls == [("Boros Aggro", ["Shock"]), (None, ["Shock", "Rest in Peace", "Abrade"])]
+        # average copies (Sear's 6 capped at 4), the last pick cut to land on exactly 15
+        assert side.copies == {"Rest in Peace": 2, "Abrade": 3, "Sear": 4, "Get Lost": 2, "Ghost Vessel": 1,
+                               "Pyroclasm": 3}
+        state, questions, _ = jev.calls[0]
+        assert questions["pick"].instructions["question"] == df.SIDEBOARD_QUESTION
+        assert state == {"deck": {"chosen": ["4x Shock"]}}
+
+    async def test_brew_uses_the_format_sideboards(self, monkeypatch):
+        pool = fake_side_pool({None: [side_card(f"Side {i}", 4) for i in range(6)]})
+        monkeypatch.setattr(df, "sideboard_pool", pool)
+        side = df.Build()
+        await df.fill_sideboard(None, FakeJev(), df.Build(), side, ["R"], "standard", dict, None)
+        assert pool.calls == [(None, [])]
+        assert side.copies == {"Side 0": 4, "Side 1": 4, "Side 2": 4, "Side 3": 3}
+
+    async def test_a_full_reference_pool_needs_no_top_up(self, monkeypatch):
+        pool = fake_side_pool({"UW Control": [side_card(f"Side {i}", 3, "W") for i in range(5)]})
+        monkeypatch.setattr(df, "sideboard_pool", pool)
+        side = df.Build()
+        await df.fill_sideboard(None, FakeJev(), df.Build(), side, ["W", "U"], "standard", dict, "UW Control")
+        assert [c[0] for c in pool.calls] == ["UW Control"] and side.total() == 15
+
+
 def wire(monkeypatch, reference_plan=None, archetypes=(("Boros Aggro", 5),)):
     pool = fake_pool(MAIN_POOL)
     monkeypatch.setattr(df, "recent_archetypes", AsyncMock(return_value=list(archetypes)))
     monkeypatch.setattr(df, "plan_from_decklists", AsyncMock(return_value=reference_plan))
     monkeypatch.setattr(df, "slot_pool", pool)
     monkeypatch.setattr(df, "land_pool", AsyncMock(return_value=LANDS))
-    return pool
+    side = fake_side_pool({"Boros Aggro": [side_card(f"Side {i}", 3, "RW"[i % 2]) for i in range(6)],
+                           None: [side_card(f"Spare {i}", 2) for i in range(10)]})
+    monkeypatch.setattr(df, "sideboard_pool", side)
+    return pool, side
 
 
 def reference_plan():
     return Plan(slots=[Slot("threat_cheap", 2, 2, 20, "Bears"), Slot("burn", 0, 1, 16, "Burn")],
-                lands=24, nonbasic_lands=8, sideboard=[Slot("graveyard_hate", 0, 3, 15, "Sideboard card: hate")],
-                copies={"Bear 0": 4, "Bear 1": 2, "Sacred Foundry": 4}, side_copies={"Hate 0": 3},
+                lands=24, nonbasic_lands=8, copies={"Bear 0": 4, "Bear 1": 2, "Sacred Foundry": 4},
                 colors=["W", "R"], reference="Boros Aggro")
 
 
@@ -1820,7 +1920,7 @@ def total(entries):
 
 class TestAssemble:
     async def test_reference_deck_is_60_and_15(self, monkeypatch):
-        pool = wire(monkeypatch, reference_plan())
+        _, side_pool = wire(monkeypatch, reference_plan())
         jev = FakeJev(answer=lambda state, q: (
             {"pick": {"choice": "Boros Aggro", "confidence": 0.9, "probabilities": {}}}
             if "none" in q["pick"].criteria else {}))
@@ -1833,12 +1933,12 @@ class TestAssemble:
         assert main["Sacred Foundry"] == 4
         side = {e["card_name"] for e in deck["sideboard"]}
         assert not side & set(main)  # copies stay within 4 across main and sideboard
-        assert pool.calls[-1][3] is True  # sideboard pools count sideboard plays
+        assert side_pool.calls[0][0] == "Boros Aggro" and set(side_pool.calls[0][1]) == set(main)
         state = jev.calls[-1][0]["deck"]
         assert state["plan"] == "Boros Aggro, a current Standard archetype" and state["colors"] == ["W", "R"]
 
-    async def test_brew_has_no_sideboard_and_basic_land_split(self, monkeypatch):
-        wire(monkeypatch)
+    async def test_brew_gets_a_format_sideboard_and_basic_land_split(self, monkeypatch):
+        _, side_pool = wire(monkeypatch)
         brew = AsyncMock(return_value=Plan(slots=[Slot("threat_cheap", 2, 2, 18, "Bears"),
                                                   Slot("burn", 0, 1, 20, "Burn")], lands=22))
         monkeypatch.setattr(df, "plan_with_llm", brew)
@@ -1847,7 +1947,8 @@ class TestAssemble:
             if "none" in q["pick"].criteria else {}))
         deck = await df.assemble(None, "mono-red aggro", ["R"], [], "standard", True, "aggro", client=jev)
         main = {e["card_name"]: e["quantity"] for e in deck["main_deck"]}
-        assert total(deck["main_deck"]) == 60 and deck["sideboard"] == [] and deck["reference"] is None
+        assert total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15 and deck["reference"] is None
+        assert [c[0] for c in side_pool.calls] == [None]  # the format's sideboard cards
         assert main["Mountain"] == 22 and "Sacred Foundry" not in main  # mono-color brew: basics only
         assert {n for n in main if n.startswith("Bear")} <= RED  # on-color only
         brew.assert_awaited_once_with("mono-red aggro", ["R"], "aggro")
@@ -1888,7 +1989,7 @@ class TestAssemble:
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `cd backend && python3 -m pytest tests/test_deck_fill.py -v`
-Expected: the 11 new tests FAIL with `AttributeError: module 'app.services.deck_fill' has no attribute 'summarize'` (and `assemble`, `recent_archetypes` in `wire`).
+Expected: the 16 new tests FAIL with `AttributeError: module 'app.services.deck_fill' has no attribute 'sideboard_pool'` (and `fill_sideboard`, `summarize`, `assemble`, `recent_archetypes` in `wire`).
 
 - [ ] **Step 3: Implement**
 
@@ -1918,6 +2019,63 @@ SIXTY_CARD_FORMATS = {f for f in FORMAT_LEGALITY_MAP if f != "cedh"}
 COLOR_WORDS = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
 SUMMARY_SYSTEM = """You name and describe a finished Magic: The Gathering deck.
 Reply with only JSON: {"name": "a short deck name", "strategy_summary": "2-4 sentences on how the deck plays and wins"}."""
+SIDEBOARD_SIZE = 15
+SIDEBOARD_QUESTION = "Which card best belongs in this deck's sideboard?"
+SIDEBOARD_SLOT = "A sideboard card: an answer or swap for this deck's hard matchups after game 1"
+
+
+async def sideboard_pool(db: AsyncSession, colors: List[str], format: str, chosen: Sequence[str],
+                         archetype: Optional[str] = None) -> List[Any]:
+    """Legal, on-color, nonbasic cards from sideboards in the window: the
+    archetype's lists, or every list in the format when archetype is None. Most
+    played first, at most MAX_OPTIONS. Rows add `copies`: the card's average
+    sideboard copies there, rounded, at least 1."""
+    scope = "AND lower(trim(d.archetype)) = lower(trim(:archetype))" if archetype else ""
+    sql = text(f"""
+        WITH side AS (
+            SELECT lower(split_part(x->>'card_name', ' // ', 1)) AS k, COUNT(DISTINCT d.id) AS plays,
+                   AVG((x->>'quantity')::int) AS avg_copies
+            FROM decklists d JOIN events e ON e.id = d.event_id
+            CROSS JOIN LATERAL jsonb_array_elements(d.sideboard) AS x
+            WHERE {RECENT} {scope}
+            GROUP BY 1
+        )
+        SELECT c.name, MAX(c.mana_cost) AS mana_cost, MAX(c.type_line) AS type_line,
+               MAX(c.oracle_text) AS oracle_text, MAX(c.cmc) AS cmc, MAX(s.plays) AS plays,
+               GREATEST(1, ROUND(MAX(s.avg_copies)))::int AS copies,
+               MAX(c.color_identity) AS color_identity
+        FROM cards c JOIN side s ON s.k = lower(split_part(c.name, ' // ', 1))
+        WHERE c.legalities->>:legality = 'legal'
+          AND {CARD_COLORS} <@ CAST(:colors AS varchar[])
+          AND coalesce(c.type_line, '') NOT LIKE 'Basic%'
+          AND NOT (c.name = ANY(CAST(:chosen AS varchar[])))
+        GROUP BY c.name
+        ORDER BY plays DESC, c.name
+        LIMIT {MAX_OPTIONS}
+    """)
+    params = {"format": format, "legality": FORMAT_LEGALITY_MAP[format], "colors": list(colors),
+              "chosen": list(chosen)}
+    if archetype:
+        params["archetype"] = archetype
+    return list((await db.execute(sql, params)).all())
+
+
+async def fill_sideboard(db: AsyncSession, client, main: Build, side: Build, colors: List[str], format: str,
+                         state: Callable[[], Dict[str, Any]], reference: Optional[str]) -> None:
+    """Fill `side` to SIDEBOARD_SIZE: one Jev ranking over the reference lists'
+    sideboard cards, then (to top up a short pool, or alone for a brew) one over
+    the format's sideboard cards. Copies are each card's average sideboard copies,
+    capped at 4; main-deck cards are excluded, so no card passes 4 in total."""
+    for archetype in ([reference] if reference else []) + [None]:
+        need = SIDEBOARD_SIZE - side.total()
+        if need <= 0:
+            return
+        pool = await sideboard_pool(db, colors, format, [*main.copies, *side.copies], archetype)
+        rows = {r.name: r for r in pool}
+        picks = await fill_slot(client, Slot("sideboard", 0, 99, need, SIDEBOARD_SLOT), pool, state(), format,
+                                lambda name, rank: rows[name].copies, SIDEBOARD_QUESTION)
+        for name, q in picks:
+            side.add(name, q, rows[name])
 
 
 async def summarize(main: Build, side: Build, request_text: str, reference: Optional[str],
@@ -1947,7 +2105,7 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
                    specific_cards: Optional[List[str]], format: str = "standard",
                    include_sideboard: bool = True, archetype: str = "", client=None) -> Dict[str, Any]:
     """Build a deck: reference or brew plan, requested cards, Jev-filled slots,
-    lands, sideboard (reference only), summary. Returns {name, strategy_summary,
+    lands, sideboard, summary. Returns {name, strategy_summary,
     main_deck, sideboard} like ai_service.generate_deck, plus the reference
     archetype (None for a brew) and the deck colors. Raises when Jev is not
     configured or fails, the format is not 60-card, the format has no recent
@@ -1983,15 +2141,11 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
         def main_copies(name: str, rank: int) -> int:
             return plan.copies.get(name) or brew_copies(name, rank)
 
-        def side_copies(name: str, rank: int) -> int:
-            return plan.side_copies.get(name) or brew_copies(name, rank)
-
         short = await fill_slots(db, client, plan.slots, main, deck_colors, format, state, main_copies)
         plan.lands += short  # a pool too thin to fill the spells: basics keep the deck at 60
         await fill_lands(db, client, main, plan, deck_colors, format, state, main_copies)
-        if include_sideboard and plan.sideboard:
-            await fill_slots(db, client, plan.sideboard, side, deck_colors, format, state, side_copies,
-                             exclude=list(main.copies), sideboard=True)
+        if include_sideboard:
+            await fill_sideboard(db, client, main, side, deck_colors, format, state, reference)
 
     name, summary = await summarize(main, side, request_text, reference, deck_colors, format)
     logger.info(f"[ASSEMBLY] {name}: reference={reference} colors={deck_colors} "
@@ -2003,7 +2157,7 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
 - [ ] **Step 4: Run the tests**
 
 Run: `cd backend && python3 -m pytest tests/test_deck_fill.py -v && python3 -m pytest -q`
-Expected: 32 passed; full suite 284 passed.
+Expected: 38 passed; full suite 290 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2012,9 +2166,10 @@ git add backend/app/services/deck_fill.py backend/tests/test_deck_fill.py
 git commit -m "Assemble whole decks with Jev: plan, slots, lands, sideboard, summary
 
 assemble picks a reference archetype or a brew plan, reserves requested
-cards, fills slots and lands with Jev, fills a 15-card sideboard for a
-reference deck, and has the LLM name and summarize the finished list (a
-template without it). It raises for non-60-card formats, missing Jev, no
+cards, and fills slots and lands with Jev. The 15-card sideboard is one
+Jev ranking over the reference lists' sideboard cards (the format's for a
+brew, or to top up), at their average sideboard copies. The LLM names and
+summarizes the finished list (a template without it). It raises for non-60-card formats, missing Jev, no
 recent decklists or a colorless brew, so callers can fall back.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -2198,7 +2353,7 @@ with:
 - [ ] **Step 4: Run the tests**
 
 Run: `cd backend && python3 -m pytest tests/test_deck_generator_assembly.py tests/test_deck_generator_explanations.py -v && python3 -m pytest -q`
-Expected: 6 passed (the explanations tests still pass: with no key, `assemble` raises and they take the LLM mock); full suite 287 passed.
+Expected: 6 passed (the explanations tests still pass: with no key, `assemble` raises and they take the LLM mock); full suite 293 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2231,7 +2386,7 @@ Claude-Session: https://claude.ai/code/session_01YRcdjJFCWo3bHUFugg7oPN"
 ```python
 """
 Build three Standard decks with real Jev assembly and check each one: legal,
-60 main (and 15 sideboard with a reference), every card played in the last 14
+60 main and 15 sideboard, every card played in the last 14
 days or requested, nonbasic lands within the deck colors, at most 4 copies.
 Prints the lists for human review. Not run in CI.
 
@@ -2287,7 +2442,7 @@ async def check(db, deck, requested, need_reference) -> list:
         problems.append("no reference archetype")
     if sum(main.values()) != 60:
         problems.append(f"main is {sum(main.values())}")
-    if deck["reference"] and sum(side.values()) != 15:
+    if sum(side.values()) != 15:
         problems.append(f"sideboard is {sum(side.values())}")
     for n in names:
         row = cards.get(n)
@@ -2342,7 +2497,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run it against real Jev**
 
 Run: `cd /Users/robmiller/Projects/mtg-deckbuilder && docker compose exec -T backend python scripts/eval_assembly.py`
-Expected: three decklists, each followed by `OK`, then `PASS`. "Build me a Boros aggro deck" shows `reference=Boros Aggro colors=['W', 'R']` with 60 main and a 15-card sideboard. "mono-red aggro" shows `reference=None colors=['R']` with 22 Mountains and no sideboard. The Sephiroth request lists the full DFC name under `requested=` and has exactly 1 copy of it. Each deck takes about 9-20 s. (Pre-runs while writing this plan: PASS on three of four runs, 8.7-20.5 s per deck. The fourth run hit one `TypeSafeAPITimeoutError` at 10 s.)
+Expected: three decklists, each followed by `OK`, then `PASS`. "Build me a Boros aggro deck" shows `reference=Boros Aggro colors=['W', 'R']` with 60 main and a 15-card sideboard. "mono-red aggro" shows `reference=None colors=['R']` with 22 Mountains and a 15-card sideboard of red or colorless cards. The Sephiroth request lists the full DFC name under `requested=`, has exactly 1 copy of it, and has a 15-card sideboard. Each deck takes about 8-31 s. (Pre-runs while writing this plan: PASS on five of six runs, 8.4-31.2 s per deck; the slowest was the two-color brew with requested cards. The sixth run hit one `TypeSafeAPITimeoutError` at 10 s.)
 
 - [ ] **Step 3: Stop and report if it does not pass**
 
@@ -2400,7 +2555,7 @@ import json, sys
 d = json.load(sys.stdin)['deck']
 q = lambda es: sum(e['quantity'] for e in es)
 print(d['name'], '| main', q(d['main_deck']), '| side', q(d['sideboard']), '| valid', d['is_validated'], d['validation_errors'])
-print('; '.join(f\"{e['quantity']} {e['card_name']}\" for e in d['main_deck']))"
+print('; '.join(f'{e['quantity']} {e['card_name']}' for e in d['main_deck']))"
 docker logs spellbook-backend --since 5m 2>&1 | grep -E "\[ASSEMBLY\]|Jev assembly unavailable"
 ```
 Expected: about 10-20 s; `main 60 | side 15 | valid True None`; a list that matches the Task 9 Boros deck in character; and one log line `[ASSEMBLY] <name>: reference=Boros Aggro colors=['W', 'R'] main=60 sideboard=15`, with no `Jev assembly unavailable` line.
@@ -2418,7 +2573,7 @@ print(d['name'], sum(e['quantity'] for e in d['main_deck']), sum(e['quantity'] f
       [e['type'] for e in d['validation_errors'] or []])"
 docker logs spellbook-backend --since 2m 2>&1 | grep -E "\[ASSEMBLY\]"
 ```
-Expected: `<name> 60 0 ['sideboard_size']` (a brew has no sideboard, so the validator flags only that; see Known consequences), and `[ASSEMBLY] ... reference=None colors=['R'] main=60 sideboard=0`.
+Expected: `<name> 60 15 []` (brews get a sideboard from the format's sideboard cards, so they validate), and `[ASSEMBLY] ... reference=None colors=['R'] main=60 sideboard=15`.
 
 - [ ] **Step 4: Report**
 
