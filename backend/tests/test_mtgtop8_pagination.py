@@ -66,3 +66,17 @@ async def test_drops_events_older_than_the_window(monkeypatch):
     })
     events = await scrape.scrape_recent_events(None, "ST", "standard", days=14)
     assert [e["name"] for e in events] == ["New"]
+
+
+async def test_failed_later_page_keeps_earlier_events(monkeypatch):
+    base = f"{scrape.MTGTOP8_BASE_URL}/format"
+    pages = {f"{base}?f=ST": page([row("1", "League", day(1))], NEXT)}
+
+    async def fetch(client, url):
+        if url not in pages:
+            raise RuntimeError("timed out")
+        return pages[url]
+
+    monkeypatch.setattr(scrape, "fetch_page", fetch)
+    events = await scrape.scrape_recent_events(None, "ST", "standard", days=14)
+    assert [e["mtgtop8_id"] for e in events] == ["1"]

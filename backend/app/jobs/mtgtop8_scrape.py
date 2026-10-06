@@ -97,8 +97,15 @@ async def scrape_recent_events(
     seen = set()
     cutoff = datetime.now().date() - timedelta(days=days)
     url = f"{MTGTOP8_BASE_URL}/format?f={format_id}"
-    for _ in range(MAX_EVENT_PAGES):
-        soup = BeautifulSoup(await fetch_page(client, url), "html.parser")
+    for page_num in range(MAX_EVENT_PAGES):
+        try:
+            html = await fetch_page(client, url)
+        except RuntimeError as e:
+            if page_num == 0:
+                raise
+            logger.warning(f"Stopping {format_name} event pagination at page {page_num + 1}: {e}")
+            break
+        soup = BeautifulSoup(html, "html.parser")
         rows = _dated_event_rows(soup)
         if not rows:
             break
