@@ -135,3 +135,10 @@ async def test_failure_and_missing_key_fall_back():
                           meta_archetypes=[], tools=TOOLS, client=client) is None
     assert await cr.route(message="hi", history=[], summary=NO_DECK, strategy="", card_names=[],
                           meta_archetypes=[], tools=TOOLS) is None
+
+
+async def test_guild_name_adds_its_colors_only_when_wanted():
+    r, _ = await route("Build me a Boros aggro deck", {"color:R": 0.6, "color:W": 0.3})
+    assert r.inputs["suggest_core"]["colors"] == ["W", "R"]
+    r, _ = await route("how do I beat Boros?", {"color:R": 0.2, "color:W": 0.1})
+    assert r.inputs["suggest_core"]["colors"] == []

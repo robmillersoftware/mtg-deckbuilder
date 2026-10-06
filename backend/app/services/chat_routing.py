@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from typesafe_sdk import Choice, Noul
 
 from app.services import jev
+from app.services.ai.deck_parsing import add_guild_colors
 from app.services.deck_fit import role_description
 from app.services.guided_builder import _extract_mtg_keywords
 
@@ -147,7 +148,8 @@ def tool_inputs(
     """Each tool's input, from Jev's judgments plus the message. Raises KeyError
     when Jev left a question unanswered."""
     nouls, choices = resp.nouls, resp.choices
-    colors = [c for c in COLORS if nouls[f"color:{c}"].noul >= WANT_THRESHOLD] or summary["colors"]
+    colors = add_guild_colors(
+        [c for c in COLORS if nouls[f"color:{c}"].noul >= WANT_THRESHOLD], message, nouls) or summary["colors"]
     roles = [r for r in CORE_ROLES if nouls[f"role:{r}"].noul >= WANT_THRESHOLD] or list(DEFAULT_ROLES)
     wanted = [n for i, n in enumerate(card_names) if nouls[f"wants:{i}"].noul >= WANT_THRESHOLD]
     text = _strip_names(message, [n for n in card_names if n not in wanted])

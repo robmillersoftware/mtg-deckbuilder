@@ -113,3 +113,13 @@ async def test_failure_looks_up_names_once(monkeypatch):
     db2 = CountingDb(match=True)
     await deck_parsing.extract_card_names_from_prompt("Tezzeret rocks", db2)
     assert first == db2.calls
+
+
+async def test_guild_name_adds_its_colors_only_when_wanted(names):
+    answers = {"color:R": 0.6, "color:W": 0.3, "colors_specified": 0.9}
+    client = FakeJev(lambda state, qs: answers)
+    out = await deck_parsing.parse_deck_request("Build me a Boros aggro deck", db=None, client=client)
+    assert out["colors"] == ["W", "R"] and out["colors_specified"] is True
+    answers = {"color:R": 0.2, "color:W": 0.1, "colors_specified": 0.9}
+    out = await deck_parsing.parse_deck_request("how do I beat Boros?", db=None, client=client)
+    assert out["colors"] == [] and out["colors_specified"] is False

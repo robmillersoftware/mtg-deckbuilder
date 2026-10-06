@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from typing import List, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,30 @@ ARCHETYPES = {
 }
 COLOR_NAMES = {"W": "white", "U": "blue", "B": "black", "R": "red", "G": "green"}
 WANT_THRESHOLD = 0.5
+GUILD_COLORS = {
+    # Guilds (2-color)
+    "azorius": ["W", "U"], "dimir": ["U", "B"], "rakdos": ["B", "R"], "gruul": ["R", "G"],
+    "selesnya": ["G", "W"], "orzhov": ["W", "B"], "izzet": ["U", "R"], "golgari": ["B", "G"],
+    "boros": ["R", "W"], "simic": ["G", "U"],
+    # Shards (3-color)
+    "esper": ["W", "U", "B"], "grixis": ["U", "B", "R"], "jund": ["B", "R", "G"],
+    "naya": ["R", "G", "W"], "bant": ["G", "W", "U"],
+    # Wedges (3-color)
+    "abzan": ["W", "B", "G"], "jeskai": ["U", "R", "W"], "sultai": ["B", "G", "U"],
+    "mardu": ["R", "W", "B"], "temur": ["G", "U", "R"],
+}
+
+
+def add_guild_colors(colors: List[str], message: str, nouls: Dict[str, Any]) -> List[str]:
+    """`colors` plus the colors of each guild/shard/wedge named in `message` whose
+    strongest color noul reaches WANT_THRESHOLD (so "how do I beat Boros?" adds none),
+    in WUBRG order. Jev's per-color judgments are the check on own-vs-opponent."""
+    words = set(re.findall(r"[a-z]+", message.lower()))
+    out = set(colors)
+    for guild, cols in GUILD_COLORS.items():
+        if guild in words and max(nouls[f"color:{c}"].noul for c in cols) >= WANT_THRESHOLD:
+            out.update(cols)
+    return [c for c in COLOR_NAMES if c in out]
 
 
 def _parse_questions(n_cards: int) -> Dict[str, Any]:
@@ -62,7 +87,8 @@ async def parse_deck_request(prompt: str, db: AsyncSession, client=None) -> Dict
                 async with asyncio.timeout(jev.FIT_DEADLINE):
                     r = await jev.ask(client, {"request": prompt, "cards": names},
                                       _parse_questions(len(names)))
-                colors = [c for c in COLOR_NAMES if r.nouls[f"color:{c}"].noul >= WANT_THRESHOLD]
+                colors = add_guild_colors(
+                    [c for c in COLOR_NAMES if r.nouls[f"color:{c}"].noul >= WANT_THRESHOLD], prompt, r.nouls)
                 if r.nouls["colors_specified"].noul < WANT_THRESHOLD:
                     colors = []  # e.g. "beat mono-red": Jev leans toward non-red colors, but none were asked for
                 return {
@@ -90,29 +116,7 @@ async def fallback_parse(prompt: str, db: AsyncSession, names: List[str] = None)
         "black": "B", "swamp": "B",
         "red": "R", "mountain": "R",
         "green": "G", "forest": "G",
-        # Guild names (2-color)
-        "azorius": ["W", "U"],
-        "dimir": ["U", "B"],
-        "rakdos": ["B", "R"],
-        "gruul": ["R", "G"],
-        "selesnya": ["G", "W"],
-        "orzhov": ["W", "B"],
-        "izzet": ["U", "R"],
-        "golgari": ["B", "G"],
-        "boros": ["R", "W"],
-        "simic": ["G", "U"],
-        # Shard names (3-color)
-        "esper": ["W", "U", "B"],
-        "grixis": ["U", "B", "R"],
-        "jund": ["B", "R", "G"],
-        "naya": ["R", "G", "W"],
-        "bant": ["G", "W", "U"],
-        # Wedge names (3-color)
-        "abzan": ["W", "B", "G"],
-        "jeskai": ["U", "R", "W"],
-        "sultai": ["B", "G", "U"],
-        "mardu": ["R", "W", "B"],
-        "temur": ["G", "U", "R"],
+        **GUILD_COLORS,
         # Mono-color
         "mono-red": ["R"],
         "mono-white": ["W"],
