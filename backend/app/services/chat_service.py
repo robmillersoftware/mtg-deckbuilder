@@ -166,6 +166,22 @@ TOOLS = [
 ]
 
 
+# The Build page shows a deck, not suggestion groups: there, a request that would
+# suggest cards for a deck that doesn't exist yet generates the whole deck instead.
+SUGGESTION_ACTIONS = {"suggest_core", "suggest_package"}
+
+
+def full_deck_prompt(colors: List[str], archetype: Optional[str], strategy: str,
+                     specific_cards: List[str]) -> str:
+    """The generator prompt for generate_full_deck; no archetype is invented when none was given."""
+    prompt = " ".join(["Build a", *colors, *([archetype] if archetype else []), "deck"])
+    if strategy:
+        prompt += f" focused on {strategy}"
+    if specific_cards:
+        prompt += f" including {', '.join(specific_cards)}"
+    return prompt
+
+
 class ChatService:
     """
     Chat service for processing user messages and generating responses.
@@ -261,11 +277,14 @@ class ChatService:
         user_id: Optional[UUID] = None,
         format: str = "standard",
         current_deck: Optional[Dict[str, Any]] = None,
+        mode: Optional[str] = None,
     ) -> ChatResponse:
         """
-        Process a user message using Claude with tools for incremental deck building.
+        Process a user message, routing it to a deck-building tool or a text reply.
+        `mode` is the frontend page: "build" generates whole decks, "guided" suggests cards.
         """
         self._current_format = format
+        self._routed_inputs = None
         logger.info(f"[CHAT] process_message called with format={format!r}")
 
         # Get or create conversation
@@ -423,6 +442,9 @@ RULES:
                     max_tokens=2048,
                 )
 
+            if mode == "build" and not (deck or {}).get("main_deck"):
+                tool_calls = [self._as_full_deck(name, inp) for name, inp in tool_calls]
+
             for tool_name, tool_input in tool_calls:
                 logger.debug(f"[CHAT-SERVICE] LLM called tool: {tool_name} with input: {tool_input}")
 
@@ -481,7 +503,19 @@ RULES:
             return llm.complete(system=system_prompt + TEXT_ONLY_REPLY, user=transcript), []
         if action not in routed.inputs:
             return "", []
+        self._routed_inputs = routed.inputs
         return "", [(action, routed.inputs[action])]
+
+    def _as_full_deck(self, name: str, tool_input: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """Swap a suggestion action for full-deck generation, keeping its colors and strategy.
+        Prefers the inputs Jev routing already built for generate_full_deck."""
+        if name not in SUGGESTION_ACTIONS:
+            return name, tool_input
+        routed = (getattr(self, "_routed_inputs", None) or {}).get("generate_full_deck")
+        if routed is not None:
+            return "generate_full_deck", routed
+        keep = {k: tool_input[k] for k in ("colors", "strategy") if k in tool_input}
+        return "generate_full_deck", keep
 
     async def _meta_archetypes(self, format: str) -> List[str]:
         """Up to 10 unique archetype names from the format's latest snapshot, most-played
@@ -1380,7 +1414,7 @@ RULES:
     ) -> ChatResponse:
         """Generate a complete deck in one shot (escape hatch)."""
         colors = tool_input.get("colors", [])
-        archetype = tool_input.get("archetype", "midrange")
+        archetype = tool_input.get("archetype")
         strategy = tool_input.get("strategy", "")
         specific_cards = tool_input.get("specific_cards", [])
         format = getattr(self, "_current_format", "standard")
@@ -1404,11 +1438,7 @@ RULES:
         if not colors:
             colors = ["R", "G"]
 
-        prompt = f"Build a {' '.join(colors) if colors else ''} {archetype} deck"
-        if strategy:
-            prompt += f" focused on {strategy}"
-        if specific_cards:
-            prompt += f" including {', '.join(specific_cards)}"
+        prompt = full_deck_prompt(colors, archetype, strategy, specific_cards)
 
         result = await self.deck_generator.generate(
             prompt=prompt,

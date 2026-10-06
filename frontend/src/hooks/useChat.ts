@@ -63,7 +63,8 @@ export function useChat(mode?: ConversationMode) {
         content,
         currentConversation?.id,
         format,
-        currentDeck || undefined
+        currentDeck || undefined,
+        mode ?? undefined
       );
 
       const data: ChatResponse = response.data;
@@ -120,7 +121,7 @@ export function useChat(mode?: ConversationMode) {
     } finally {
       setIsLoading(false);
     }
-  }, [currentConversation, addMessage, setCurrentConversation, setCurrentDeck, setCardSuggestions, isLoading]);
+  }, [currentConversation, addMessage, setCurrentConversation, setCurrentDeck, setCardSuggestions, isLoading, mode]);
 
   const explainCard = useCallback(async (cardName: string) => {
     if (isLoading) return;

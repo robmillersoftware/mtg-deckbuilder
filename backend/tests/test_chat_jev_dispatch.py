@@ -170,3 +170,48 @@ async def test_meta_query_error_uses_savepoint_and_turn_uses_llm(chat, monkeypat
     chat.route = None
     await chat.process_message("hello")
     assert chat.llm_calls == ["tools"]
+
+
+class TestBuildMode:
+    """The Build page shows a deck, not suggestion groups: deck requests there generate a full deck."""
+
+    async def test_jev_suggestion_becomes_full_deck_on_build_page(self, chat):
+        chat.route = routed("suggest_core")
+        await chat.process_message("Build me a mono-red aggro deck", mode="build")
+        assert chat.dispatched == [("generate_full_deck", {"from": "generate_full_deck"})]
+
+    async def test_suggest_package_also_becomes_full_deck_without_a_deck(self, chat):
+        chat.route = routed("suggest_package")
+        await chat.process_message("I need red removal", mode="build")
+        assert chat.dispatched[0][0] == "generate_full_deck"
+
+    async def test_guided_page_keeps_suggestions(self, chat):
+        chat.route = routed("suggest_core")
+        await chat.process_message("Build me a mono-red aggro deck", mode="guided")
+        assert chat.dispatched[0][0] == "suggest_core"
+
+    async def test_no_mode_keeps_suggestions(self, chat):
+        chat.route = routed("suggest_core")
+        await chat.process_message("Build me a mono-red aggro deck")
+        assert chat.dispatched[0][0] == "suggest_core"
+
+    async def test_existing_deck_keeps_suggestions_on_build_page(self, chat):
+        chat.route = routed("suggest_package")
+        deck = {"main_deck": [{"card_name": "Shock", "quantity": 4}]}
+        await chat.process_message("I need more removal", mode="build", current_deck=deck)
+        assert chat.dispatched[0][0] == "suggest_package"
+
+    async def test_llm_fallback_suggestion_also_becomes_full_deck(self, chat, monkeypatch):
+        chat.route = None  # Jev unavailable -> LLM tool call
+
+        def chat_with_tools(**kwargs):
+            return "", [("suggest_core", {"strategy": "mono-red aggro", "colors": ["R"], "roles": ["threats"]})]
+        monkeypatch.setattr(llm, "chat_with_tools", chat_with_tools)
+        await chat.process_message("Build me a mono-red aggro deck", mode="build")
+        assert chat.dispatched == [("generate_full_deck", {"strategy": "mono-red aggro", "colors": ["R"]})]
+
+
+async def test_full_deck_prompt_has_no_default_archetype():
+    from app.services.chat_service import full_deck_prompt
+    assert full_deck_prompt(["R"], None, "mono-red aggro", []) == "Build a R deck focused on mono-red aggro"
+    assert full_deck_prompt([], "control", "", ["Opt"]) == "Build a control deck including Opt"

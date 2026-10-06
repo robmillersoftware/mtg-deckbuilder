@@ -118,6 +118,7 @@ async def chat(
         user_id=current_user.id if current_user else None,
         format=request.format or "standard",
         current_deck=request.current_deck,
+        mode=request.mode,
     )
     return response
 

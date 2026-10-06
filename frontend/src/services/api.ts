@@ -229,12 +229,13 @@ export const conversationsApi = {
 
   create: () => api.post('/conversations'),
 
-  sendMessage: (message: string, conversationId?: string, format?: string, currentDeck?: any) =>
+  sendMessage: (message: string, conversationId?: string, format?: string, currentDeck?: any, mode?: 'build' | 'guided') =>
     api.post('/conversations/chat', {
       message,
       conversation_id: conversationId,
       format: format || 'standard',
       current_deck: currentDeck || null,
+      mode: mode || null,
     }),
 
   explainCard: (cardName: string, conversationId?: string) =>

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -43,6 +43,8 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[UUID] = None
     format: Optional[str] = Field(default="standard", description="Game format (standard, historic, modern, legacy, cedh)")
     current_deck: Optional[Dict[str, Any]] = Field(default=None, description="Current local deck state synced from frontend")
+    mode: Optional[Literal["build", "guided"]] = Field(
+        default=None, description="Frontend page: 'build' generates whole decks, 'guided' suggests cards")
 
 
 class CardSuggestionItem(BaseModel):
