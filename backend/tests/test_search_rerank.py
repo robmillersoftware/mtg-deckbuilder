@@ -112,6 +112,19 @@ async def test_empty_shortlist_makes_no_jev_call(svc, monkeypatch):
     assert client.calls == []
 
 
+@pytest.mark.parametrize("scores,expected", [(None, ["Front", "Other"]), ({"Front": 0.9, "Other": 0.6}, ["Front", "Other"])])
+async def test_double_faced_names_resolve_once(svc, scores, expected):
+    svc.fts = ["Front", "Front // Back", "Other"]
+    front = card("Front")
+
+    async def by_names(names):
+        return {n.lower(): front if n.startswith("Front") else card(n) for n in names}
+    svc.get_cards_by_names = by_names
+    svc.scores = scores
+    assert names(await svc.semantic_search("burn", limit=2)) == expected
+    assert svc.scored == ["Front", "Other"]
+
+
 class TestScoreSearch:
     async def test_one_noul_per_card(self):
         client = FakeJev(lambda state, qs: {"match": 0.7 if state["card"]["name"] == "A" else 0.1})

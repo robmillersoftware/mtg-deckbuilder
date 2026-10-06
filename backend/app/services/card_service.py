@@ -1,8 +1,7 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Sequence
 from uuid import UUID
 import logging
 import re
-from typing import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, text
@@ -374,7 +373,8 @@ class CardService:
         """
         names = await self._shortlist(query, format, standard_only, colors)
         by_name = await self.get_cards_by_names(names)
-        cards = [by_name[n.lower()] for n in names if n.lower() in by_name]
+        # Both faces of a double-faced card resolve to one Card; keep the first.
+        cards = list({c.name: c for c in (by_name[n.lower()] for n in names if n.lower() in by_name)}.values())
         scores = await score_search(query, cards)
         if scores is None:
             return cards[:limit]
