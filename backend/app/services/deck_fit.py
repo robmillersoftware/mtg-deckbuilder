@@ -116,7 +116,8 @@ def _avg(f: FitScore) -> float:
 
 
 def rank(names: Sequence[str], fit: Dict[str, FitScore], freq: Dict[str, int]) -> List[str]:
-    """Drop anti-synergy cards, then sort by weighted fit + normalized meta frequency.
+    """Drop anti-synergy and below-minimum plan fit, then sort by weighted fit +
+    normalized meta frequency.
 
     `fit` must cover every name. `freq` is keyed by lowercase name.
     Sort is stable, so ties keep retrieval order.
@@ -129,7 +130,8 @@ def rank(names: Sequence[str], fit: Dict[str, FitScore], freq: Dict[str, int]) -
         return (WEIGHTS["plan_fit"] * f.plan_fit + WEIGHTS["synergy"] * syn
                 + WEIGHTS["meta"] * freq.get(n.lower(), 0) / top)
 
-    kept = [n for n in names if fit[n].anti_synergy < ANTI_SYNERGY_CUTOFF]
+    kept = [n for n in names
+            if fit[n].anti_synergy < ANTI_SYNERGY_CUTOFF and fit[n].plan_fit >= LOW_FIT_CUTOFF]
     return sorted(kept, key=total, reverse=True)
 
 

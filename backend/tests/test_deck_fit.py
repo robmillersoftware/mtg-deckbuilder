@@ -61,8 +61,12 @@ class TestApplyOverrides:
 
 class TestRank:
     def test_drops_anti_synergy_and_orders_by_total(self):
-        fit = {"Good": fs(1.0, 1.0), "Meh": fs(0.3, 0.3), "Anti": fs(1.0, 1.0, anti=0.9)}
+        fit = {"Good": fs(1.0, 1.0), "Meh": fs(0.4, 0.3), "Anti": fs(1.0, 1.0, anti=0.9)}
         assert deck_fit.rank(["Meh", "Anti", "Good"], fit, {}) == ["Good", "Meh"]
+
+    def test_drops_plan_fit_below_cutoff_even_when_popular(self):
+        fit = {"Fits": fs(0.34), "Low": fs(0.33, 1.0)}
+        assert deck_fit.rank(["Low", "Fits"], fit, {"low": 99}) == ["Fits"]
 
     def test_meta_frequency_breaks_fit_ties(self):
         fit = {"A": fs(0.5, 0.5), "B": fs(0.5, 0.5)}
