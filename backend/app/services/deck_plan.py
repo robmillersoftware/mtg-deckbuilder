@@ -7,6 +7,7 @@ Design: docs/superpowers/specs/2026-10-06-jev-deck-assembly-design.md
 """
 
 import logging
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -111,3 +112,116 @@ async def choose_reference(client, request_text: str, colors: List[str],
     if answer.choice == NONE_OPTION or answer.confidence < REFERENCE_CONFIDENCE:
         return None
     return answer.choice
+
+
+MIN_SLOT = 2  # slots under this many copies merge into a neighbor
+MAIN_SIZE = 60
+
+
+# One row per main-deck entry in the archetype's lists, resolved to a card name
+# (decklists list DFCs by front face; cards store "Front // Back").
+REFERENCE_SQL = text(f"""
+    WITH lists AS (
+        SELECT d.id, d.main_deck
+        FROM decklists d JOIN events e ON e.id = d.event_id
+        WHERE {RECENT}
+          AND lower(trim(d.archetype)) = lower(trim(:archetype))
+    ),
+    entries AS (
+        SELECT l.id AS deck_id, x->>'card_name' AS entry, (x->>'quantity')::int AS qty
+        FROM lists l CROSS JOIN LATERAL jsonb_array_elements(l.main_deck) x
+    ),
+    card AS (
+        SELECT DISTINCT ON (k) k, c.name, c.type_line, c.cmc,
+               coalesce(nullif(c.colors, '{{}}'), c.color_identity, '{{}}') AS colors
+        FROM (SELECT DISTINCT lower(split_part(entry, ' // ', 1)) AS k FROM entries) n
+        JOIN cards c ON lower(split_part(c.name, ' // ', 1)) = n.k
+        ORDER BY k, c.name
+    ),
+    top_role AS (
+        SELECT DISTINCT ON (c.name) c.name, r.role
+        FROM card_roles r JOIN cards c ON c.id = r.card_id
+        WHERE c.name IN (SELECT name FROM card) AND r.role NOT LIKE 'land%'
+        ORDER BY c.name, r.confidence DESC NULLS LAST, r.efficiency DESC NULLS LAST
+    )
+    SELECT en.deck_id, coalesce(card.name, en.entry) AS name, en.qty,
+           card.type_line, card.cmc, card.colors, top_role.role
+    FROM entries en
+    LEFT JOIN card ON card.k = lower(split_part(en.entry, ' // ', 1))
+    LEFT JOIN top_role ON top_role.name = card.name
+""")
+
+
+def is_land(type_line: Optional[str]) -> bool:
+    return "Land" in (type_line or "").split(" // ")[0]
+
+
+def _slot_sizes(rows: Sequence[Any], n_lists: int) -> Dict[Tuple[str, Tuple[int, int]], float]:
+    sums: Dict[Tuple[str, Tuple[int, int]], float] = defaultdict(float)
+    for r in rows:
+        role = r.role or ("creature" if "Creature" in (r.type_line or "") else "noncreature")
+        sums[(role, band_of(r.cmc or 0))] += r.qty / n_lists
+    return sums
+
+
+def _merge_small(sizes: Dict[Tuple[str, Tuple[int, int]], float]) -> List[List[Any]]:
+    """[role, cmc_min, cmc_max, avg copies] with every slot >= MIN_SLOT: a small
+    slot merges into the same role's nearest band (widening its mana range),
+    else into the same band's largest slot, else into the largest slot."""
+    slots = [[role, lo, hi, avg] for (role, (lo, hi)), avg in sizes.items()]
+    while len(slots) > 1:
+        small = min(slots, key=lambda s: (s[3], s[0], s[1]))
+        if small[3] >= MIN_SLOT:
+            break
+        others = [s for s in slots if s is not small]
+        same_role = [s for s in others if s[0] == small[0]]
+        if same_role:
+            target = min(same_role, key=lambda s: (abs(s[1] - small[1]), s[1]))
+            target[1], target[2] = min(target[1], small[1]), max(target[2], small[2])
+        else:
+            same_band = [s for s in others if (s[1], s[2]) == (small[1], small[2])]
+            target = max(same_band or others, key=lambda s: s[3])
+        target[3] += small[3]
+        slots.remove(small)
+    return slots
+
+
+def _to_slots(sizes: Dict[Tuple[str, Tuple[int, int]], float], total: int) -> List[Slot]:
+    merged = _merge_small(sizes)
+    if not merged or total <= 0:
+        return []
+    counts = largest_remainder([s[3] for s in merged], total)
+    return [Slot(role, lo, hi, n, describe(role, lo, hi))
+            for (role, lo, hi, _), n in zip(merged, counts) if n > 0]
+
+
+def _avg_copies(rows: Sequence[Any]) -> Dict[str, int]:
+    """Average copies per card across the lists that play it, rounded, at least 1."""
+    per: Dict[str, List[int]] = defaultdict(list)
+    for r in rows:
+        per[r.name].append(r.qty)
+    return {name: max(1, round(sum(q) / len(q))) for name, q in per.items()}
+
+
+async def plan_from_decklists(db: AsyncSession, archetype: str, format: str) -> Optional[Plan]:
+    """Main-deck slot plan from the archetype's decklists in the window; None
+    without lists. Sideboards are not slot-planned (deck_fill.fill_sideboard)."""
+    rows = (await db.execute(REFERENCE_SQL, {
+        "format": format, "archetype": archetype})).all()
+    n_lists = len({r.deck_id for r in rows})
+    if not n_lists:
+        return None
+    lands = [r for r in rows if is_land(r.type_line)]
+    spells = [r for r in rows if not is_land(r.type_line)]
+    land_count = round(sum(r.qty for r in lands) / n_lists)
+    nonbasic = round(sum(r.qty for r in lands if not (r.type_line or "").startswith("Basic")) / n_lists)
+    # A color counts when at least half the lists play it (splashes in one list don't).
+    lists_with = {c: len({r.deck_id for r in spells if c in (r.colors or [])}) for c in WUBRG}
+    return Plan(
+        slots=_to_slots(_slot_sizes(spells, n_lists), MAIN_SIZE - land_count),
+        lands=land_count,
+        nonbasic_lands=min(nonbasic, land_count),
+        copies=_avg_copies(rows),
+        colors=[c for c in WUBRG if lists_with[c] * 2 >= n_lists],
+        reference=archetype,
+    )

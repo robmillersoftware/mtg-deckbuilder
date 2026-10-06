@@ -1,5 +1,6 @@
 """deck_plan: reference archetype choice and slot plans."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -88,3 +89,80 @@ class TestChooseReference:
     async def test_jev_failure_raises(self):
         with pytest.raises(Exception):  # ask_many raises an ExceptionGroup
             await dp.choose_reference(FakeJev(fail=lambda s: True), "x", [], ARCHETYPES, "standard")
+
+
+def entry(deck, name, qty, type_line, cmc, colors=(), role=None):
+    return SimpleNamespace(deck_id=deck, name=name, qty=qty, type_line=type_line,
+                           cmc=cmc, colors=list(colors), role=role)
+
+
+MOUNTAIN = "Basic Land — Mountain"
+LISTS = [
+    entry(1, "Hired Claw", 4, "Creature — Lizard Mercenary", 1, "R", "threat_cheap"),
+    entry(1, "Burst Lightning", 4, "Instant", 1, "R", "burn"),
+    entry(1, "Mystery Card", 1, None, None),  # decklist name with no card row
+    entry(1, "Sacred Foundry", 4, "Land — Mountain Plains", 0),
+    entry(1, "Mountain", 10, MOUNTAIN, 0),
+    entry(2, "Hired Claw", 3, "Creature — Lizard Mercenary", 1, "R", "threat_cheap"),
+    entry(2, "Burst Lightning", 4, "Instant", 1, "R", "burn"),
+    entry(2, "Lightning Helix", 2, "Instant", 2, "RW", "removal_targeted"),
+    entry(2, "Sacred Foundry", 4, "Land — Mountain Plains", 0),
+    entry(2, "Mountain", 9, MOUNTAIN, 0),
+]
+
+
+class TestSlotSizes:
+    def test_untagged_cards_fall_back_to_type(self):
+        rows = [entry(1, "Bear", 4, "Creature — Bear", 2), entry(1, "Ponder", 2, "Sorcery", 1),
+                entry(2, "Bear", 2, "Creature — Bear", 2)]
+        assert dict(dp._slot_sizes(rows, 2)) == {("creature", (2, 2)): 3.0, ("noncreature", (0, 1)): 1.0}
+
+
+class TestMergeSmall:
+    def test_same_role_nearest_band_widens_the_range(self):
+        got = dp._merge_small({("burn", (0, 1)): 6, ("burn", (3, 3)): 1, ("threat_cheap", (2, 2)): 8})
+        assert got == [["burn", 0, 3, 7], ["threat_cheap", 2, 2, 8]]
+
+    def test_same_band_largest_slot(self):
+        got = dp._merge_small({("discard", (2, 2)): 1.5, ("threat_cheap", (2, 2)): 8,
+                               ("burn", (2, 2)): 3, ("burn", (0, 1)): 4})
+        assert ["threat_cheap", 2, 2, 9.5] in got and len(got) == 3
+
+    def test_else_largest_slot(self):
+        got = dp._merge_small({("tutor", (5, 99)): 1, ("burn", (0, 1)): 4, ("threat_cheap", (2, 2)): 8})
+        assert got == [["burn", 0, 1, 4], ["threat_cheap", 2, 2, 9]]
+
+    def test_a_lone_small_slot_stays(self):
+        assert dp._merge_small({("burn", (0, 1)): 1}) == [["burn", 0, 1, 1]]
+
+
+class TestPlanFromDecklists:
+    async def test_slots_lands_and_copies(self):
+        db = fake_db(LISTS)
+        plan = await dp.plan_from_decklists(db, "Boros Aggro", "standard")
+        sql, params = sql_of(db)
+        assert params == {"format": "standard", "archetype": "Boros Aggro"}
+        assert "lower(trim(d.archetype)) = lower(trim(:archetype))" in sql
+        assert "lower(split_part(c.name, ' // ', 1)) = n.k" in sql  # DFCs listed by front face
+        assert "r.role NOT LIKE 'land%'" in sql
+        assert "l.sideboard" not in sql  # sideboards are not slot-planned
+
+        assert plan.reference == "Boros Aggro"
+        assert plan.lands == 14 and plan.nonbasic_lands == 4  # (14 + 13) / 2 rounds to 14
+        # Averages: threat_cheap 0-1 3.5, burn 0-1 4, Helix 1, Mystery 0.5. Mystery joins its
+        # band's largest slot (burn), then Helix the largest slot (burn): 3.5 vs 5.5, scaled to 46.
+        assert {(s.role, s.cmc_min, s.cmc_max): s.copies for s in plan.slots} == {
+            ("threat_cheap", 0, 1): 18, ("burn", 0, 1): 28}
+        assert sum(s.copies for s in plan.slots) + plan.lands == dp.MAIN_SIZE
+        assert plan.slots[0].description == dp.describe("threat_cheap", 0, 1)
+        assert plan.copies["Hired Claw"] == 4 and plan.copies["Lightning Helix"] == 2
+        assert plan.copies["Mountain"] == 10
+
+    async def test_colors_played_by_at_least_half_the_lists(self):
+        rows = [entry(d, "Shock", 4, "Instant", 1, "R", "burn") for d in (1, 2, 3)]
+        rows.append(entry(3, "Get Lost", 1, "Instant", 2, "W", "removal_targeted"))
+        plan = await dp.plan_from_decklists(fake_db(rows), "Mono Red", "standard")
+        assert plan.colors == ["R"]
+
+    async def test_no_lists(self):
+        assert await dp.plan_from_decklists(fake_db([]), "Gone", "standard") is None
