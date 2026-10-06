@@ -1,7 +1,7 @@
 from typing import Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 
@@ -16,22 +16,40 @@ from app.schemas.conversation import (
     CardExplanationRequest,
     CardExplanationResponse,
 )
-from app.api.deps.auth import get_current_user_required, get_current_user
+from app.api.deps.auth import get_current_user
 from app.services.chat_service import ChatService
 
 router = APIRouter()
 
 
+def _is_uuid(value: str) -> bool:
+    try:
+        UUID(value)
+        return True
+    except ValueError:
+        return False
+
+
 @router.get("", response_model=List[ConversationListResponse])
 async def list_conversations(
-    current_user: User = Depends(get_current_user_required),
+    ids: Optional[str] = Query(None, description="Comma-separated ids of this browser's anonymous conversations"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all conversations for the current user."""
+    """The signed-in user's conversations, or, signed out, the anonymous ones among
+    `ids` (the browser remembers the conversations it started)."""
+    if current_user:
+        owned = Conversation.user_id == current_user.id
+    else:
+        wanted = [UUID(i) for i in (ids or "").split(",") if _is_uuid(i)]
+        if not wanted:
+            return []
+        owned = and_(Conversation.id.in_(wanted), Conversation.user_id.is_(None))
     result = await db.execute(
-        select(Conversation)
-        .where(Conversation.user_id == current_user.id)
-        .order_by(Conversation.updated_at.desc())
+        select(Conversation).where(owned)
+        .order_by(Conversation.updated_at.desc()).limit(limit).offset(offset)
     )
     conversations = result.scalars().all()
 
@@ -51,21 +69,16 @@ async def list_conversations(
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
     conversation_id: UUID,
-    current_user: User = Depends(get_current_user_required),
+    current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a specific conversation by ID."""
-    result = await db.execute(
-        select(Conversation).where(
-            and_(
-                Conversation.id == conversation_id,
-                Conversation.user_id == current_user.id,
-            )
-        )
-    )
+    """Get a conversation by ID: the caller's own, or an anonymous one (its id is
+    the only key, as for chat)."""
+    result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
     conversation = result.scalar_one_or_none()
+    owner = current_user.id if current_user else None
 
-    if conversation is None:
+    if conversation is None or conversation.user_id not in (None, owner):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",
@@ -77,21 +90,15 @@ async def get_conversation(
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(
     conversation_id: UUID,
-    current_user: User = Depends(get_current_user_required),
+    current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a conversation."""
-    result = await db.execute(
-        select(Conversation).where(
-            and_(
-                Conversation.id == conversation_id,
-                Conversation.user_id == current_user.id,
-            )
-        )
-    )
+    """Delete the caller's own or an anonymous conversation."""
+    result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
     conversation = result.scalar_one_or_none()
+    owner = current_user.id if current_user else None
 
-    if conversation is None:
+    if conversation is None or conversation.user_id not in (None, owner):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",
