@@ -1,9 +1,10 @@
 from typing import Optional, List, Dict, Any, Tuple
 from uuid import UUID
+import asyncio
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from sqlalchemy import func as sqlfunc
 
@@ -20,10 +21,23 @@ from app.services.guided_builder import DeckAnalyzer
 from app.services import deck_fit
 from app.services import llm
 from app.services import chat_routing
+from app.services.deck_plan import RECENT
 
 logger = logging.getLogger(__name__)
 
 TEXT_ONLY_REPLY = "\n\nFor this turn, reply in text only; no tools are available."
+
+GROUNDED_ANSWER_SYSTEM = (
+    "You are a Magic: The Gathering deckbuilding assistant. Answer the user's message "
+    "conversationally and directly, using only the data given: meta shares and decklist "
+    "cards with their rules text. Don't invent cards, decks, statistics or card abilities; "
+    "describe what cards do only from the rules text shown. The data has no matchup "
+    "results, so don't claim one deck beats another; reason from the cards' rules text. "
+    "If the data doesn't cover the "
+    "question, say what you can from it and suggest a next step, such as naming colors, "
+    "a card or an archetype to build around. Keep it under 200 words; markdown is fine."
+)
+OPPONENT_CARDS = 15  # most-played main-deck cards shown for a named opponent archetype
 
 # Tool definitions for Claude - incremental collaborative builder
 TOOLS = [
@@ -829,8 +843,7 @@ RULES:
         snapshots = result.scalars().all()
 
         format_name = "cEDH" if format == "cedh" else format.capitalize()
-        response = ai_text + "\n\n" if ai_text else ""
-        response += f"**Current {format_name} Meta:**\n\n"
+        response = f"**Current {format_name} Meta:**\n\n"
 
         if snapshots:
             for snap in snapshots:
@@ -840,6 +853,9 @@ RULES:
             response += "No meta data available yet.\n"
 
         response += "\nWhat direction interests you? Name a card, pick colors, or choose an archetype and I'll start suggesting cards."
+        response = await self._answer_from_data(conversation, response)
+        if ai_text:
+            response = ai_text + "\n\n" + response
 
         conversation.add_message("assistant", response)
         await self.db.commit()
@@ -1388,7 +1404,14 @@ RULES:
         opponent_deck = tool_input.get("opponent_deck", "")
 
         if not conversation.current_deck:
-            response = await self._get_general_meta_advice(opponent_deck)
+            fallback = await self._get_general_meta_advice(opponent_deck)
+            facts = fallback.split("**Tips against")[0]  # the canned tips are fallback only
+            if opponent_deck:
+                cards = await self._archetype_cards(opponent_deck, getattr(self, "_current_format", "standard"))
+                if cards:
+                    facts += f"\n\n{opponent_deck}: most-played main-deck cards in recent decklists " \
+                             "(average copies, cost, type, rules text):\n" + "\n".join(cards)
+            response = await self._answer_from_data(conversation, facts, fallback)
         else:
             response = await self._get_matchup_analysis(
                 conversation.current_deck, opponent_deck
@@ -1589,6 +1612,58 @@ RULES:
             return ["Continue building", "Show more options", "Start over"]
 
         return ["Build me a deck", "What's the current meta?", "Help"]
+
+    async def _answer_from_data(self, conversation: Conversation, facts: str,
+                                fallback: Optional[str] = None) -> str:
+        """An LLM answer to the user's last message grounded in `facts`; `fallback`
+        (default `facts`) when the LLM is unavailable or fails."""
+        fallback = fallback or facts
+        message = next((m["content"] for m in reversed(conversation.messages or [])
+                        if m.get("role") == "user"), "")
+        if not message or not llm.is_configured():
+            return fallback
+        try:
+            answer = await asyncio.to_thread(
+                llm.complete, GROUNDED_ANSWER_SYSTEM, f"Message: {message}\n\nData:\n{facts}", 800)
+        except Exception as e:
+            logger.warning(f"Grounded answer failed, using the data as-is: {e}")
+            return fallback
+        return answer.strip() or fallback
+
+    async def _archetype_cards(self, archetype: str, format: str) -> List[str]:
+        """The archetype's most-played main-deck cards in the recent window, with rules text."""
+        sql = text(f"""
+            WITH lists AS (
+              SELECT d.main_deck FROM decklists d JOIN events e ON e.id = d.event_id
+              WHERE {RECENT} AND lower(trim(d.archetype)) = lower(trim(:archetype))
+            ), totals AS (
+              SELECT c->>'card_name' AS name, SUM((c->>'quantity')::int)::float
+                     / (SELECT COUNT(*) FROM lists) AS avg_copies
+              FROM lists, jsonb_array_elements(lists.main_deck) c
+              GROUP BY 1
+            )
+            SELECT t.name, t.avg_copies, k.mana_cost, k.type_line, k.oracle_text
+            FROM totals t
+            LEFT JOIN LATERAL (
+              SELECT mana_cost, type_line, oracle_text FROM cards
+              WHERE lower(split_part(cards.name, ' // ', 1)) = lower(split_part(t.name, ' // ', 1))
+              LIMIT 1
+            ) k ON true
+            WHERE coalesce(k.type_line, '') NOT ILIKE 'Basic Land%'
+            ORDER BY t.avg_copies DESC, t.name
+            LIMIT :limit
+        """)
+        try:
+            rows = (await self.db.execute(
+                sql, {"format": format, "archetype": archetype, "limit": OPPONENT_CARDS})).all()
+        except Exception as e:
+            logger.warning(f"Archetype card lookup failed: {e}")
+            return []
+        return [
+            f"{r.avg_copies:.1f}x {r.name} ({r.mana_cost or ''} {r.type_line or ''}): "
+            + (r.oracle_text or "").replace("\n", " ")
+            for r in rows
+        ]
 
     async def _get_general_meta_advice(self, opponent_deck: str) -> str:
         """Get general meta advice when no deck context is available."""
