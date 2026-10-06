@@ -55,6 +55,7 @@ async def parse_deck_request(prompt: str, db: AsyncSession, client=None) -> Dict
     not configured, fails, or answers incompletely.
     """
     async with jev.session(client) as client:
+        names = None
         if client is not None:
             names = await extract_card_names_from_prompt(prompt, db)
             try:
@@ -74,11 +75,11 @@ async def parse_deck_request(prompt: str, db: AsyncSession, client=None) -> Dict
                 }
             except Exception as e:
                 logger.warning(f"Jev deck-request parse failed, using fallback: {e}")
-    return await fallback_parse(prompt, db)
+    return await fallback_parse(prompt, db, names)
 
 
-async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
-    """Simple keyword-based parsing as fallback."""
+async def fallback_parse(prompt: str, db: AsyncSession, names: List[str] = None) -> Dict[str, Any]:
+    """Simple keyword-based parsing as fallback. `names` skips the card lookup when already resolved."""
     prompt_lower = prompt.lower()
 
     # Detect colors
@@ -166,7 +167,7 @@ async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
         archetype = "tempo"
 
     # Try to extract specific card names from the prompt
-    specific_cards = await extract_card_names_from_prompt(prompt, db)
+    specific_cards = names if names is not None else await extract_card_names_from_prompt(prompt, db)
 
     return {
         "archetype": archetype,
@@ -179,6 +180,10 @@ async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
     }
 
 
+MAX_PROMPT_WORDS = 40  # a pasted decklist must not fan out into hundreds of queries
+MAX_CARD_NAMES = 10
+
+
 async def extract_card_names_from_prompt(
     prompt: str, db: AsyncSession, format: str = "standard"
 ) -> List[str]:
@@ -186,7 +191,7 @@ async def extract_card_names_from_prompt(
     from app.models.card import Card
 
     specific_cards = []
-    words = prompt.split()
+    words = prompt.split()[:MAX_PROMPT_WORDS]
     potential_names = []
 
     # Try to find multi-word card names
@@ -214,6 +219,8 @@ async def extract_card_names_from_prompt(
     from app.services.card_service import get_format_legality_condition
 
     for name in potential_names:
+        if len(specific_cards) >= MAX_CARD_NAMES:
+            break
         if len(name) < 3:
             continue
         query = select(Card.name).where(
