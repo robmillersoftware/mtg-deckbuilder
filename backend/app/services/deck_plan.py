@@ -252,7 +252,7 @@ ROLES: """ + ", ".join(SPELL_ROLES + list(TYPE_ROLES))
 
 
 def lands_for(archetype_hint: str) -> int:
-    return LAND_COUNTS.get((archetype_hint or "").lower(), 22)
+    return LAND_COUNTS.get((archetype_hint or "").strip().lower(), 22)
 
 
 def parse_llm_plan(content: str, lands: int) -> Optional[List[Slot]]:
@@ -262,13 +262,15 @@ def parse_llm_plan(content: str, lands: int) -> Optional[List[Slot]]:
         slots = []
         for it in items:
             role, copies = it["role"], it["copies"]
-            lo, hi = int(it.get("cmc_min", 0)), int(it.get("cmc_max", 99))
+            lo, hi, tc = it.get("cmc_min", 0), it.get("cmc_max", 99), it.get("type_contains")
+            if any(type(v) is not int or v < 0 for v in (lo, hi)) or not (tc is None or isinstance(tc, str)):
+                return None
             if role not in SPELL_ROLES and role not in TYPE_ROLES:
                 return None
             if not isinstance(copies, int) or isinstance(copies, bool) or copies <= 0 or lo > hi:
                 return None
-            slots.append(Slot(role, lo, hi, copies, str(it.get("description") or describe(role, lo, hi)),
-                              it.get("type_contains") or None))
+            slots.append(Slot(role, lo, hi, copies, str(it.get("description") or describe(role, lo, hi))[:200],
+                              (tc or "").strip() or None))
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
     if not slots:
@@ -279,7 +281,7 @@ def parse_llm_plan(content: str, lands: int) -> Optional[List[Slot]]:
 
 
 def default_plan(archetype_hint: str) -> List[Slot]:
-    spec = DEFAULT_PLANS.get((archetype_hint or "").lower(), DEFAULT_PLANS["midrange"])
+    spec = DEFAULT_PLANS.get((archetype_hint or "").strip().lower(), DEFAULT_PLANS["midrange"])
     lands = lands_for(archetype_hint)
     counts = largest_remainder([c for *_, c in spec], MAIN_SIZE - lands)
     return [Slot(role, lo, hi, n, describe(role, lo, hi)) for (role, lo, hi, _), n in zip(spec, counts)]

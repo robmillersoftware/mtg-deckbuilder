@@ -194,6 +194,11 @@ class TestParseLlmPlan:
         '[{"role": "burn", "copies": 4, "cmc_min": 3, "cmc_max": 1}]',
         '[{"copies": 4}]',
         '["burn"]',
+        '[{"role": "burn", "copies": 4, "cmc_min": 1.7}]',
+        '[{"role": "burn", "copies": 4, "cmc_max": 2.5}]',
+        '[{"role": "burn", "copies": 4, "cmc_min": -3}]',
+        '[{"role": "burn", "copies": 4, "cmc_max": "3"}]',
+        '[{"role": "burn", "copies": 4, "type_contains": 5}]',
     ])
     def test_invalid_plans(self, bad):
         assert dp.parse_llm_plan(bad, lands=22) is None
@@ -202,6 +207,19 @@ class TestParseLlmPlan:
 class TestPlanWithLlm:
     def test_land_counts(self):
         assert [dp.lands_for(a) for a in ("control", "Midrange", "aggro", "combo", "")] == [24, 23, 22, 22, 22]
+
+    def test_hint_is_stripped(self):
+        assert dp.lands_for("midrange ") == 23
+        assert [s.role for s in dp.default_plan(" Control ")] == [r for r, *_ in dp.DEFAULT_PLANS["control"]]
+
+    def test_description_is_capped_and_type_stripped(self):
+        slots = dp.parse_llm_plan(
+            '[{"role": "burn", "copies": 4, "description": "%s", "type_contains": "  "}]' % ("x" * 500), 22)
+        assert len(slots[0].description) == 200 and slots[0].type_contains is None
+
+    @pytest.mark.parametrize("arch,lands", [("aggro", 22), ("midrange", 23), ("control", 24)])
+    def test_default_plans_total(self, arch, lands):
+        assert sum(s.copies for s in dp.default_plan(arch)) == 60 - lands
 
     async def test_without_llm_uses_the_archetype_default(self):
         plan = await dp.plan_with_llm("mono-red aggro", ["R"], "aggro")
