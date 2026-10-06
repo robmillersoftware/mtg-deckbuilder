@@ -20,7 +20,8 @@ from app.services import jev, llm
 from app.services.card_service import FORMAT_LEGALITY_MAP
 from app.services.deck_plan import (
     CARD_COLORS, CHOICE_DEADLINE, CHOICE_TIMEOUT, MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, archetype_keys, choose,
-    choose_reference, is_land, largest_remainder, plan_from_decklists, plan_with_llm, recent_archetypes,
+    choose_reference, choose_relatives, is_land, largest_remainder, plan_from_decklists, plan_with_llm,
+    recent_archetypes, relative_candidates,
 )
 from app.services.guided_builder import front_cost
 
@@ -521,9 +522,11 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
                    specific_cards: Optional[List[str]], format: str = "standard",
                    include_sideboard: bool = True, archetype: str = "", client=None) -> Dict[str, Any]:
     """Build a deck: reference or brew plan, requested cards, Jev-filled slots,
-    lands, sideboard, summary. Returns {name, strategy_summary,
-    main_deck, sideboard} like ai_service.generate_deck, plus the reference
-    archetype (None for a brew) and the deck colors. Raises when Jev is not
+    lands, sideboard, summary. A brew is planned and filled from its relatives
+    (the current archetypes Jev judges closest to the request), or from the LLM
+    plan when it has none. Returns {name, strategy_summary, main_deck,
+    sideboard} like ai_service.generate_deck, plus the reference archetype (None
+    for a brew), the brew's relatives and the deck colors. Raises when Jev is not
     configured or fails, the format is not 60-card, the format has no recent
     decklists, or a brew has no colors; the caller falls back to the LLM path."""
     if format not in SIXTY_CARD_FORMATS:
@@ -536,8 +539,16 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
             raise ValueError(f"No recent {format} decklists")
         reference = await choose_reference(client, request_text, colors or [], archetypes, format)
         plan = await plan_from_decklists(db, [reference], format) if reference else None
+        scope = [reference] if plan else []  # archetypes whose cards fill the deck first
+        relatives: List[str] = []
         if plan is None:
             reference = None
+            candidates = await relative_candidates(db, colors or [], format)
+            relatives = await choose_relatives(client, request_text, colors or [], candidates)
+            plan = await plan_from_decklists(db, relatives, format, colors) if relatives else None
+            relatives = relatives if plan else []
+            scope = relatives
+        if plan is None:
             plan = await plan_with_llm(request_text, colors or [], archetype)
 
         main, side = Build(), Build()
@@ -548,7 +559,9 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
 
         def state() -> Dict[str, Any]:
             return {"deck": {
-                "plan": f"{reference}, a current {format.title()} archetype" if reference else request_text,
+                "plan": (f"{reference}, a current {format.title()} archetype" if reference
+                         else f"{request_text}, built from the current archetypes closest to it" if relatives
+                         else request_text),
                 "request": request_text, "colors": deck_colors,
                 "chosen": [f"{q}x {n}" for n, q in main.copies.items()],
                 "sideboard": [f"{q}x {n}" for n, q in side.copies.items()],
@@ -557,7 +570,6 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
         def main_copies(name: str, rank: int) -> int:
             return plan.copies.get(name) or brew_copies(name, rank)
 
-        scope = [reference] if reference else []
         short = await fill_slots(db, client, plan.slots, main, deck_colors, format, state, main_copies, scope)
         plan.lands += short  # a pool too thin to fill the spells: basics keep the deck at 60
         await fill_lands(db, client, main, plan, deck_colors, format, state, main_copies)
@@ -565,7 +577,7 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
             await fill_sideboard(db, client, main, side, deck_colors, format, state, scope)
 
     name, summary = await summarize(main, side, request_text, reference, deck_colors, format)
-    logger.info(f"[ASSEMBLY] {name}: reference={reference} colors={deck_colors} "
+    logger.info(f"[ASSEMBLY] {name}: reference={reference} relatives={relatives} colors={deck_colors} "
                 f"main={main.total()} sideboard={side.total()}")
     return {"name": name, "strategy_summary": summary, "main_deck": main.entries(),
-            "sideboard": side.entries(), "reference": reference, "colors": deck_colors}
+            "sideboard": side.entries(), "reference": reference, "relatives": relatives, "colors": deck_colors}

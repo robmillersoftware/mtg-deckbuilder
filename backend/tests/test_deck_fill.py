@@ -542,9 +542,10 @@ class TestFillSideboard:
         assert [c[0] for c in pool.calls] == ["UW Control"] and side.total() == 15
 
 
-def wire(monkeypatch, reference_plan=None, archetypes=(("Boros Aggro", 5),)):
+def wire(monkeypatch, reference_plan=None, archetypes=(("Boros Aggro", 5),), candidates=()):
     pool = fake_pool(MAIN_POOL)
     monkeypatch.setattr(df, "recent_archetypes", AsyncMock(return_value=list(archetypes)))
+    monkeypatch.setattr(df, "relative_candidates", AsyncMock(return_value=list(candidates)))
     monkeypatch.setattr(df, "plan_from_decklists", AsyncMock(return_value=reference_plan))
     monkeypatch.setattr(df, "slot_pool", pool)
     monkeypatch.setattr(df, "land_pool", AsyncMock(return_value=LANDS))
@@ -624,6 +625,60 @@ class TestAssemble:
         main = {e["card_name"]: e["quantity"] for e in deck["main_deck"]}
         assert total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15
         assert {r.name for r in reqs} <= set(main)
+
+    async def test_brew_with_relatives_is_planned_and_filled_from_them(self, monkeypatch):
+        candidates = [("Boros Aggro", 5, [("Bear 1", 4.0)]), ("Rakdos Aggro", 4, [("Bolt 0", 4.0)])]
+        pool, side_pool = wire(monkeypatch, candidates=candidates)
+        relatives_plan = Plan(slots=[Slot("threat_cheap", 2, 2, 18, "Bears"), Slot("burn", 0, 1, 20, "Burn")],
+                              lands=22, copies={"Bolt 0": 2}, colors=["R"], reference="Boros Aggro")
+        monkeypatch.setattr(df, "plan_from_decklists", AsyncMock(return_value=relatives_plan))
+        llm_plan = AsyncMock()
+        monkeypatch.setattr(df, "plan_with_llm", llm_plan)
+
+        def answer(state, q):
+            if "relative" in q:
+                return {"relative": 0.9 if state["archetype"]["name"] == "Boros Aggro" else 0.2}
+            return {"pick": {"choice": "none", "confidence": 0.9, "probabilities": {}}} \
+                if "none" in q["pick"].criteria else {}
+        jev = FakeJev(answer=answer)
+        deck = await df.assemble(None, "mono-red aggro", ["R"], [], "standard", True, "aggro", client=jev)
+
+        assert deck["reference"] is None and deck["relatives"] == ["Boros Aggro"]
+        df.relative_candidates.assert_awaited_once_with(None, ["R"], "standard")
+        df.plan_from_decklists.assert_awaited_once_with(None, ["Boros Aggro"], "standard", ["R"])
+        llm_plan.assert_not_called()
+        assert pool.scopes[0] == "Boros Aggro"  # relatives' cards first, then the format
+        assert side_pool.calls[0][0] == "Boros Aggro"
+        main = {e["card_name"]: e["quantity"] for e in deck["main_deck"]}
+        assert total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15
+        assert main["Bolt 0"] == 2  # copies from the relatives' lists
+        assert not {"Sacred Foundry", "Inspiring Vantage"} & set(main)  # brew nonbasic rule: 0 for one color
+        slot_states = [state["deck"] for state, _, _ in jev.calls if "deck" in state]
+        assert slot_states and all(
+            s["plan"] == "mono-red aggro, built from the current archetypes closest to it" for s in slot_states)
+        assert not any("Boros Aggro" in str(s) for s in slot_states)  # archetype names are not instructions
+
+    async def test_no_relatives_uses_the_llm_plan(self, monkeypatch):
+        pool, side_pool = wire(monkeypatch, candidates=[("Boros Aggro", 5, [("Bear 1", 4.0)])])
+        monkeypatch.setattr(df, "plan_with_llm", AsyncMock(return_value=Plan(
+            slots=[Slot("threat_cheap", 2, 2, 18, "Bears"), Slot("burn", 0, 1, 20, "Burn")], lands=22)))
+        jev = FakeJev(answer=lambda state, q: {"relative": 0.3} if "relative" in q else (
+            {"pick": {"choice": "none", "confidence": 0.9, "probabilities": {}}}
+            if "none" in q["pick"].criteria else {}))
+        deck = await df.assemble(None, "mono-red aggro", ["R"], [], "standard", True, "aggro", client=jev)
+        assert deck["relatives"] == [] and total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15
+        df.plan_from_decklists.assert_not_called()
+        df.plan_with_llm.assert_awaited_once_with("mono-red aggro", ["R"], "aggro")
+        assert set(pool.scopes) == {None} and [c[0] for c in side_pool.calls] == [None]
+        assert all(s["deck"]["plan"] == "mono-red aggro" for s, _, _ in jev.calls if "deck" in s)
+
+    async def test_relatives_jev_failure_propagates(self, monkeypatch):
+        wire(monkeypatch, candidates=[("Boros Aggro", 5, [("Bear 1", 4.0)])])
+        jev = FakeJev(answer=lambda state, q: {"pick": "none"} if "pick" in q else {},
+                      fail=lambda state: "archetype" in state)
+        with pytest.raises(ExceptionGroup) as err:
+            await df.assemble(None, "mono-red aggro", ["R"], [], "standard", True, "aggro", client=jev)
+        assert err.group_contains(RuntimeError, match="jev unavailable")
 
     async def test_slow_jev_hits_the_deadline(self, monkeypatch):
         wire(monkeypatch, reference_plan())
