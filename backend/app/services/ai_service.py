@@ -1074,9 +1074,6 @@ Return JSON:
             main_deck = deck_data.get("main_deck", [])
             sideboard = deck_data.get("sideboard", [])
 
-            main_cards = [f"{e.get('quantity', 1)}x {e.get('card_name', '')}" for e in main_deck]
-            sideboard_cards = [f"{e.get('quantity', 1)}x {e.get('card_name', '')}" for e in sideboard]
-
             all_card_names = list(set(
                 [e.get("card_name", "") for e in main_deck] +
                 [e.get("card_name", "") for e in sideboard]
@@ -1084,6 +1081,23 @@ Return JSON:
 
             if not all_card_names:
                 return {}
+
+            # Give the LLM each card's rules text so explanations rest on what the
+            # card does, not on guesses from its name.
+            cards = await self.card_service.get_cards_by_names(all_card_names)
+
+            def line(e: Dict[str, Any]) -> str:
+                name = e.get("card_name", "")
+                card = cards.get(name.lower())
+                text = f"{e.get('quantity', 1)}x {name}"
+                if card is None or "Basic" in (card.type_line or ""):
+                    return text
+                head = " ".join(x for x in (card.mana_cost, card.type_line) if x)
+                rules = " ".join((card.oracle_text or "").split())[:300]
+                return f"{text} ({head}): {rules}"
+
+            main_cards = [line(e) for e in main_deck]
+            sideboard_cards = [line(e) for e in sideboard]
 
             system_prompt = f"""You are explaining card choices in a Magic: The Gathering deck.
 
@@ -1108,7 +1122,8 @@ Return JSON mapping card names to explanations:
     ...
 }}
 
-Be specific to this deck's strategy. Don't just describe what the card does - explain why it's HERE."""
+Be specific to this deck's strategy. Don't just describe what the card does - explain why it's HERE.
+Base every statement only on each card's rules text listed above. Use standard Magic terms; do not invent mechanics, creature types or flavor the text doesn't state, and mention only cards in this deck."""
 
             content = llm.complete(
                 system=system_prompt,
