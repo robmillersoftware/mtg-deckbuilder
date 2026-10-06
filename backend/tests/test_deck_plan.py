@@ -36,6 +36,7 @@ class TestHelpers:
         assert dp.archetype_keys(["Boros Aggro", " boros aggro", "4/5C Control", "4/5c Control "]) == [
             "4/5c control", "boros aggro"]
         assert dp.archetype_keys([]) == []
+        assert dp.archetype_keys(["", "  ", "Boros Aggro"]) == ["boros aggro"]  # blanks match nothing
 
     def test_largest_remainder_hits_the_total(self):
         assert dp.largest_remainder([1.5, 1.5, 1.0], 4) == [2, 1, 1]
@@ -98,7 +99,7 @@ class TestChooseReference:
 
 def entry(deck, name, qty, type_line, cmc, colors=(), role=None):
     return SimpleNamespace(deck_id=deck, name=name, qty=qty, type_line=type_line,
-                           cmc=cmc, colors=list(colors), role=role)
+                           cmc=cmc, colors=None if colors is None else list(colors), role=role)
 
 
 MOUNTAIN = "Basic Land — Mountain"
@@ -144,10 +145,11 @@ class TestMergeSmall:
 class TestPlanFromDecklists:
     async def test_slots_lands_and_copies(self):
         db = fake_db(LISTS)
-        plan = await dp.plan_from_decklists(db, "Boros Aggro", "standard")
+        plan = await dp.plan_from_decklists(db, ["Boros Aggro"], "standard")
         sql, params = sql_of(db)
-        assert params == {"format": "standard", "archetype": "Boros Aggro"}
-        assert "lower(trim(d.archetype)) = lower(trim(:archetype))" in sql
+        assert params == {"format": "standard", "archetypes": ["boros aggro"]}
+        assert "lower(trim(d.archetype)) = ANY(CAST(:archetypes AS varchar[]))" in sql
+        assert dp.CARD_COLORS + " AS colors" in sql  # a DFC's colors fall back to its identity
         assert "lower(split_part(c.name, ' // ', 1)) = n.k" in sql  # DFCs listed by front face
         assert "r.role NOT LIKE 'land%'" in sql
         assert "l.sideboard" not in sql  # sideboards are not slot-planned
@@ -166,11 +168,63 @@ class TestPlanFromDecklists:
     async def test_colors_played_by_at_least_half_the_lists(self):
         rows = [entry(d, "Shock", 4, "Instant", 1, "R", "burn") for d in (1, 2, 3)]
         rows.append(entry(3, "Get Lost", 1, "Instant", 2, "W", "removal_targeted"))
-        plan = await dp.plan_from_decklists(fake_db(rows), "Mono Red", "standard")
+        plan = await dp.plan_from_decklists(fake_db(rows), ["Mono Red"], "standard")
         assert plan.colors == ["R"]
 
     async def test_no_lists(self):
-        assert await dp.plan_from_decklists(fake_db([]), "Gone", "standard") is None
+        assert await dp.plan_from_decklists(fake_db([]), ["Gone"], "standard") is None
+
+
+# Two relatives of a mono-red brew: lists 1-2 one archetype, list 3 another.
+RELATIVE_LISTS = [
+    entry(1, "Hired Claw", 4, "Creature — Lizard Mercenary", 1, "R", "threat_cheap"),
+    entry(1, "Burst Lightning", 4, "Instant", 1, "R", "burn"),
+    entry(1, "Lightning Helix", 4, "Instant", 2, "RW", "removal_targeted"),  # off-color for R
+    entry(1, "Sacred Foundry", 4, "Land — Mountain Plains", 0, "RW"),
+    entry(1, "Mountain", 18, MOUNTAIN, 0),
+    entry(2, "Hired Claw", 2, "Creature — Lizard Mercenary", 1, "R", "threat_cheap"),
+    entry(2, "Burst Lightning", 4, "Instant", 1, "R", "burn"),
+    entry(2, "Lightning Helix", 4, "Instant", 2, "RW", "removal_targeted"),
+    entry(2, "Mountain", 20, MOUNTAIN, 0),
+    entry(3, "Hired Claw", 4, "Creature — Lizard Mercenary", 1, "R", "threat_cheap"),
+    entry(3, "Fear of Missing Out", 4, "Enchantment Creature — Nightmare", 2, "BR", "threat_cheap"),
+    entry(3, "Patchwork Beastie", 4, "Artifact Creature — Beast", 1, "", "threat_cheap"),  # colorless fits
+    entry(3, "Mystery Card", 2, None, None, colors=None),  # no card row (SQL colors NULL): not counted
+    entry(3, "Mountain", 24, MOUNTAIN, 0),
+]
+
+
+class TestPlanFromRelatives:
+    async def plan(self):
+        db = fake_db(RELATIVE_LISTS)
+        plan = await dp.plan_from_decklists(db, ["Boros Aggro", "Rakdos Aggro"], "standard", ["R"])
+        return plan, sql_of(db)
+
+    async def test_one_query_over_all_the_relatives(self):
+        _, (sql, params) = await self.plan()
+        assert params == {"format": "standard", "archetypes": ["boros aggro", "rakdos aggro"]}
+
+    async def test_only_on_color_spells_make_slots_totalling_60(self):
+        plan, _ = await self.plan()
+        # On-color per list: threat_cheap 0-1 Claw (4+2+4)/3 + Beastie 4/3 = 14/3; burn 0-1 8/3.
+        # Helix and Fear of Missing Out are off-color; Mystery Card has no row. 38 nonland, 14:8.
+        assert {(s.role, s.cmc_min, s.cmc_max): s.copies for s in plan.slots} == {
+            ("threat_cheap", 0, 1): 24, ("burn", 0, 1): 14}
+        assert sum(s.copies for s in plan.slots) + plan.lands == dp.MAIN_SIZE
+
+    async def test_lands_copies_colors_and_label_from_the_relatives(self):
+        plan, _ = await self.plan()
+        assert plan.lands == 22  # (22 + 20 + 24) / 3 lands per list, Sacred Foundry included
+        assert plan.nonbasic_lands is None  # brew rule (lower quartile by color count) at land time
+        assert plan.copies["Hired Claw"] == 3  # (4 + 2 + 4) / 3 across the lists that play it
+        assert plan.copies["Patchwork Beastie"] == 4
+        assert plan.colors == ["R"]
+        assert plan.reference == "Boros Aggro + Rakdos Aggro"  # a log label, never shown to Jev
+
+    async def test_no_colors_keeps_the_reference_rules(self):
+        plan = await dp.plan_from_decklists(fake_db(RELATIVE_LISTS), ["Boros Aggro", "Rakdos Aggro"], "standard")
+        assert plan.nonbasic_lands == 1  # 4 Foundries over 3 lists
+        assert ("removal_targeted", 2, 2) in {(s.role, s.cmc_min, s.cmc_max) for s in plan.slots}
 
 
 LLM_PLAN = """Here you go:

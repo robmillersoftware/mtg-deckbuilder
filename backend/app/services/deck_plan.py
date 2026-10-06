@@ -34,6 +34,9 @@ BANDS: List[Tuple[int, int]] = [(0, 1), (2, 2), (3, 3), (4, 4), (5, 99)]
 # Decklists in the format from the last WINDOW_DAYS days (alias e = events). The
 # day count is inlined: asyncpg cannot bind an integer into date arithmetic.
 RECENT = f"e.format = :format AND e.date >= CURRENT_DATE - {WINDOW_DAYS}"
+# A card's colors; DFCs store colors per face (top-level colors are empty), so
+# fall back to color identity.
+CARD_COLORS = "coalesce(nullif(c.colors, '{}'), c.color_identity, '{}')"
 
 
 @dataclass
@@ -59,7 +62,7 @@ class Plan:
 def archetype_keys(names: Sequence[str]) -> List[str]:
     """Archetype names as the SQL compares them (lower case, trimmed), deduplicated:
     bind as :archetypes against lower(trim(d.archetype))."""
-    return sorted({n.strip().lower() for n in names})
+    return sorted({n.strip().lower() for n in names if n.strip()})
 
 
 def band_of(cmc: float) -> Tuple[int, int]:
@@ -126,14 +129,14 @@ MIN_SLOT = 2  # slots under this many copies merge into a neighbor
 MAIN_SIZE = 60
 
 
-# One row per main-deck entry in the archetype's lists, resolved to a card name
-# (decklists list DFCs by front face; cards store "Front // Back").
+# One row per main-deck entry in the :archetypes lists (archetype_keys), resolved
+# to a card name (decklists list DFCs by front face; cards store "Front // Back").
 REFERENCE_SQL = text(f"""
     WITH lists AS (
         SELECT d.id, d.main_deck
         FROM decklists d JOIN events e ON e.id = d.event_id
         WHERE {RECENT}
-          AND lower(trim(d.archetype)) = lower(trim(:archetype))
+          AND lower(trim(d.archetype)) = ANY(CAST(:archetypes AS varchar[]))
     ),
     entries AS (
         SELECT l.id AS deck_id, x->>'card_name' AS entry, (x->>'quantity')::int AS qty
@@ -141,7 +144,7 @@ REFERENCE_SQL = text(f"""
     ),
     card AS (
         SELECT DISTINCT ON (k) k, c.name, c.type_line, c.cmc,
-               coalesce(nullif(c.colors, '{{}}'), c.color_identity, '{{}}') AS colors
+               {CARD_COLORS} AS colors
         FROM (SELECT DISTINCT lower(split_part(entry, ' // ', 1)) AS k FROM entries) n
         JOIN cards c ON lower(split_part(c.name, ' // ', 1)) = n.k
         ORDER BY k, c.name
@@ -211,16 +214,24 @@ def _avg_copies(rows: Sequence[Any]) -> Dict[str, int]:
     return {name: max(1, round(sum(q) / len(q))) for name, q in per.items()}
 
 
-async def plan_from_decklists(db: AsyncSession, archetype: str, format: str) -> Optional[Plan]:
-    """Main-deck slot plan from the archetype's decklists in the window; None
-    without lists. Sideboards are not slot-planned (deck_fill.fill_sideboard)."""
+async def plan_from_decklists(db: AsyncSession, archetypes: Sequence[str], format: str,
+                              colors: Optional[Sequence[str]] = None) -> Optional[Plan]:
+    """Main-deck slot plan from the `archetypes`' decklists in the window; None
+    without lists. Sideboards are not slot-planned (deck_fill.fill_sideboard).
+
+    A reference passes [archetype] and no colors. A brew passes its relatives and
+    the deck colors: slots then count only spells whose colors fit the deck
+    (colorless included), the nonbasic count is left to the brew rule, and the
+    plan's colors are the deck colors."""
     rows = (await db.execute(REFERENCE_SQL, {
-        "format": format, "archetype": archetype})).all()
+        "format": format, "archetypes": archetype_keys(archetypes)})).all()
     n_lists = len({r.deck_id for r in rows})
     if not n_lists:
         return None
     lands = [r for r in rows if is_land(r.type_line)]
     spells = [r for r in rows if not is_land(r.type_line)]
+    if colors is not None:  # unknown names (colors None) can't be filled, so they don't count
+        spells = [r for r in spells if r.colors is not None and set(r.colors) <= set(colors)]
     land_count = round(sum(r.qty for r in lands) / n_lists)
     nonbasic = round(sum(r.qty for r in lands if not (r.type_line or "").startswith("Basic")) / n_lists)
     # A color counts when at least half the lists play it (splashes in one list don't).
@@ -228,10 +239,11 @@ async def plan_from_decklists(db: AsyncSession, archetype: str, format: str) -> 
     return Plan(
         slots=_to_slots(_slot_sizes(spells, n_lists), MAIN_SIZE - land_count),
         lands=land_count,
-        nonbasic_lands=min(nonbasic, land_count),
+        nonbasic_lands=None if colors is not None else min(nonbasic, land_count),
         copies=_avg_copies(rows),
-        colors=[c for c in WUBRG if lists_with[c] * 2 >= n_lists],
-        reference=archetype,
+        colors=([c for c in WUBRG if c in colors] if colors is not None
+                else [c for c in WUBRG if lists_with[c] * 2 >= n_lists]),
+        reference=" + ".join(archetypes),
     )
 
 

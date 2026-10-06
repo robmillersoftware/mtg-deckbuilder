@@ -19,8 +19,8 @@ from typesafe_sdk import Choice, Noul
 from app.services import jev, llm
 from app.services.card_service import FORMAT_LEGALITY_MAP
 from app.services.deck_plan import (
-    CHOICE_DEADLINE, CHOICE_TIMEOUT, MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, archetype_keys, choose, choose_reference,
-    is_land, largest_remainder, plan_from_decklists, plan_with_llm, recent_archetypes,
+    CARD_COLORS, CHOICE_DEADLINE, CHOICE_TIMEOUT, MAX_OPTIONS, RECENT, WUBRG, Plan, Slot, archetype_keys, choose,
+    choose_reference, is_land, largest_remainder, plan_from_decklists, plan_with_llm, recent_archetypes,
 )
 from app.services.guided_builder import front_cost
 
@@ -37,10 +37,6 @@ SLOT_QUESTION = ("Which card best fills this slot in the deck described by `deck
                  "in recent tournament play (see each option's play count) when they fit the slot. "
                  "The card must support the deck's plan; never pick one that works against it (e.g. a "
                  "sweeper that kills its own creatures in a creature deck).")
-
-# A card's colors; DFCs store colors per face (top-level colors are empty), so
-# fall back to color identity.
-CARD_COLORS = "coalesce(nullif(c.colors, '{}'), c.color_identity, '{}')"
 
 
 # Decklists of a set of archetypes (bind :archetypes to archetype_keys(...)).
@@ -539,7 +535,7 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
         if not archetypes:
             raise ValueError(f"No recent {format} decklists")
         reference = await choose_reference(client, request_text, colors or [], archetypes, format)
-        plan = await plan_from_decklists(db, reference, format) if reference else None
+        plan = await plan_from_decklists(db, [reference], format) if reference else None
         if plan is None:
             reference = None
             plan = await plan_with_llm(request_text, colors or [], archetype)

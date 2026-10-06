@@ -584,6 +584,7 @@ class TestAssemble:
         assert side_pool.calls[0][0] == "Boros Aggro" and set(side_pool.calls[0][1]) == set(main)
         state = jev.calls[-1][0]["deck"]
         assert state["plan"] == "Boros Aggro, a current Standard archetype" and state["colors"] == ["W", "R"]
+        df.plan_from_decklists.assert_awaited_once_with(None, ["Boros Aggro"], "standard")
 
     async def test_brew_gets_a_format_sideboard_and_basic_land_split(self, monkeypatch):
         _, side_pool = wire(monkeypatch)
