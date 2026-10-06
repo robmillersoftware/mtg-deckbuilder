@@ -105,17 +105,19 @@ class DeckGenerator:
         # when Jev is unavailable or fails, or for cEDH/Commander: then the LLM path.
         deck_data = None
         try:
-            deck_data = await deck_fill.assemble(
-                self.db,
-                prompt,
-                colors,
-                specific_cards,
-                format=format,
-                include_sideboard=include_sideboard,
-                archetype=parsed_request.get("archetype", ""),
-            )
+            # SAVEPOINT: a SQL error inside assemble must not abort the session the LLM path reuses
+            async with self.db.begin_nested():
+                deck_data = await deck_fill.assemble(
+                    self.db,
+                    prompt,
+                    colors,
+                    specific_cards,
+                    format=format,
+                    include_sideboard=include_sideboard,
+                    archetype=parsed_request.get("archetype", ""),
+                )
         except Exception as e:
-            logger.warning(f"[DECK-GEN] Jev assembly unavailable, using the LLM path: {e}")
+            logger.warning(f"[DECK-GEN] Jev assembly unavailable, using the LLM path: {e}", exc_info=True)
 
         if deck_data is None:
             # Get meta data for context

@@ -12,7 +12,7 @@ from app.services.deck_generator import DeckGenerator
 @pytest.fixture
 def generator(monkeypatch):
     g = DeckGenerator.__new__(DeckGenerator)
-    g.db = MagicMock(commit=AsyncMock(), refresh=AsyncMock())
+    g.db = MagicMock(commit=AsyncMock(), refresh=AsyncMock(), begin_nested=MagicMock(return_value=AsyncMock()))
     conversation = MagicMock(id="11111111-1111-1111-1111-111111111111")
     g._get_or_create_conversation = AsyncMock(return_value=conversation)
     g._get_meta_context = AsyncMock(return_value={})

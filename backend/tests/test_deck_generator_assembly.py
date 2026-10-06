@@ -1,5 +1,6 @@
 """DeckGenerator.generate builds with Jev assembly and falls back to the LLM path."""
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,7 +19,17 @@ ASSEMBLED = {
 @pytest.fixture
 def generator(monkeypatch):
     g = DeckGenerator.__new__(DeckGenerator)
-    g.db = MagicMock(commit=AsyncMock(), refresh=AsyncMock())
+    g.savepoints = []
+
+    @asynccontextmanager
+    async def begin_nested():
+        g.savepoints.append("open")
+        try:
+            yield
+        except BaseException:
+            g.savepoints.append("rolled back")
+            raise
+    g.db = MagicMock(commit=AsyncMock(), refresh=AsyncMock(), rollback=AsyncMock(), begin_nested=begin_nested)
     g._get_or_create_conversation = AsyncMock(return_value=MagicMock(id="11111111-1111-1111-1111-111111111111"))
     g._get_meta_context = AsyncMock(return_value={})
     g._get_archetype_template = AsyncMock(return_value=None)
@@ -65,3 +76,18 @@ async def test_cedh_keeps_the_llm_path(generator):
     result = await generator.generate("cEDH Tymna", format="cedh", colors=["W", "B"])
     generator.ai_service.generate_deck.assert_awaited_once()
     assert result.deck.name == "LLM Deck"
+
+
+async def test_assembly_runs_in_a_savepoint_and_failure_keeps_the_session(generator, monkeypatch):
+    monkeypatch.setattr(dg.deck_fill, "assemble", AsyncMock(side_effect=RuntimeError("sql error")))
+    result = await generator.generate("Build me Boros aggro")
+    assert generator.savepoints == ["open", "rolled back"]
+    generator.db.rollback.assert_not_awaited()
+    assert result.deck.name == "LLM Deck"
+
+
+async def test_explicit_colors_and_cards_reach_assemble(generator, monkeypatch):
+    assemble = AsyncMock(return_value=ASSEMBLED)
+    monkeypatch.setattr(dg.deck_fill, "assemble", assemble)
+    await generator.generate("Build me a deck", colors=["G"], specific_cards=["Llanowar Elves"])
+    assert assemble.await_args.args[2:4] == (["G"], ["Llanowar Elves"])
