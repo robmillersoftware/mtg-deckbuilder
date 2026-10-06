@@ -438,10 +438,13 @@ class TestSummarize:
         monkeypatch.setattr(df.llm, "is_configured", lambda: True)
         monkeypatch.setattr(df.llm, "complete", complete)
         main, side = df.Build(), df.Build()
-        main.add("Shock", 4)
+        main.add("Shock", 4, card("Shock", mana_cost="{R}", oracle="Shock deals 2 damage to any target."))
+        main.add("Mountain", 18)  # basics have no row
         side.add("Abrade", 2)
         assert await df.summarize(main, side, "burn", None, ["R"], "standard") == ("Red Rush", "Attack early.")
-        assert "4 Shock" in seen["user"] and "Sideboard:\n2 Abrade" in seen["user"]
+        assert "4 Shock ({R} Instant): Shock deals 2 damage to any target." in seen["user"]
+        assert "18 Mountain" in seen["user"] and "Sideboard:\n2 Abrade" in seen["user"]
+        assert "only on the cards' rules text" in df.SUMMARY_SYSTEM
 
     async def test_bad_llm_reply_uses_the_template(self, monkeypatch):
         monkeypatch.setattr(df.llm, "is_configured", lambda: True)

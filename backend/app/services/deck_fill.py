@@ -429,7 +429,9 @@ async def fill_lands(db: AsyncSession, client, build: Build, plan: Plan, colors:
 SIXTY_CARD_FORMATS = {f for f in FORMAT_LEGALITY_MAP if f != "cedh"}
 COLOR_WORDS = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
 SUMMARY_SYSTEM = """You name and describe a finished Magic: The Gathering deck.
+Base every statement only on the cards' rules text listed below. Use standard Magic terms (e.g. haste, flying, burn, removal, card advantage). Do not invent mechanics, creature types, themes or flavor that the rules text doesn't state, and mention only cards in the list.
 Reply with only JSON: {"name": "a short deck name", "strategy_summary": "2-4 sentences on how the deck plays and wins"}."""
+RULES_TEXT_CHARS = 300
 SIDEBOARD_SIZE = 15
 SIDEBOARD_QUESTION = "Which card best belongs in this deck's sideboard?"
 SIDEBOARD_SLOT = "A sideboard card: an answer or swap for this deck's hard matchups after game 1"
@@ -492,6 +494,21 @@ async def fill_sideboard(db: AsyncSession, client, main: Build, side: Build, col
         raise ValueError(f"Only {side.total()} sideboard cards played recently in {format}")
 
 
+def card_listing(build: Build) -> str:
+    """One line per card: copies, name, cost and type, and its rules text, so text the
+    LLM writes about the deck rests on what the cards do, not on their names."""
+    lines = []
+    for name, qty in build.copies.items():
+        row = build.rows.get(name)
+        if row is None:  # basic lands
+            lines.append(f"{qty} {name}")
+            continue
+        head = " ".join(x for x in (row.mana_cost, row.type_line) if x)
+        rules = " ".join((row.oracle_text or "").split())[:RULES_TEXT_CHARS]
+        lines.append(f"{qty} {name} ({head}): {rules}")
+    return "\n".join(lines)
+
+
 async def summarize(main: Build, side: Build, request_text: str, reference: Optional[str],
                     colors: List[str], format: str) -> Tuple[str, str]:
     """(deck name, strategy summary) from one LLM call; a template without the LLM."""
@@ -500,9 +517,9 @@ async def summarize(main: Build, side: Build, request_text: str, reference: Opti
                else f"A {format.title()} brew for: {request_text}")
     if not llm.is_configured():
         return name, summary
-    listing = "\n".join(f"{q} {n}" for n, q in main.copies.items())
+    listing = card_listing(main)
     if side.copies:
-        listing += "\nSideboard:\n" + "\n".join(f"{q} {n}" for n, q in side.copies.items())
+        listing += "\nSideboard:\n" + card_listing(side)
     try:
         content = await asyncio.to_thread(llm.complete, SUMMARY_SYSTEM,
                                           f"Request: {request_text}\n\n{listing}", 600)
