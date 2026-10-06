@@ -16,7 +16,7 @@ The format changes every set and every week, so nothing about the metagame may b
 
 - No card names, archetype names or land names appear anywhere in production code. That covers constants, prompts, filters and defaults.
 - Related archetypes, their cards, slot sizes, copy counts and land counts all come from the last 14 days of decklists in the database.
-- Jev judges relatedness from the request and from the archetype's actual decklist contents.
+- Jev judges relatedness by game plan, from the request and from the archetype's actual decklist contents. Colors are enforced by code (the on-color filter), not by the question; asking about colors made Jev score every two-color relative of a mono-color request below 0.5 (spike 2026-10-06: best 0.34 vs. 0.61-0.76 for the four aggro relatives with the game-plan question).
 - Only thresholds and counts are constants, such as minimum lists, the relatedness cutoff, the maximum number of relatives and the on-color share.
 - Tests may use names, because they are fixtures.
 
@@ -25,7 +25,7 @@ The format changes every set and every week, so nothing about the metagame may b
 Step 1 is unchanged: `choose_reference` picks a single archetype or `none`. On `none`, the brew path now runs these steps:
 
 1. **Candidates.** Code takes the current archetypes with at least `MIN_LISTS` (2) lists in the window whose lists average at least `MIN_ON_COLOR_SPELLS` (8) main-deck spell copies with colors ⊆ the deck colors, colorless included. Colors use the same `CARD_COLORS` rule as the pools, with front-face matching. If there are no deck colors, there are no candidates.
-2. **Relatives.** Each candidate gets one Jev Noul, run concurrently through the shared cap and deadline: "Is `archetype` a close relative of the deck the user asked for: the same game plan, and built around the deck's colors?"
+2. **Relatives.** Each candidate gets one Jev Noul, run concurrently through the shared cap and deadline: "Does `archetype` play the same kind of game as the deck the user asked for (for example fast aggro, midrange, control or ramp)? Judge its game plan from its cards; ignore its other colors."
    - The state is `{"request", "colors", "archetype": {"name", "lists", "cards"}}`. `cards` holds that archetype's 25 most-played main-deck spell names with their average copies, so Jev judges from contents, not the name alone.
    - Relatives are the candidates at or above `RELATIVE_THRESHOLD` (0.5), ranked by probability, capped at `MAX_RELATIVES` (5).
 3. **Plan from relatives.** `plan_from_decklists` generalises to take a list of archetypes and an optional color filter. It aggregates over all the relatives' lists, counting only main-deck spells whose colors fit the deck colors. It uses the same top-role and mana-band aggregation, merge rule and largest-remainder rounding as a single reference.
