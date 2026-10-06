@@ -49,7 +49,7 @@ async def test_without_identity_behaves_as_before(analyzer):
 async def test_with_identity_reranks_triple_pool(analyzer, monkeypatch):
     a, pools = analyzer
 
-    async def score(identity, keys, cands, client=None):
+    async def score(identity, keys, cands, client=None, roles_by_candidate=None):
         return {c["name"]: FitScore(plan_fit=int(c["name"][1:]) / 10, synergy=None, anti_synergy=0.0)
                 for c in cands}
     monkeypatch.setattr(guided_builder, "score_fit", score)
@@ -63,7 +63,7 @@ async def test_with_identity_reranks_triple_pool(analyzer, monkeypatch):
 async def test_fit_unavailable_falls_back_to_retrieval_order(analyzer, monkeypatch):
     a, pools = analyzer
 
-    async def score(identity, keys, cands, client=None):
+    async def score(identity, keys, cands, client=None, roles_by_candidate=None):
         return {}
     monkeypatch.setattr(guided_builder, "score_fit", score)
     out = await a.suggest_cards_for_strategy("s", [], ["threats"], [], cards_per_role=2,
@@ -75,7 +75,7 @@ async def test_fit_unavailable_falls_back_to_retrieval_order(analyzer, monkeypat
 async def test_role_emptied_by_anti_synergy_is_dropped(analyzer, monkeypatch):
     a, _ = analyzer
 
-    async def score(identity, keys, cands, client=None):
+    async def score(identity, keys, cands, client=None, roles_by_candidate=None):
         return {c["name"]: FitScore(plan_fit=1.0, synergy=None, anti_synergy=0.9) for c in cands}
     monkeypatch.setattr(guided_builder, "score_fit", score)
     out = await a.suggest_cards_for_strategy("s", [], ["threats"], [], cards_per_role=2,
@@ -87,7 +87,7 @@ async def test_overlapping_roles_dedupe_after_ranking_without_starving(analyzer,
     a, pools = analyzer
     pools["lists"] = {"r1": ["A", "B", "C", "D"], "r2": ["A", "B", "E", "F"]}
 
-    async def score(identity, keys, cands, client=None):
+    async def score(identity, keys, cands, client=None, roles_by_candidate=None):
         s = {"A": .9, "B": .8, "C": .7, "D": .1, "E": .6, "F": .5}
         return {c["name"]: FitScore(plan_fit=s[c["name"]], synergy=None, anti_synergy=0.0)
                 for c in cands}
@@ -103,7 +103,7 @@ async def test_fallback_with_overlapping_roles_has_no_duplicates(analyzer, monke
     a, pools = analyzer
     pools["lists"] = {"r1": ["A", "B", "C"], "r2": ["a", "B", "D", "E"]}
 
-    async def score(identity, keys, cands, client=None):
+    async def score(identity, keys, cands, client=None, roles_by_candidate=None):
         return {}
     monkeypatch.setattr(guided_builder, "score_fit", score)
     out = await a.suggest_cards_for_strategy("s", [], ["r1", "r2"], [], cards_per_role=2,
@@ -186,7 +186,7 @@ async def test_land_candidates_never_scored_or_returned(analyzer, monkeypatch):
     a._collect_role_candidates = collect
     sent = []
 
-    async def score(identity, keys, cands, client=None):
+    async def score(identity, keys, cands, client=None, roles_by_candidate=None):
         sent.extend(c["name"] for c in cands)
         return {c["name"]: FitScore(plan_fit=0.5, synergy=None, anti_synergy=0.0) for c in cands}
     monkeypatch.setattr(guided_builder, "score_fit", score)
@@ -194,3 +194,22 @@ async def test_land_candidates_never_scored_or_returned(analyzer, monkeypatch):
                                              identity=DeckIdentity(tags=["x"]))
     assert "Swamp" not in sent
     assert [c["card_name"] for c in out["r1"]] == ["A", "B"]
+
+
+async def test_role_check_drops_card_from_failing_role_only(analyzer, monkeypatch):
+    a, pools = analyzer
+    pools["lists"] = {"removal": ["A", "B"], "threats": ["A", "C"]}
+    seen = {}
+    role_fit = {"A": {"removal": 0.1, "threats": 0.9}, "B": {"removal": 0.9}, "C": {"threats": 0.9}}
+    plan = {"A": 0.9, "B": 0.5, "C": 0.5}
+
+    async def score(identity, keys, cands, client=None, roles_by_candidate=None):
+        seen.update(roles_by_candidate)
+        return {c["name"]: FitScore(plan_fit=plan[c["name"]], synergy=None, anti_synergy=0.0,
+                                    roles=role_fit[c["name"]]) for c in cands}
+    monkeypatch.setattr(guided_builder, "score_fit", score)
+    out = await a.suggest_cards_for_strategy("s", [], ["removal", "threats"], [], cards_per_role=2,
+                                             identity=DeckIdentity(tags=["x"]))
+    assert seen == {"A": ["removal", "threats"], "B": ["removal"], "C": ["threats"]}
+    assert [c["card_name"] for c in out["removal"]] == ["B"]
+    assert [c["card_name"] for c in out["threats"]] == ["A", "C"]

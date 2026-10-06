@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from pydantic import BaseModel, Field
 from typesafe_sdk import Noul, Score
 
+from app.models.card import ROLE_DEFINITIONS, ROLE_MAP
 from app.services.jev import FIT_DEADLINE, ask, ask_many, session
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ THEME_TAGS: Dict[str, str] = {
 TAG_THRESHOLD = 0.5
 ANTI_SYNERGY_CUTOFF = 0.7
 LOW_FIT_CUTOFF = 0.34
+ROLE_FIT_CUTOFF = 0.5
 WEIGHTS = {"plan_fit": 0.4, "synergy": 0.3, "meta": 0.3}
 ORACLE_CHAR_LIMIT = 600
 RE_INFER_AT = (6, 15, 30)
@@ -78,6 +80,7 @@ class FitScore(BaseModel):
     plan_fit: float              # 0-1
     synergy: Optional[float]     # 0-1, None when the deck has no key cards
     anti_synergy: float          # noul
+    roles: Dict[str, float] = Field(default_factory=dict)  # guided role name -> noul
 
 
 def card_payload(card: Any) -> Dict[str, str]:
@@ -98,6 +101,13 @@ def card_payload(card: Any) -> Dict[str, str]:
 
 def is_land(payload: Dict[str, str]) -> bool:
     return "Land" in payload.get("type_line", "")
+
+
+def role_description(role: str) -> str:
+    """What a guided role asks for: ROLE_MAP names expand to their system roles'
+    definitions; anything else (e.g. "cards with surveil") is its own description."""
+    system = ROLE_MAP.get(role.lower().strip())
+    return "; or ".join(ROLE_DEFINITIONS[r] for r in system) if system else role
 
 
 def apply_overrides(identity: DeckIdentity, deck_names: Sequence[str]) -> DeckIdentity:
@@ -201,11 +211,14 @@ async def score_fit(
     key_cards: List[Dict[str, str]],
     candidates: List[Dict[str, str]],
     client=None,
+    roles_by_candidate: Optional[Dict[str, List[str]]] = None,
 ) -> Dict[str, FitScore]:
-    """One concurrent Jev request per unique candidate. Empty dict if any request fails."""
+    """One concurrent Jev request per unique candidate, plus one role Noul for each
+    role in `roles_by_candidate[name]`. Empty dict if any request fails."""
     unique = {c["name"]: c for c in candidates}
     if not unique:
         return {}
+    roles_by_candidate = roles_by_candidate or {}
 
     deck = {"themes": identity.tags, "request": identity.request_text or "", "key_cards": key_cards}
     questions: Dict[str, Any] = {
@@ -224,18 +237,28 @@ async def score_fit(
             criteria=SYNERGY_LEVELS,
         )
 
+    def request(card: Dict[str, str]):
+        qs = dict(questions)
+        for i, role in enumerate(roles_by_candidate.get(card["name"], [])):
+            qs[f"role:{i}"] = Noul(instructions={
+                "question": "Does `candidate` fill this role in a deck?",
+                "role": role_description(role),
+            })
+        return {"deck": deck, "candidate": card}, qs
+
     async with session(client) as client:
         if client is None:
             return {}
         cards = list(unique.values())
         try:
-            responses = await ask_many(
-                client, [({"deck": deck, "candidate": c}, questions) for c in cards], FIT_DEADLINE)
+            responses = await ask_many(client, [request(c) for c in cards], FIT_DEADLINE)
             return {
                 c["name"]: FitScore(
                     plan_fit=r.scores["plan_fit"].score / 3,
                     synergy=r.scores["synergy"].score / 3 if key_cards else None,
                     anti_synergy=r.nouls["anti_synergy"].noul,
+                    roles={role: r.nouls[f"role:{i}"].noul
+                           for i, role in enumerate(roles_by_candidate.get(c["name"], []))},
                 )
                 for c, r in zip(cards, responses)
             }

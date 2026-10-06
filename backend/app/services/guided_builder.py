@@ -11,7 +11,10 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from app.services.deck_fit import DeckIdentity, card_payload, is_land, load_payloads, rank, score_fit
+from app.models.card import ROLE_MAP
+from app.services.deck_fit import (
+    ROLE_FIT_CUTOFF, DeckIdentity, card_payload, is_land, load_payloads, rank, score_fit,
+)
 from app.services.card_service import CardService, get_format_view, FORMAT_LEGALITY_MAP
 
 logger = logging.getLogger(__name__)
@@ -60,33 +63,6 @@ def _extract_mtg_keywords(role: str) -> List[str]:
             role_lower = role_lower.replace(kw, "")
     return found
 
-
-# Map user-facing role names (from Claude tool calls) to system role names in card_roles table
-ROLE_MAP: Dict[str, List[str]] = {
-    "threats": ["threat_cheap", "threat_midrange", "threat_finisher"],
-    "creatures": ["threat_cheap", "threat_midrange", "threat_finisher"],
-    "removal": ["removal_targeted", "removal_mass", "removal_artifact_enchantment"],
-    "card advantage": ["card_draw", "card_selection"],
-    "card draw": ["card_draw", "card_selection"],
-    "counterspells": ["counterspell"],
-    "protection": ["protection"],
-    "ramp": ["ramp"],
-    "burn": ["burn"],
-    "recursion": ["recursion"],
-    "finishers": ["threat_finisher"],
-    "interaction": ["removal_targeted", "counterspell"],
-    "discard": ["discard"],
-    "lifegain": ["lifegain"],
-    "graveyard hate": ["graveyard_hate"],
-    "tutors": ["tutor"],
-    "sacrifice outlets": ["recursion"],
-    "board wipes": ["removal_mass"],
-    "spot removal": ["removal_targeted"],
-    "cheap threats": ["threat_cheap"],
-    "big threats": ["threat_finisher"],
-    "top end": ["threat_finisher"],
-    "early threats": ["threat_cheap"],
-}
 
 # Max CMC constraints for roles that imply cheapness.
 # Prevents expensive cards (e.g. 9-mana Rise of the Dark Realms) from
@@ -499,8 +475,13 @@ class DeckAnalyzer:
                 cards_per_role * self.FIT_POOL_MULTIPLIER)
             pool[role] = [c for c in got.get(role, []) if not is_land(card_payload(c))]
         candidates = [card_payload(c) for cards in pool.values() for c in cards]
+        # The roles whose pools each candidate came from; Jev checks it fills each one.
+        roles_by_candidate: Dict[str, List[str]] = {}
+        for role, cards in pool.items():
+            for c in cards:
+                roles_by_candidate.setdefault(c["card_name"], []).append(role)
         keys = await load_payloads(self.db, identity.key_cards)
-        fit = await score_fit(identity, keys, candidates)
+        fit = await score_fit(identity, keys, candidates, roles_by_candidate=roles_by_candidate)
         if not fit:
             return self._take_unique(
                 {r: [c["card_name"] for c in cs] for r, cs in pool.items()},
@@ -508,7 +489,8 @@ class DeckAnalyzer:
 
         freq = await self._rank_cards_by_tournament_frequency(list(fit), format=format)
         ordered = {
-            role: rank(list({c["card_name"]: c for c in cards}), fit, freq)
+            role: rank([n for n in dict.fromkeys(c["card_name"] for c in cards)
+                        if fit[n].roles.get(role, 1.0) >= ROLE_FIT_CUTOFF], fit, freq)
             for role, cards in pool.items()
         }
         return self._take_unique(ordered, pool, cards_per_role, fit)

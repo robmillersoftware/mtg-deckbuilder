@@ -333,3 +333,37 @@ async def test_deck_fit_route_includes_commander(monkeypatch):
     deck.main_deck.append({"card_name": "Cmdr"})
     await decks._deck_fit(MagicMock(commit=AsyncMock()), deck)
     assert seen["names"] == ["A", "Cmdr"]
+
+
+class TestRoleCheck:
+    async def test_role_nouls_per_candidate_roles(self):
+        def answer(state, qs):
+            nouls = {k: 0.0 for k, q in qs.items() if type(q).__name__ == "Noul"}
+            nouls.update({k: 0.8 for k in qs if k.startswith("role:")})
+            return nouls, {"plan_fit": 3.0}
+        client = FakeClient(answer)
+        fit = await deck_fit.score_fit(
+            DeckIdentity(), [], [card("A"), card("B")], client=client,
+            roles_by_candidate={"A": ["removal", "cards with surveil"]})
+        assert fit["A"].roles == {"removal": 0.8, "cards with surveil": 0.8}
+        assert fit["B"].roles == {}
+        qs_a = next(qs for s, qs in client.calls if s["candidate"]["name"] == "A")
+        assert qs_a["role:0"].instructions["role"] == deck_fit.role_description("removal")
+        assert qs_a["role:1"].instructions["role"] == "cards with surveil"
+        qs_b = next(qs for s, qs in client.calls if s["candidate"]["name"] == "B")
+        assert not any(k.startswith("role:") for k in qs_b)
+
+
+def test_role_description_expands_role_map_and_falls_back_to_name():
+    from app.models.card import ROLE_DEFINITIONS
+    assert deck_fit.role_description("Counterspells ") == ROLE_DEFINITIONS["counterspell"]
+    removal = deck_fit.role_description("removal")
+    assert ROLE_DEFINITIONS["removal_targeted"] in removal and ROLE_DEFINITIONS["removal_mass"] in removal
+    assert deck_fit.role_description("cards with surveil") == "cards with surveil"
+    assert deck_fit.role_description("payoffs") == "payoffs"
+
+
+def test_role_map_targets_are_defined_roles():
+    from app.models.card import CARD_ROLES, ROLE_DEFINITIONS, ROLE_MAP
+    assert set(ROLE_DEFINITIONS) == set(CARD_ROLES)
+    assert all(r in ROLE_DEFINITIONS for targets in ROLE_MAP.values() for r in targets)
