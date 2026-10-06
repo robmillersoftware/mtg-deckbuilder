@@ -428,6 +428,9 @@ async def summarize(main: Build, side: Build, request_text: str, reference: Opti
     return name, summary
 
 
+ASSEMBLY_DEADLINE = 60  # seconds for all Jev work; a slow Jev falls back to the LLM path
+
+
 async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[str]],
                    specific_cards: Optional[List[str]], format: str = "standard",
                    include_sideboard: bool = True, archetype: str = "", client=None) -> Dict[str, Any]:
@@ -439,7 +442,7 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
     decklists, or a brew has no colors; the caller falls back to the LLM path."""
     if format not in SIXTY_CARD_FORMATS:
         raise ValueError(f"Jev assembly builds 60-card formats only, not {format}")
-    async with jev.session(client) as client:
+    async with asyncio.timeout(ASSEMBLY_DEADLINE), jev.session(client) as client:
         if client is None:
             raise RuntimeError("Jev is not configured")
         archetypes = await recent_archetypes(db, format)

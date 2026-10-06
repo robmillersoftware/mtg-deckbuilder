@@ -550,6 +550,13 @@ class TestAssemble:
         assert total(deck["main_deck"]) == 60 and total(deck["sideboard"]) == 15
         assert {r.name for r in reqs} <= set(main)
 
+    async def test_slow_jev_hits_the_deadline(self, monkeypatch):
+        wire(monkeypatch, reference_plan())
+        monkeypatch.setattr(df, "ASSEMBLY_DEADLINE", 0.05)
+        with pytest.raises(TimeoutError):
+            await df.assemble(None, "Boros aggro", ["R", "W"], [], "standard", True, "aggro",
+                              client=FakeJev(delay=1.0))
+
     async def test_not_sixty_card_format(self):
         with pytest.raises(ValueError):
             await df.assemble(None, "x", ["B"], [], "cedh", False, client=FakeJev())
