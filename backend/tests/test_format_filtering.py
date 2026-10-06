@@ -288,6 +288,5 @@ class TestSemanticSearchRouting:
         with patch("app.services.card_service.get_embedding_service", return_value=mock_embedding_service):
             await card_service.semantic_search(query="test", format="cedh")
 
-        call_args = card_service.db.execute.call_args
-        sql_text = str(call_args[0][0])
+        sql_text = str(card_service.db.execute.call_args_list[0][0][0])
         assert "cards_commander" in sql_text

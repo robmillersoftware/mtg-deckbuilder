@@ -2,12 +2,17 @@ from typing import Optional, List, Dict, Any
 from uuid import UUID
 import logging
 import re
+from typing import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, text
 
+from typesafe_sdk import Noul
+
 from app.models.card import Card
 from app.schemas.card import CardResponse
+from app.services import jev
+from app.services.deck_fit import card_payload
 from app.services.embedding_service import get_embedding_service
 
 logger = logging.getLogger(__name__)
@@ -38,6 +43,29 @@ CARD_TSVECTOR = (
 )
 SHORTLIST_SIZE = 60
 VALID_COLORS = {"W", "U", "B", "R", "G"}
+SEARCH_CUTOFF = 0.5
+
+
+async def score_search(query: str, cards: Sequence[Any], client=None) -> Optional[Dict[str, float]]:
+    """One Jev Noul per card: does it serve `query`? Keyed by card name.
+
+    {} for no cards. None when Jev is unavailable or any request fails, so the
+    caller keeps its shortlist order.
+    """
+    if not cards:
+        return {}
+    question = {"match": Noul(instructions="Does `card` serve the request in `query`?")}
+    payloads = [card_payload(c) for c in cards]
+    async with jev.session(client) as client:
+        if client is None:
+            return None
+        try:
+            responses = await jev.ask_many(
+                client, [({"query": query, "card": p}, question) for p in payloads], jev.FIT_DEADLINE)
+            return {p["name"]: r.nouls["match"].noul for p, r in zip(payloads, responses)}
+        except Exception as e:
+            logger.warning(f"Search re-rank failed, using shortlist order: {e}")
+            return None
 
 
 def get_format_view(format_name: str) -> str:
@@ -339,42 +367,62 @@ class CardService:
         colors: Optional[List[str]] = None,
     ) -> List[Card]:
         """
-        Search cards using semantic similarity via embeddings.
-        Falls back to text search if embeddings are not available.
+        Shortlist up to SHORTLIST_SIZE cards (vector hits when OpenAI is configured,
+        then full-text hits, then popular cards), then have Jev re-rank them against
+        the query and drop those below SEARCH_CUTOFF. Without Jev, returns the
+        shortlist in merge order.
         """
-        embedding_service = get_embedding_service()
-        query_embedding = await embedding_service.get_query_embedding(query)
+        names = await self._shortlist(query, format, standard_only, colors)
+        by_name = await self.get_cards_by_names(names)
+        cards = [by_name[n.lower()] for n in names if n.lower() in by_name]
+        scores = await score_search(query, cards)
+        if scores is None:
+            return cards[:limit]
+        kept = [c for c in cards if scores.get(c.name, 0.0) >= SEARCH_CUTOFF]
+        return sorted(kept, key=lambda c: scores[c.name], reverse=True)[:limit]
 
-        if query_embedding is None:
-            logger.info("No embedding available, falling back to text search")
-            return await self.search(q=query, standard_only=standard_only, format=format, limit=limit, colors=colors)
+    async def _shortlist(
+        self,
+        query: str,
+        format: Optional[str],
+        standard_only: bool,
+        colors: Optional[List[str]],
+    ) -> List[str]:
+        """Unique names, already filtered by format and colors, in priority order:
+        vector hits, full-text hits, popular cards. Stops at SHORTLIST_SIZE."""
+        names: Dict[str, None] = {}  # insertion-ordered set
 
-        try:
-            rows = await self._vector_search(
-                query_embedding, format=format, standard_only=standard_only,
-                colors=colors, limit=limit,
-            )
+        def add(found) -> None:
+            for n in found:
+                if len(names) >= SHORTLIST_SIZE:
+                    return
+                names.setdefault(n, None)
 
-            # Deduplicate by name (keep highest similarity)
-            seen_names = set()
-            unique_cards = []
-            for row in rows:
-                if row.name not in seen_names:
-                    seen_names.add(row.name)
-                    # Fetch the full Card object
-                    card = await self.get_by_name(row.name, standard_only=False)
-                    if card:
-                        unique_cards.append(card)
-                    if len(unique_cards) >= limit:
-                        break
+        embedding = await get_embedding_service().get_query_embedding(query)
+        if embedding is not None:
+            try:
+                rows = await self._vector_search(
+                    embedding, format=format, standard_only=standard_only,
+                    colors=colors, limit=SHORTLIST_SIZE,
+                )
+                add(row.name for row in rows)
+            except Exception as e:
+                logger.error(f"Vector search failed: {e}")
+                await self.db.rollback()  # the aborted transaction would fail the next query
 
-            return unique_cards
-
-        except Exception as e:
-            logger.error(f"Vector search failed: {e}, falling back to text search")
-            # Rollback the aborted transaction so the text-search fallback can run
-            await self.db.rollback()
-            return await self.search(q=query, standard_only=standard_only, format=format, limit=limit, colors=colors)
+        sources = (
+            lambda: self.text_search_names(query, format, standard_only, colors),
+            lambda: self.popular_card_names(format, standard_only, colors),
+        )
+        for source in sources:
+            if len(names) >= SHORTLIST_SIZE:
+                break
+            try:
+                add(await source())
+            except Exception as e:
+                logger.error(f"Shortlist query failed: {e}")
+                await self.db.rollback()
+        return list(names)
 
     async def _vector_search(
         self,
