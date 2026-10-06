@@ -13,17 +13,18 @@ export function ConversationList({ className }: ConversationListProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const { currentConversation, setCurrentConversation } = useConversationStore();
+  const { currentConversation, setCurrentConversation, conversationIds } = useConversationStore();
   const { setCurrentDeck } = useDeckStore();
 
+  // reload when a new conversation starts, so it shows up
   useEffect(() => {
     loadConversations();
-  }, []);
+  }, [conversationIds.length]);
 
   const loadConversations = async () => {
     setIsLoading(true);
     try {
-      const response = await conversationsApi.list(20, 0);
+      const response = await conversationsApi.list(20, 0, conversationIds);
       setConversations(response.data || []);
     } catch (error) {
       console.error('Failed to load conversations:', error);
@@ -78,12 +79,6 @@ export function ConversationList({ className }: ConversationListProps) {
     <div className={clsx('bg-gray-900 rounded-lg', className)}>
       <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-white">History</h2>
-        <button
-          onClick={() => setCurrentConversation(null)}
-          className="text-sm text-primary-400 hover:text-primary-300"
-        >
-          New
-        </button>
       </div>
 
       <div className="overflow-y-auto max-h-96">

@@ -222,8 +222,9 @@ export const decksApi = {
 
 // Conversations API
 export const conversationsApi = {
-  list: (limit?: number, offset?: number) =>
-    api.get('/conversations', { params: { limit, offset } }),
+  // ids: this browser's conversations, used when signed out
+  list: (limit?: number, offset?: number, ids?: string[]) =>
+    api.get('/conversations', { params: { limit, offset, ids: ids?.join(',') || undefined } }),
 
   getById: (id: string) => api.get(`/conversations/${id}`),
 

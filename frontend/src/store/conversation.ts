@@ -11,6 +11,7 @@ interface ConversationState {
   currentFormat: string; // Format for current conversation
   cardSuggestions: CardSuggestionGroup[] | null;
   lastConversationId: string | null;
+  conversationIds: string[]; // conversations this browser started, for signed-out history
   conversationMode: ConversationMode;
 
   setCurrentConversation: (conversation: Conversation | null) => void;
@@ -32,16 +33,21 @@ export const useConversationStore = create<ConversationState>()(
       currentFormat: 'standard',
       cardSuggestions: null,
       lastConversationId: null,
+      conversationIds: [],
       conversationMode: null,
 
       setCurrentConversation: (conversation) => {
         // When loading a conversation, also set its format from current_deck if available
         const format = conversation?.current_deck?.format || 'standard';
-        set({
+        set((state) => ({
           currentConversation: conversation,
           currentFormat: format,
           lastConversationId: conversation?.id || null,
-        });
+          conversationIds:
+            conversation?.id && !state.conversationIds.includes(conversation.id)
+              ? [conversation.id, ...state.conversationIds]
+              : state.conversationIds,
+        }));
       },
 
       setConversations: (conversations) => set({ conversations }),
@@ -94,6 +100,7 @@ export const useConversationStore = create<ConversationState>()(
         currentFormat: state.currentFormat,
         cardSuggestions: state.cardSuggestions,
         lastConversationId: state.lastConversationId,
+        conversationIds: state.conversationIds,
         conversationMode: state.conversationMode,
       }),
     }
