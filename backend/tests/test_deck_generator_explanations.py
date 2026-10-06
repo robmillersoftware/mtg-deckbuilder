@@ -29,6 +29,7 @@ def generator(monkeypatch):
         generate_card_explanations=AsyncMock(return_value={"Shock": "Cheap burn."}),
     )
     monkeypatch.setattr(dg.deck_fit, "review_deck", AsyncMock(return_value=(None, {})))
+    monkeypatch.setattr(dg.deck_fill, "assemble", AsyncMock(side_effect=RuntimeError("no jev")))
     return g
 
 

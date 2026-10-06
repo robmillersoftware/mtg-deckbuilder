@@ -20,7 +20,7 @@ from app.schemas.deck import (
 )
 from app.services.card_service import CardService
 from app.services.deck_validator import DeckValidator
-from app.services import deck_fit
+from app.services import deck_fill, deck_fit
 from app.services.ai_service import AIService
 from app.core.security import generate_share_token
 
@@ -101,33 +101,49 @@ class DeckGenerator:
                     colors = commander_colors
                     break  # Use the first card's color identity (assume it's the commander)
 
-        # Get meta data for context
-        meta_data = await self._get_meta_context(format=format)
-
-        # Get archetype template for role distribution guidance
-        archetype_template = await self._get_archetype_template(
-            parsed_request.get("archetype", ""),
-            format=format,
-        )
-        if archetype_template:
-            logger.info(
-                f"Using {archetype_template['archetype_category']} template "
-                f"(from {archetype_template['sample_size']} tournament decks)"
+        # Jev assembly builds 60-card decks from recent tournament cards. It raises
+        # when Jev is unavailable or fails, or for cEDH/Commander: then the LLM path.
+        deck_data = None
+        try:
+            deck_data = await deck_fill.assemble(
+                self.db,
+                prompt,
+                colors,
+                specific_cards,
+                format=format,
+                include_sideboard=include_sideboard,
+                archetype=parsed_request.get("archetype", ""),
             )
+        except Exception as e:
+            logger.warning(f"[DECK-GEN] Jev assembly unavailable, using the LLM path: {e}")
 
-        # Generate the deck
-        # Preserve colors if user explicitly specified them (prevents tournament data override)
-        deck_data = await self.ai_service.generate_deck(
-            archetype=parsed_request.get("archetype", ""),
-            colors=colors,
-            strategy=parsed_request.get("strategy", ""),
-            meta_context=meta_data,
-            include_sideboard=include_sideboard,
-            specific_cards=specific_cards,
-            archetype_template=archetype_template,
-            format=format,
-            preserve_colors=colors_specified,
-        )
+        if deck_data is None:
+            # Get meta data for context
+            meta_data = await self._get_meta_context(format=format)
+
+            # Get archetype template for role distribution guidance
+            archetype_template = await self._get_archetype_template(
+                parsed_request.get("archetype", ""),
+                format=format,
+            )
+            if archetype_template:
+                logger.info(
+                    f"Using {archetype_template['archetype_category']} template "
+                    f"(from {archetype_template['sample_size']} tournament decks)"
+                )
+
+            # Preserve colors if user explicitly specified them (prevents tournament data override)
+            deck_data = await self.ai_service.generate_deck(
+                archetype=parsed_request.get("archetype", ""),
+                colors=colors,
+                strategy=parsed_request.get("strategy", ""),
+                meta_context=meta_data,
+                include_sideboard=include_sideboard,
+                specific_cards=specific_cards,
+                archetype_template=archetype_template,
+                format=format,
+                preserve_colors=colors_specified,
+            )
 
         # Validate all cards exist and are legal
         main_deck = deck_data.get("main_deck", [])
