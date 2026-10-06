@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 import logging
+import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, text
@@ -30,6 +31,13 @@ FORMAT_VIEW_MAP = {
     "legacy": "cards_legacy",
     "cedh": "cards_commander",
 }
+
+# Full-text document for a card. Migration 016 indexes exactly this expression.
+CARD_TSVECTOR = (
+    "to_tsvector('english', name || ' ' || coalesce(type_line, '') || ' ' || coalesce(oracle_text, ''))"
+)
+SHORTLIST_SIZE = 60
+VALID_COLORS = {"W", "U", "B", "R", "G"}
 
 
 def get_format_view(format_name: str) -> str:
@@ -418,25 +426,9 @@ class CardService:
         limit: int,
     ):
         """Build and execute a single vector similarity SQL query."""
-        conditions = ["embedding IS NOT NULL"]
-
-        # If querying the main table (no format view), add legality filter
-        if source_table == "cards":
-            if format and format in FORMAT_LEGALITY_MAP:
-                legality_key = FORMAT_LEGALITY_MAP[format]
-                conditions.append(f"legalities->>'{legality_key}' = 'legal'")
-            elif standard_only:
-                conditions.append("is_standard_legal = true")
-
-        if colors:
-            # Card's colors must be a subset of the deck's colors (or colorless).
-            valid_colors = [c.upper() for c in colors if c.upper() in ["W", "U", "B", "R", "G"]]
-            if valid_colors:
-                arr_literal = "ARRAY[" + ",".join(f"'{c}'" for c in valid_colors) + "]::varchar[]"
-                conditions.append(
-                    f"(colors <@ {arr_literal} OR colors = '{{}}' OR colors IS NULL)"
-                )
-
+        # The format views already hold only legal cards; the main table needs the filter.
+        conditions = ["embedding IS NOT NULL", *self._filter_sql(
+            format, standard_only, colors, legality=(source_table == "cards"))]
         where_clause = " AND ".join(conditions)
 
         sql = text(f"""
@@ -454,6 +446,117 @@ class CardService:
 
         result = await self.db.execute(sql, {"embedding": embedding_str, "limit": limit * 3})
         return result.fetchall()
+
+    @staticmethod
+    def _filter_sql(
+        format: Optional[str],
+        standard_only: bool,
+        colors: Optional[List[str]],
+        legality: bool = True,
+        alias: str = "",
+    ) -> List[str]:
+        """WHERE fragments for format legality and deck colors (a card's colors must be
+        a subset of the deck's, or colorless)."""
+        p = f"{alias}." if alias else ""
+        conditions = []
+        if legality:
+            if format and format in FORMAT_LEGALITY_MAP:
+                conditions.append(f"{p}legalities->>'{FORMAT_LEGALITY_MAP[format]}' = 'legal'")
+            elif standard_only:
+                conditions.append(f"{p}is_standard_legal = true")
+        valid = [c.upper() for c in colors or [] if c.upper() in VALID_COLORS]
+        if valid:
+            arr = "ARRAY[" + ",".join(f"'{c}'" for c in valid) + "]::varchar[]"
+            conditions.append(f"({p}colors <@ {arr} OR {p}colors = '{{}}' OR {p}colors IS NULL)")
+        return conditions
+
+    async def text_search_names(
+        self,
+        query: str,
+        format: Optional[str] = None,
+        standard_only: bool = True,
+        colors: Optional[List[str]] = None,
+        limit: int = SHORTLIST_SIZE,
+    ) -> List[str]:
+        """Card names matching any query word (Postgres full text with english
+        stemming and stopwords), best match first. Runs on `cards` so the
+        migration-016 index applies."""
+        words = re.findall(r"[a-z0-9]+", query.lower())
+        if not words:
+            return []
+        where = " AND ".join([f"{CARD_TSVECTOR} @@ to_tsquery('english', :q)",
+                              *self._filter_sql(format, standard_only, colors)])
+        sql = text(f"""
+            SELECT name
+            FROM cards
+            WHERE {where}
+            GROUP BY name
+            ORDER BY MAX(ts_rank({CARD_TSVECTOR}, to_tsquery('english', :q))) DESC, name
+            LIMIT :limit
+        """)
+        result = await self.db.execute(sql, {"q": " | ".join(words), "limit": limit})
+        return [row[0] for row in result.all()]
+
+    async def popular_card_names(
+        self,
+        format: Optional[str] = None,
+        standard_only: bool = True,
+        colors: Optional[List[str]] = None,
+        limit: int = SHORTLIST_SIZE,
+    ) -> List[str]:
+        """Nonbasic cards legal in the format and colors, most tournament decklists first."""
+        # ponytail: exact name join misses DFCs listed by front face only; add a face match if it matters
+        where = " AND ".join(["coalesce(c.type_line, '') NOT LIKE 'Basic Land%'",
+                              *self._filter_sql(format, standard_only, colors, alias="c")])
+        sql = text(f"""
+            SELECT c.name, COUNT(DISTINCT d.id) AS freq
+            FROM decklists d
+            JOIN events e ON d.event_id = e.id
+            CROSS JOIN LATERAL jsonb_array_elements(d.main_deck) AS card_entry
+            JOIN cards c ON LOWER(c.name) = LOWER(card_entry->>'card_name')
+            WHERE e.format = :format AND {where}
+            GROUP BY c.name
+            ORDER BY freq DESC, c.name
+            LIMIT :limit
+        """)
+        result = await self.db.execute(sql, {"format": format or "standard", "limit": limit})
+        return [row[0] for row in result.all()]
+
+    async def tournament_frequency(
+        self,
+        card_names: List[str],
+        format: str = "standard",
+    ) -> Dict[str, int]:
+        """
+        Look up tournament decklist frequency for a list of card names.
+
+        Returns a dict mapping lowercase card name -> frequency count.
+        Cards not found in tournament data are absent.
+        """
+        if not card_names:
+            return {}
+
+        name_params: Dict[str, Any] = {}
+        name_placeholders = []
+        for i, name in enumerate(card_names):
+            name_params[f"n_{i}"] = name.lower()
+            name_placeholders.append(f":n_{i}")
+
+        freq_sql = f"""
+            SELECT
+                LOWER(card_entry->>'card_name') as card_name,
+                COUNT(DISTINCT d.id) as freq
+            FROM decklists d
+            JOIN events e ON d.event_id = e.id,
+                 jsonb_array_elements(d.main_deck) as card_entry
+            WHERE e.format = :format
+              AND LOWER(card_entry->>'card_name') IN ({', '.join(name_placeholders)})
+            GROUP BY LOWER(card_entry->>'card_name')
+        """
+        name_params["format"] = format
+
+        result = await self.db.execute(text(freq_sql), name_params)
+        return {row[0]: row[1] for row in result.all()}
 
     async def get_candidates(
         self,

@@ -269,34 +269,7 @@ class DeckAnalyzer:
         Returns a dict mapping lowercase card name -> frequency count.
         Cards not found in tournament data get 0.
         """
-        if not card_names:
-            return {}
-
-        # Build parameterized IN clause
-        name_params = {}
-        name_placeholders = []
-        for i, name in enumerate(card_names):
-            name_params[f"n_{i}"] = name.lower()
-            name_placeholders.append(f":n_{i}")
-
-        freq_sql = f"""
-            SELECT
-                LOWER(card_entry->>'card_name') as card_name,
-                COUNT(DISTINCT d.id) as freq
-            FROM decklists d
-            JOIN events e ON d.event_id = e.id,
-                 jsonb_array_elements(d.main_deck) as card_entry
-            WHERE e.format = :format
-              AND LOWER(card_entry->>'card_name') IN ({', '.join(name_placeholders)})
-            GROUP BY LOWER(card_entry->>'card_name')
-        """
-        name_params["format"] = format
-
-        result = await self.db.execute(text(freq_sql), name_params)
-        rows = result.all()
-
-        freq_map = {row[0]: row[1] for row in rows}
-        return freq_map
+        return await CardService(self.db).tournament_frequency(card_names, format=format)
 
     async def _get_meta_role_cards(
         self,
