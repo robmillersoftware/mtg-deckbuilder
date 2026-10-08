@@ -85,7 +85,7 @@ export function HomePage() {
     conversationsApi.getById(idToRestore)
       .then((response) => {
         setCurrentConversation(response.data);
-        useConversationStore.getState().setSimulationId(null);
+        useConversationStore.getState().clearSimulationUnless(response.data.id);
         if (response.data.current_deck) {
           useDeckStore.getState().setCurrentDeck(response.data.current_deck);
         }

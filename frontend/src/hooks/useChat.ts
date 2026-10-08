@@ -98,7 +98,7 @@ export function useChat(mode?: ConversationMode) {
       // Update deck if included in response (full deck generation / modification)
       if (data.deck) {
         setCurrentDeck(data.deck);
-        setSimulationId(data.simulation_id ?? null);
+        setSimulationId(data.simulation_id ?? null, data.conversation_id);
       }
 
       // Update card suggestions if included (persisted in conversation store)
