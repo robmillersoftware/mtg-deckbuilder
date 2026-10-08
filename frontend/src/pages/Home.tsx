@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ChatWindow } from '@/components/ChatWindow';
 import { DeckList } from '@/components/DeckList';
 import { DeckActions } from '@/components/DeckActions';
@@ -30,6 +30,25 @@ export function HomePage() {
   const [added, setAdded] = useState<string[]>([]);
   const lastDeck = useRef<string>('');
 
+  // Each run starts with a clean slate.
+  useEffect(() => {
+    setAdded([]);
+    lastDeck.current = '';
+  }, [simulationId]);
+
+  const [stopping, setStopping] = useState(false);
+  const stopPlaytest = async () => {
+    if (!playtest) return;
+    setStopping(true);
+    try {
+      await simulationApi.stop(playtest.id);
+    } catch {
+      // the next poll shows the real state
+    } finally {
+      setStopping(false);
+    }
+  };
+
   // A kept swap changes the playtest's deck: show it in place and highlight what came in.
   useEffect(() => {
     const entries = playtest?.progress?.deck;
@@ -40,7 +59,7 @@ export function HomePage() {
     if (lastDeck.current) setAdded(entries.filter((e) => !before.has(e.card_name)).map((e) => e.card_name));
     lastDeck.current = key;
     setCurrentDeck({ ...currentDeck, main_deck: entries });
-  }, [playtest?.progress?.deck]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playtest?.progress?.deck, currentDeck, setCurrentDeck]);
 
   // Restore last conversation on mount (from URL param or persisted ID)
   useEffect(() => {
@@ -66,6 +85,7 @@ export function HomePage() {
     conversationsApi.getById(idToRestore)
       .then((response) => {
         setCurrentConversation(response.data);
+        useConversationStore.getState().setSimulationId(null);
         if (response.data.current_deck) {
           useDeckStore.getState().setCurrentDeck(response.data.current_deck);
         }
@@ -161,17 +181,17 @@ export function HomePage() {
               <DeckActions deck={currentDeck} />
             )}
             {playtest && isActive(playtest) && (
-              <SimulationProgress run={playtest} onStop={() => simulationApi.stop(playtest.id)} />
+              <SimulationProgress run={playtest} onStop={stopPlaytest} stopping={stopping} />
             )}
-            {playtest?.status === 'failed' && (
+            {playtest?.status === 'failed' && playtest.error && (
               <div className="bg-gray-900 rounded-lg p-3 text-xs text-red-300">{playtest.error}</div>
             )}
             {playtest?.report && (
               <>
                 <SimulationReport report={playtest.report} kind="build" compact />
-                <a href={`/simulate?run=${playtest.id}`} className="text-xs text-primary-400 hover:underline">
+                <Link to={`/simulate?run=${playtest.id}`} className="text-xs text-primary-400 hover:underline">
                   Full playtest report
-                </a>
+                </Link>
               </>
             )}
           </>

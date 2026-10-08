@@ -6,6 +6,7 @@ import { DeckList } from '@/components/DeckList';
 import DeckFitPanel from '@/components/DeckFitPanel';
 import { DeckActions } from '@/components/DeckActions';
 import { useDeckStore } from '@/store/deck';
+import { useConversationStore } from '@/store/conversation';
 import toast from 'react-hot-toast';
 
 export function DeckViewPage() {
@@ -56,6 +57,7 @@ export function DeckViewPage() {
   const handleEdit = () => {
     if (deck) {
       setCurrentDeck(deck);
+      useConversationStore.getState().setSimulationId(null);
       navigate('/');
     }
   };

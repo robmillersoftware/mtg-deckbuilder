@@ -80,7 +80,7 @@ export function SimulationReport({ report, kind, compact }: Props) {
                   <li key={c.name}>
                     <CardTooltip cardName={c.name}>{c.name}</CardTooltip>{' '}
                     <span className="text-gray-400">
-                      won {pct(c.win_rate_when_cast ?? 0)} when cast · cast in {c.games_cast} games
+                      won {c.win_rate_when_cast === null ? '—' : pct(c.win_rate_when_cast)} when cast · cast in {c.games_cast} games
                     </span>
                   </li>
                 ))}

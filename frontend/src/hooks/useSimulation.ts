@@ -12,6 +12,6 @@ export function useSimulationRun(id: string | null | undefined) {
     queryKey: ['simulation', id],
     queryFn: async () => (await simulationApi.get(id!)).data,
     enabled: !!id,
-    refetchInterval: (query) => (query.state.data && !isActive(query.state.data) ? false : 2000),
+    refetchInterval: (query) => (query.state.status === 'error' || (query.state.data && !isActive(query.state.data)) ? false : 2000),
   });
 }

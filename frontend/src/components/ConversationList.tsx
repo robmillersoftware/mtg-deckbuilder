@@ -15,6 +15,7 @@ export function ConversationList({ className }: ConversationListProps) {
 
   const { currentConversation, setCurrentConversation, conversationIds } = useConversationStore();
   const { setCurrentDeck } = useDeckStore();
+  const { setSimulationId } = useConversationStore();
 
   // reload when a new conversation starts, so it shows up
   useEffect(() => {
@@ -37,6 +38,7 @@ export function ConversationList({ className }: ConversationListProps) {
     try {
       const response = await conversationsApi.getById(conversation.id);
       setCurrentConversation(response.data);
+      setSimulationId(null);
       // Also load the deck if one exists in the conversation
       if (response.data.current_deck) {
         setCurrentDeck(response.data.current_deck);

@@ -26,11 +26,16 @@ export function SimulationPage() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      decksApi.list(100, 0).then((r) => setDecks(r.data.items ?? r.data ?? [])).catch(() => setDecks([]));
+      decksApi.list(100, 0).then((r) => setDecks(Array.isArray(r.data) ? r.data : (r.data?.items ?? []))).catch(() => setDecks([]));
       simulationApi.list().then((r) => setRuns(r.data)).catch(() => setRuns([]));
     }
-    simulationApi.archetypes('standard').then((r) => setArchetypes(r.data.slice(0, 12))).catch(() => setArchetypes([]));
   }, [isAuthenticated, run?.status]);
+
+  const format = decks.find((d) => d.id === deckId)?.format ?? 'standard';
+  useEffect(() => {
+    setChosen([]);
+    simulationApi.archetypes(format).then((r) => setArchetypes(r.data.slice(0, 12))).catch(() => setArchetypes([]));
+  }, [format]);
 
   const start = async () => {
     const deck = decks.find((d) => d.id === deckId);
@@ -81,7 +86,7 @@ export function SimulationPage() {
             <p className="text-xs text-gray-500">None chosen: the top 5 decks, weighted by meta share.</p>
             <div className="mt-1 flex flex-wrap gap-1">
               {archetypes.map((a) => (
-                <button key={a} onClick={() => toggle(a)}
+                <button key={a} onClick={() => toggle(a)} aria-pressed={chosen.includes(a)}
                         className={`text-xs px-2 py-1 rounded ${chosen.includes(a) ? 'bg-primary-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
                   {a}
                 </button>
@@ -122,6 +127,9 @@ export function SimulationPage() {
         {run && isActive(run) && <SimulationProgress run={run} onStop={stop} stopping={stopping} />}
         {run && run.status === 'failed' && (
           <div className="bg-gray-900 rounded-lg p-4 text-red-300 text-sm">{run.error ?? 'The test failed.'}</div>
+        )}
+        {run && run.status === 'stopped' && !run.report && (
+          <div className="bg-gray-900 rounded-lg p-4 text-gray-300 text-sm">Stopped before any games finished.</div>
         )}
         {run?.report && <SimulationReport report={run.report} kind={run.kind} />}
       </div>

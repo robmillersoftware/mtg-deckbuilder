@@ -45,7 +45,7 @@ export function SimulationProgress({ run, onStop, stopping }: Props) {
         )}
       </div>
       <div>
-        <div className="h-2 rounded bg-gray-800 overflow-hidden">
+        <div className="h-2 rounded bg-gray-800 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(100 * done)}>
           <div className="h-2 bg-primary-500 transition-all" style={{ width: `${Math.round(100 * done)}%` }} />
         </div>
         <div className="mt-1 text-xs text-gray-400">
