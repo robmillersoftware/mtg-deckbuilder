@@ -11,7 +11,12 @@ import { conversationsApi, simulationApi } from '@/services/api';
 import { isActive, useSimulationRun } from '@/hooks/useSimulation';
 import { SimulationProgress } from '@/components/SimulationProgress';
 import { SimulationReport } from '@/components/SimulationReport';
+import type { DeckEntry } from '@/types';
 import clsx from 'clsx';
+
+// Names and quantities only, order-free: what the playtest and the deck list must agree on.
+const deckKey = (entries: DeckEntry[]) =>
+  JSON.stringify(entries.map((e) => [e.card_name, e.quantity]).sort());
 
 export function HomePage() {
   const { currentDeck, updateCardQuantity, addCard, setCurrentDeck } = useDeckStore();
@@ -27,12 +32,15 @@ export function HomePage() {
     simulationId,
   } = useConversationStore();
   const { data: playtest } = useSimulationRun(simulationId);
+  // What the last kept swap brought in (highlighted) and took out (struck through).
   const [added, setAdded] = useState<string[]>([]);
+  const [removed, setRemoved] = useState<DeckEntry[]>([]);
   const lastDeck = useRef<string>('');
 
   // Each run starts with a clean slate.
   useEffect(() => {
     setAdded([]);
+    setRemoved([]);
     lastDeck.current = '';
   }, [simulationId]);
 
@@ -50,16 +58,33 @@ export function HomePage() {
   };
 
   // A kept swap changes the playtest's deck: show it in place and highlight what came in.
+  // Entries from the playtest carry only names and quantities, so keep the card objects
+  // already in the deck (the list groups by their type lines).
   useEffect(() => {
     const entries = playtest?.progress?.deck;
     if (!entries || !currentDeck) return;
-    const key = JSON.stringify(entries);
+    const key = deckKey(entries);
     if (key === lastDeck.current) return;
-    const before = new Set((currentDeck.main_deck || []).map((e) => e.card_name));
-    if (lastDeck.current) setAdded(entries.filter((e) => !before.has(e.card_name)).map((e) => e.card_name));
+    const firstSeen = !lastDeck.current;
     lastDeck.current = key;
-    setCurrentDeck({ ...currentDeck, main_deck: entries });
+    const main = currentDeck.main_deck || [];
+    if (deckKey(main) === key) return;
+    const byName = Object.fromEntries(main.map((e) => [e.card_name, e]));
+    const kept = new Set(entries.map((e) => e.card_name));
+    if (!firstSeen) {
+      setAdded(entries.filter((e) => !byName[e.card_name]).map((e) => e.card_name));
+      setRemoved(main.filter((e) => !kept.has(e.card_name)));
+    }
+    setCurrentDeck({ ...currentDeck, main_deck: entries.map((e) => ({ ...byName[e.card_name], ...e })) });
   }, [playtest?.progress?.deck, currentDeck, setCurrentDeck]);
+
+  // Any other change to the deck (an edit, another deck) ends the swap's markings.
+  useEffect(() => {
+    if (lastDeck.current && deckKey(currentDeck?.main_deck || []) !== lastDeck.current) {
+      setAdded([]);
+      setRemoved([]);
+    }
+  }, [currentDeck?.main_deck]);
 
   // Restore last conversation on mount (from URL param or persisted ID)
   useEffect(() => {
@@ -172,6 +197,7 @@ export function HomePage() {
               cardExplanations={currentDeck.card_explanations}
               flagged={currentDeck.fit_flagged}
               highlighted={added}
+              struck={removed}
               onQuantityChange={handleQuantityChange}
               onAddCard={handleAddCard}
               editable
