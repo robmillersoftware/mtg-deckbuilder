@@ -94,12 +94,13 @@ async def test_execute_marks_failures_in_plain_words(monkeypatch):
     monkeypatch.setattr(sim_runs, "run_test", AsyncMock(side_effect=forge.ForgeError("Forge exited with code 1")))
     await sim_runs.execute(run.id)
     assert run.status == "failed"
-    assert run.error == "Couldn't finish playtesting: Forge exited with code 1"
+    assert run.error == "Couldn't finish playtesting: the simulator failed while playing games."
+    assert "Forge exited" not in run.error
 
     monkeypatch.setattr(forge, "available", lambda: False)
     run.status = "queued"
     await sim_runs.execute(run.id)
-    assert run.status == "failed" and "isn't installed" in run.error
+    assert run.status == "failed" and run.error == "Couldn't finish playtesting: the simulator isn't set up yet."
 
 
 def test_deck_entry_conversions():

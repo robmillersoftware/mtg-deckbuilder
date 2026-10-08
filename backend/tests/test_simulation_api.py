@@ -49,7 +49,10 @@ async def test_create_queues_a_test(monkeypatch):
 async def test_create_rejects_bad_input(monkeypatch):
     monkeypatch.setattr(api, "sim_worker_running", lambda: True)
     for body in (api.SimulationCreate(), api.SimulationCreate(deck={"main_deck": []}),
-                 api.SimulationCreate(deck=DECK, format="cedh")):
+                 api.SimulationCreate(deck=DECK, format="cedh"),
+                 api.SimulationCreate(deck={"main_deck": [{"card_name": "", "quantity": 4}]}),
+                 api.SimulationCreate(deck={"main_deck": [{"card_name": "Forest", "quantity": 0}]}),
+                 api.SimulationCreate(deck={"main_deck": [{"card_name": "Forest"}]})):
         with pytest.raises(HTTPException) as e:
             await api.create_simulation(body, db_returning(), None)
         assert e.value.status_code == 400
@@ -75,3 +78,19 @@ async def test_stop_a_queued_run_stops_it_now(monkeypatch):
     run = saved_run(user_id=None, status="queued")
     resp = await api.stop_simulation(run.id, db_returning(run), None)
     assert run.stop_requested and resp.status == "stopped" and removed == [str(run.id)]
+
+
+async def test_stop_leaves_finished_runs_alone(monkeypatch):
+    monkeypatch.setattr(api, "queue_position", lambda run_id: None)
+    run = saved_run(user_id=None, status="completed")
+    resp = await api.stop_simulation(run.id, db_returning(run), None)
+    assert resp.status == "completed" and not run.stop_requested
+
+
+async def test_archetypes_use_the_latest_snapshot_and_dedupe():
+    rows = [SimpleNamespace(archetype="Dimir Aggro "), SimpleNamespace(archetype="dimir aggro"),
+            SimpleNamespace(archetype="UW Control")]
+    db = MagicMock(execute=AsyncMock(return_value=MagicMock(scalars=lambda: MagicMock(all=lambda: rows))))
+    assert await api.list_archetypes("standard", db) == ["Dimir Aggro", "UW Control"]
+    stmt = str(db.execute.call_args.args[0])
+    assert "max(" in stmt and "snapshot_date" in stmt

@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import get_current_user
@@ -69,6 +69,14 @@ async def _deck_for(body: SimulationCreate, db: AsyncSession, user: Optional[Use
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "That deck wasn't found.")
         return {"name": deck.name, "main_deck": deck.main_deck or [], "sideboard": deck.sideboard or []}
     if body.deck and body.deck.get("main_deck"):
+        for e in body.deck["main_deck"]:
+            try:
+                ok = isinstance(e["card_name"], str) and e["card_name"].strip() and int(e["quantity"]) >= 1
+            except (KeyError, TypeError, ValueError):
+                ok = False
+            if not ok:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                    "Each card needs a name and a quantity of at least 1.")
         return {"name": body.deck.get("name") or "Untitled deck", "main_deck": body.deck["main_deck"],
                 "sideboard": body.deck.get("sideboard") or []}
     raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose a deck with a main deck to test.")
@@ -105,9 +113,17 @@ async def list_simulations(db: AsyncSession = Depends(get_db),
 @router.get("/archetypes", response_model=List[str])
 async def list_archetypes(format: str = "standard", db: AsyncSession = Depends(get_db)):
     """Meta archetypes to choose as opponents, by share."""
-    snaps = (await db.execute(select(MetaSnapshot).where(MetaSnapshot.format == format)
+    latest = select(func.max(MetaSnapshot.snapshot_date)).where(MetaSnapshot.format == format).scalar_subquery()
+    snaps = (await db.execute(select(MetaSnapshot).where(MetaSnapshot.format == format,
+                                                         MetaSnapshot.snapshot_date == latest)
                               .order_by(MetaSnapshot.meta_percentage.desc()))).scalars().all()
-    return [s.archetype.strip() for s in snaps]
+    seen, names = set(), []
+    for s in snaps:
+        name = s.archetype.strip()
+        if name.lower() not in seen:
+            seen.add(name.lower())
+            names.append(name)
+    return names
 
 
 @router.get("/{simulation_id}", response_model=SimulationResponse)
@@ -126,6 +142,8 @@ async def stop_simulation(simulation_id: UUID, db: AsyncSession = Depends(get_db
     run = await db.get(SimulationRun, simulation_id)
     if not visible(run, current_user):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Simulation not found")
+    if run.status in ("completed", "failed", "stopped"):
+        return to_response(run)
     run.stop_requested = True
     if run.status == "queued":
         sim_queue.remove(str(run.id))

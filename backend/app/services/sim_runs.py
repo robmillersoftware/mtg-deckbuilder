@@ -170,7 +170,7 @@ async def execute(run_id: UUID) -> None:
         await db.commit()
         try:
             if not forge.available():
-                raise forge.ForgeError("the simulator isn't installed on the worker")
+                raise SimError("the simulator isn't set up yet.")
             if run.kind == "build":
                 from app.services.sim_build import run_build
                 await run_build(db, run)
@@ -181,6 +181,8 @@ async def execute(run_id: UUID) -> None:
             await db.rollback()
             run = await db.get(SimulationRun, run_id)
             run.status = "failed"
-            run.error = (f"Couldn't finish playtesting: {e}" if isinstance(e, (forge.ForgeError, SimError))
+            run.error = ("Couldn't finish playtesting: the simulator failed while playing games."
+                         if isinstance(e, forge.ForgeError)
+                         else f"Couldn't finish playtesting: {e}" if isinstance(e, SimError)
                          else "Something went wrong while playtesting.")
             await db.commit()
