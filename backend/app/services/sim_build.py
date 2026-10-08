@@ -51,7 +51,12 @@ async def start_build(db: AsyncSession, deck: Dict[str, Any], assembly: Optional
         created_at=datetime.utcnow(), updated_at=datetime.utcnow())
     db.add(run)
     await db.commit()
-    enqueue(run.id)
+    try:
+        enqueue(run.id)
+    except Exception:
+        run.status, run.error = "failed", "Couldn't start the playtest."
+        await db.commit()
+        raise
     return run, None
 
 
@@ -149,13 +154,21 @@ async def run_build(db: AsyncSession, run: SimulationRun) -> None:
     async with jev.session(None) as client:
         async def find_add(main: Dict[str, int], cut: str, losing: List[str]) -> Optional[str]:
             try:
-                return await replacement(db, client, main, cut, losing, colors, run.format, known, rows)
+                async with db.begin_nested():  # a failed pick rolls back only this savepoint
+                    added = await replacement(db, client, main, cut, losing, colors, run.format, known, rows)
+                    if added and added not in rows:  # so the synergy floor counts it
+                        rows.update({r.name: r for r in await requested_rows(db, [added], run.format)})
+                    return added
             except Exception as e:  # a failed pick skips this swap, not the run
                 logger.warning(f"[SIM] replacement for {cut} failed: {e}")
                 return None
         result = await playtest(seed_main, opponents, lands, evaluate, find_add, protect, progress, cfg,
                                 rng_seed=random.randrange(1 << 30))
 
+    await db.refresh(run, ["status"])
+    if run.status == "failed":  # the reaper gave up on this run while it played
+        return
+    run.error = None
     run.final_deck = {**run.deck, "main_deck": entries_of(result.main)}
     run.report = build_report(result.final, [r for rs in result.records.values() for r in rs], result.main, lands,
                               missing, baseline=result.baseline, changes=result.changes, stopped=result.stopped)

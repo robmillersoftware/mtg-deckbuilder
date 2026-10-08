@@ -70,3 +70,15 @@ async def test_generate_handler_starts_a_playtest(monkeypatch):
     start.return_value = (None, "Couldn't playtest this deck (the simulator isn't running), so this is the untested build.")
     resp = await s._handle_generate_full_deck({"colors": ["R"]}, SimpleNamespace(id=cid), None)
     assert resp.simulation_id is None and "simulator isn't running" in resp.response
+
+
+async def test_generate_handler_survives_a_playtest_that_cannot_start(monkeypatch):
+    from app.services import chat_service
+    cid = uuid4()
+    result = SimpleNamespace(deck=_deck(), conversation_id=cid, strategy_summary="s", fit_flagged=[],
+                             assembly={"reference": None, "relatives": [], "colors": ["R"], "synergy": None,
+                                       "requested": []})
+    s = _service(generate=AsyncMock(return_value=result))
+    monkeypatch.setattr(chat_service, "start_build", AsyncMock(side_effect=RuntimeError("redis down")))
+    resp = await s._handle_generate_full_deck({"colors": ["R"]}, SimpleNamespace(id=cid), None)
+    assert resp.simulation_id is None and resp.deck["name"] == "D" and "simulator isn't running" in resp.response

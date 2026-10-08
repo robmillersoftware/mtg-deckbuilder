@@ -146,6 +146,10 @@ async def run_test(db: AsyncSession, run: SimulationRun) -> None:
     except Stopped:
         stopped = "user"
     stats = [matchup_stats(o.archetype, o.share, played[o.archetype]) for o in opponents]
+    await db.refresh(run, ["status"])
+    if run.status == "failed":  # the reaper gave up on this run while it played
+        return
+    run.error = None
     run.report = build_report(stats, [r for rs in played.values() for r in rs], main, lands, missing,
                               stopped=stopped)
     run.status = "stopped" if stopped else "completed"

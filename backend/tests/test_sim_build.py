@@ -91,3 +91,108 @@ async def test_replacement_picks_from_a_slot_like_the_cut_card(monkeypatch):
     assert seen["pool"] == ["Shock"]  # Forge can't play the other
     assert seen["state"]["deck"]["losing_to"] == ["Dimir Aggro"] and "Dud" in seen["state"]["deck"]["cut"]
     assert await sb.replacement(None, None, {"Dud": 3}, "Dud", [], ["R"], "standard", set(), {"Dud": cut}) is None
+
+
+async def test_start_build_marks_the_run_failed_when_enqueue_breaks(monkeypatch):
+    monkeypatch.setattr(sb, "sim_worker_running", lambda: True)
+
+    def boom(run_id):
+        raise ConnectionError("redis down")
+    monkeypatch.setattr(sb, "enqueue", boom)
+    db = MagicMock(add=MagicMock(), commit=AsyncMock())
+    with pytest.raises(ConnectionError):
+        await sb.start_build(db, DECK, ASSEMBLY, None, None, "standard")
+    run = db.add.call_args.args[0]
+    assert run.status == "failed" and run.error == "Couldn't start the playtest."
+    assert db.commit.await_count == 2
+
+
+def test_protect_counts_cards_added_by_swaps():
+    rows = {"Relic": SimpleNamespace(type_line="Artifact"), "Gadget": SimpleNamespace(type_line="Artifact"),
+            "Bolt": SimpleNamespace(type_line="Instant")}
+    protect = sb.make_protect(set(), {"type_contains": "Artifact", "min": 8}, rows)
+    main = {"Relic": 4, "Gadget": 4, "Bolt": 4, "Shiny": 4}
+    assert protect(main, "Relic")  # 4 left, under 8
+    rows["Shiny"] = SimpleNamespace(type_line="Artifact Creature")  # a swap added it
+    assert not protect(main, "Relic")  # 8 left
+    assert protect({**main, "Gadget": 3}, "Relic")  # 7 left
+
+
+def _records(n):
+    from app.services import forge
+    return [forge.GameRecord(winner=forge.TESTED if i % 2 else forge.OPPONENT, turns=6,
+                             own_turns={forge.TESTED: 6, forge.OPPONENT: 6},
+                             mulligans={forge.TESTED: 0, forge.OPPONENT: 0},
+                             casts={forge.TESTED: [(2, "Bolt")], forge.OPPONENT: []},
+                             lands={forge.TESTED: [(1, "Forest")], forge.OPPONENT: []}) for i in range(n)]
+
+
+def _build_run():
+    from datetime import datetime
+    from app.models.simulation import SimulationRun
+    deck = {"name": "Brew", "main_deck": [{"card_name": "Forest", "quantity": 24}, {"card_name": "Bolt", "quantity": 36}],
+            "sideboard": []}
+    return SimulationRun(id=uuid4(), kind="build", format="standard", deck=deck, status="running", games_per_matchup=8,
+                         stop_requested=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+                         options={"requested": ["Bolt"], "archetypes": ["A"], "synergy": None, "colors": ["R"]})
+
+
+def _wire(monkeypatch, opponents):
+    import contextlib
+    from app.services.deck_plan import RECENT  # noqa: F401
+    from app.services.gauntlet import Opponent
+    ops = [Opponent("A", 60.0, {"Forest": 24, "Shock": 36}), Opponent("B", 40.0, {"Forest": 24, "Shock": 36})]
+    monkeypatch.setattr(sb, "gauntlet", AsyncMock(return_value=ops if opponents else []))
+    monkeypatch.setattr(sb.forge, "card_names", lambda: {"forest", "bolt"})
+
+    async def play(main, matchups, games, seed, on_progress=None):
+        out = {}
+        for m in matchups:
+            out[m.key] = _records(games)
+            if on_progress:
+                await on_progress(m.key, out[m.key])
+        return out
+    monkeypatch.setattr(sb.forge, "play", play)
+    rows = [SimpleNamespace(name="Forest", type_line="Basic Land", roles=[], cmc=0),
+            SimpleNamespace(name="Bolt", type_line="Instant", roles=[], cmc=1)]
+    monkeypatch.setattr(sb, "requested_rows", AsyncMock(return_value=rows))
+    monkeypatch.setattr(sb, "staples", AsyncMock(return_value=set()))
+    monkeypatch.setattr(sb, "replacement", AsyncMock(return_value=None))
+
+    @contextlib.asynccontextmanager
+    async def session(_):
+        yield None
+    monkeypatch.setattr(sb.jev, "session", session)
+
+    @contextlib.asynccontextmanager
+    async def nested():
+        yield
+    return MagicMock(commit=AsyncMock(), refresh=AsyncMock(), begin_nested=nested)
+
+
+async def test_run_build_wires_the_search_to_the_run(monkeypatch):
+    db = _wire(monkeypatch, True)
+    run = _build_run()
+    await sb.run_build(db, run)
+    assert run.status == "completed" and run.error is None
+    assert sum(e["quantity"] for e in run.final_deck["main_deck"]) == 60
+    assert run.report["overall"] and run.report["baseline"]
+    assert run.progress["stage"] == "Done"
+
+
+async def test_run_build_without_opponents_raises(monkeypatch):
+    from app.services.sim_runs import SimError
+    db = _wire(monkeypatch, False)
+    with pytest.raises(SimError):
+        await sb.run_build(db, _build_run())
+
+
+async def test_run_build_leaves_a_reaped_run_failed(monkeypatch):
+    db = _wire(monkeypatch, True)
+    run = _build_run()
+
+    async def reaped(r, attrs):
+        r.status = "failed"
+    db.refresh = reaped
+    await sb.run_build(db, run)
+    assert run.status == "failed" and run.final_deck is None

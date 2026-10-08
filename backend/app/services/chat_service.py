@@ -24,7 +24,7 @@ from app.services import llm
 from app.services import chat_routing
 from app.services.deck_plan import RECENT
 from app.services.gauntlet import GAUNTLET_SIZE
-from app.services.sim_build import BUILD_MINUTES, start_build
+from app.services.sim_build import BUILD_MINUTES, NOT_RUNNING_NOTE, start_build
 
 logger = logging.getLogger(__name__)
 
@@ -1492,10 +1492,14 @@ RULES:
         def entries(es):
             return [e if isinstance(e, dict) else e.model_dump() for e in es or []]
 
-        sim, note = await start_build(
-            self.db, {"name": result.deck.name, "main_deck": entries(result.deck.main_deck),
-                      "sideboard": entries(result.deck.sideboard)},
-            getattr(result, "assembly", None), result.conversation_id, user_id, format)
+        try:
+            sim, note = await start_build(
+                self.db, {"name": result.deck.name, "main_deck": entries(result.deck.main_deck),
+                          "sideboard": entries(result.deck.sideboard)},
+                getattr(result, "assembly", None), result.conversation_id, user_id, format)
+        except Exception as e:  # the deck is built; a playtest that can't start must not lose it
+            logger.warning(f"[SIM] could not start the playtest: {e}", exc_info=True)
+            sim, note = None, NOT_RUNNING_NOTE
         if sim:
             response += (f"\n\nPlaytesting against the top {GAUNTLET_SIZE} decks, about {BUILD_MINUTES} minutes. "
                          "The list updates as it improves.")
