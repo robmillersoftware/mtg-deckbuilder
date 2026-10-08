@@ -29,6 +29,7 @@ class TestWinRates:
 
     def test_labels(self):
         assert ss.label(0.56) == "favored" and ss.label(0.55) == "even" and ss.label(0.44) == "unfavored"
+        assert ss.label(0.45) == "even"
 
     def test_overall_weights_by_meta_share(self):
         a = ss.matchup_stats("A", 30.0, [game(TESTED)] * 8 + [game(OPPONENT)] * 2)
@@ -40,6 +41,10 @@ class TestWinRates:
     def test_overall_with_no_games(self):
         o = ss.overall([ss.matchup_stats("A", 10.0, [])])
         assert (o.win_rate, o.games) == (0.0, 0)
+
+    def test_overall_sweep_keeps_an_interval(self):
+        o = ss.overall([ss.matchup_stats("A", 10.0, [game(TESTED)] * 20)])
+        assert o.win_rate == 1.0 and o.se > 0 and o.lo < 0.95 and o.hi == 1.0
 
 
 class TestCardStats:

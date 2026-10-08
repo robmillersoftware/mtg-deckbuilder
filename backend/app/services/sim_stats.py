@@ -87,7 +87,13 @@ def overall(matchups: Sequence[MatchupStats]) -> Overall:
     if not played or total <= 0:
         return Overall(0.0, 0.0, 1.0, 0.5, 0)
     rate = sum(m.share / total * m.win_rate for m in played)
-    se = math.sqrt(sum((m.share / total) ** 2 * m.win_rate * (1 - m.win_rate) / m.games for m in played))
+    # Use Agresti-Coull adjusted rates for variance to keep the interval honest at extremes (0% and 100%)
+    adj_var = 0.0
+    for m in played:
+        n_adj = m.games + Z * Z
+        p_adj = (m.wins + 0.5 * m.draws + Z * Z / 2) / n_adj
+        adj_var += (m.share / total) ** 2 * p_adj * (1 - p_adj) / n_adj
+    se = math.sqrt(adj_var)
     return Overall(rate, max(0.0, rate - Z * se), min(1.0, rate + Z * se), se, sum(m.games for m in played))
 
 
