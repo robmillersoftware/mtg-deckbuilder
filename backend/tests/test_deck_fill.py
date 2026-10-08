@@ -589,6 +589,7 @@ class TestAssemble:
         state = jev.calls[-1][0]["deck"]
         assert state["plan"] == "Boros Aggro, a current Standard archetype" and state["colors"] == ["W", "R"]
         df.plan_from_decklists.assert_awaited_once_with(None, ["Boros Aggro"], "standard")
+        assert deck["synergy"] is None and deck["requested"] == []
 
     async def test_brew_gets_a_format_sideboard_and_basic_land_split(self, monkeypatch):
         _, side_pool = wire(monkeypatch)
@@ -664,6 +665,8 @@ class TestAssemble:
         assert deck["colors"] == ["W", "R"] and total(deck["main_deck"]) == 60
         assert ("type", 12) in [(r, n) for r, n, _ in pool.calls]  # the synergy slot is filled like any other
         assert any("Engine" in str(state.get("deck", {}).get("build_around")) for state, _, _ in jev.calls)
+        assert deck["synergy"] == {"type_contains": "Artifact", "min": 8}
+        assert deck["requested"] == ["Engine"]
 
     async def test_brew_with_relatives_is_planned_and_filled_from_them(self, monkeypatch):
         candidates = [("Boros Aggro", 5, [("Bear 1", 4.0)]), ("Rakdos Aggro", 4, [("Bolt 0", 4.0)])]

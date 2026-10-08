@@ -727,4 +727,7 @@ async def assemble(db: AsyncSession, request_text: str, colors: Optional[List[st
     logger.info(f"[ASSEMBLY] {name}: reference={reference} relatives={relatives} colors={deck_colors} "
                 f"main={main.total()} sideboard={side.total()}")
     return {"name": name, "strategy_summary": summary, "main_deck": main.entries(),
-            "sideboard": side.entries(), "reference": reference, "relatives": relatives, "colors": deck_colors}
+            "sideboard": side.entries(), "reference": reference, "relatives": relatives, "colors": deck_colors,
+            "synergy": ({"type_contains": synergy.type_contains, "min": SYNERGY_COPIES[0]}
+                        if synergy and synergy.type_contains else None),
+            "requested": list(specific_cards or [])}

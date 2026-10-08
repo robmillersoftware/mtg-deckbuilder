@@ -188,6 +188,7 @@ class DeckGenerateResponse(BaseModel):
     slot_recommendations: List[SlotRecommendation]
     sideboard_guide: List[SideboardEntry]
     fit_flagged: List[str] = Field(default_factory=list)
+    assembly: Optional[Dict[str, Any]] = None  # Jev assembly details, for playtesting; None on the LLM path
 
 
 class DeckIterateRequest(BaseModel):

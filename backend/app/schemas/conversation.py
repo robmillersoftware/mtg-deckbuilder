@@ -69,6 +69,7 @@ class ChatResponse(BaseModel):
     deck: Optional[Dict[str, Any]] = None
     suggestions: Optional[List[str]] = None
     card_suggestions: Optional[List[Dict[str, Any]]] = None
+    simulation_id: Optional[UUID] = None  # a build's playtest; poll /api/simulations/{id}
 
 
 class CardExplanationRequest(BaseModel):

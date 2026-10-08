@@ -23,6 +23,8 @@ from app.core.config import settings
 from app.services import llm
 from app.services import chat_routing
 from app.services.deck_plan import RECENT
+from app.services.gauntlet import GAUNTLET_SIZE
+from app.services.sim_build import BUILD_MINUTES, start_build
 
 logger = logging.getLogger(__name__)
 
@@ -1487,9 +1489,23 @@ RULES:
         response += f"Here's your complete **{result.deck.archetype or format_display}** deck!\n\n"
         response += result.strategy_summary or ""
 
+        def entries(es):
+            return [e if isinstance(e, dict) else e.model_dump() for e in es or []]
+
+        sim, note = await start_build(
+            self.db, {"name": result.deck.name, "main_deck": entries(result.deck.main_deck),
+                      "sideboard": entries(result.deck.sideboard)},
+            getattr(result, "assembly", None), result.conversation_id, user_id, format)
+        if sim:
+            response += (f"\n\nPlaytesting against the top {GAUNTLET_SIZE} decks, about {BUILD_MINUTES} minutes. "
+                         "The list updates as it improves.")
+        elif note:
+            response += f"\n\n{note}"
+
         return ChatResponse(
             response=response,
             conversation_id=result.conversation_id,
+            simulation_id=sim.id if sim else None,
             deck={
                 "name": result.deck.name,
                 "format": result.deck.format,
