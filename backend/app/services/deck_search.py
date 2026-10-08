@@ -81,7 +81,7 @@ def land_swap(main: Dict[str, int], records: Sequence[GameRecord], cards: Sequen
         if weakest:
             return Swap(weakest.name, basic, 1, f"Lost {pct(mana['screw_rate'])} of games short on lands: "
                                                 f"trying one more {basic} instead of a {weakest.name}")
-    if mana["flood_rate"] > cfg.problem_rate and lands > 0:
+    if mana["flood_rate"] > cfg.problem_rate and lands > 0 and not protect(main, basic):
         best = max((c for c in judged if main[c.name] < MAX_COPIES), key=lambda c: c.win_rate_when_cast,
                    default=None)
         if best:
@@ -124,6 +124,9 @@ async def _propose(main: Dict[str, int], records: Sequence[GameRecord], stats: S
 def _change(swap: Swap, before: Sequence[MatchupStats], after: Sequence[MatchupStats],
             before_rate: float, after_rate: float) -> Dict:
     pairs = [(b, a) for b in before for a in after if a.opponent == b.opponent]
+    if not pairs:
+        return {"cut": swap.cut, "add": swap.add, "copies": swap.copies, "before": before_rate, "after": after_rate,
+                "best_matchup": None}
     b, a = max(pairs, key=lambda p: p[1].win_rate - p[0].win_rate)
     return {"cut": swap.cut, "add": swap.add, "copies": swap.copies, "before": before_rate, "after": after_rate,
             "best_matchup": {"opponent": a.opponent, "before": b.win_rate, "after": a.win_rate}}
@@ -144,6 +147,7 @@ async def playtest(seed_main: Dict[str, int], opponents: Sequence[Opponent], lan
     except Stopped:
         return SearchResult(dict(seed_main), [], [], {}, [], "user")
     current, current_main = stats_of(current_records), dict(seed_main)
+    first_stats = current  # save baseline for honest reporting if search ends early
     first = overall(current)
     rate, se = first.win_rate, first.se
     await progress.set_matchups(current)
@@ -191,8 +195,10 @@ async def playtest(seed_main: Dict[str, int], opponents: Sequence[Opponent], lan
         stopped = "user"
         await progress.event("Stopped: keeping the best deck so far")
 
-    if not changes or stopped == "user":
+    if not changes:
         return SearchResult(current_main, current, current, current_records, changes, stopped)
+    if stopped == "user":
+        return SearchResult(current_main, first_stats, current, current_records, changes, stopped)
 
     await progress.stage("Confirming: replaying the first draft and the final deck on new games")
     try:
@@ -200,7 +206,7 @@ async def playtest(seed_main: Dict[str, int], opponents: Sequence[Opponent], lan
         seed_records = await evaluate(seed_main, cfg.confirm_games, confirm_seed)
         final_records = await evaluate(current_main, cfg.confirm_games, confirm_seed)
     except Stopped:
-        return SearchResult(current_main, current, current, current_records, changes, "user")
+        return SearchResult(current_main, first_stats, current, current_records, changes, "user")
     baseline, final = stats_of(seed_records), stats_of(final_records)
     if overall(final).win_rate <= overall(baseline).win_rate:
         await progress.event("The changes didn't hold up over more games, so the first draft stands")

@@ -131,3 +131,71 @@ def test_land_swap_for_screw():
     swap = ds.land_swap(main, records, cards, lambda m, c: False, ds.SearchConfig())
     assert (swap.cut, swap.add, swap.copies) == ("Weak", "Forest", 1)
     assert "short on lands" in swap.reason
+
+
+async def test_stop_after_a_kept_change():
+    calls, progress = [], FakeProgress(stop_after=1)
+    result = await ds.playtest(SEED, OPPONENTS, LANDS, fake_evaluate(calls), find_add,
+                               lambda main, cut: False, progress, rng_seed=5)
+    assert result.stopped == "user"
+    assert len(result.changes) == 1 and result.changes[0]["cut"] == "Dud"
+    assert result.main == {"Forest": 24, "Meh": 4, "Filler": 28, "Good": 4}
+    # baseline is first-draft stats, final is after the swap
+    assert result.baseline[0].win_rate != result.final[0].win_rate
+    # no 50-game confirmation calls
+    confirm = [(m, games) for m, games, _ in calls if games == 50]
+    assert len(confirm) == 0
+
+
+async def test_no_candidates():
+    async def no_find_add(main, cut, losing_to):
+        return None
+
+    calls, progress = [], FakeProgress()
+    result = await ds.playtest(SEED, OPPONENTS, LANDS, fake_evaluate(calls), no_find_add,
+                               lambda main, cut: False, progress)
+    assert result.stopped == "no_candidates"
+    assert result.main == SEED
+    assert result.changes == []
+
+
+async def test_max_rounds():
+    calls, progress = [], FakeProgress()
+    result = await ds.playtest(SEED, OPPONENTS, LANDS, fake_evaluate(calls), find_add,
+                               lambda main, cut: False, progress,
+                               cfg=ds.SearchConfig(max_rounds=1), rng_seed=5)
+    assert result.stopped == "max_rounds"
+    assert len(result.changes) == 1  # round 1 keeps the swap
+    # confirmation still runs
+    confirm = [(m, games) for m, games, _ in calls if games == 50]
+    assert len(confirm) == 2  # seed and final
+
+
+async def test_flood_land_swap():
+    flooded = GameRecord(winner=OPPONENT, turns=7, own_turns={TESTED: 7, OPPONENT: 7},
+                         mulligans={TESTED: 0, OPPONENT: 0}, casts={TESTED: [(2, "Best")], OPPONENT: []},
+                         lands={TESTED: [(i, "Forest") for i in range(1, 9)], OPPONENT: []})
+    records = [flooded] * 10
+    from app.services.sim_stats import card_stats
+    main = {"Forest": 28, "Best": 3, "Filler": 29}
+    cards = card_stats(records, main, {"Forest"})
+    swap = ds.land_swap(main, records, cards, lambda m, c: False, ds.SearchConfig())
+    assert swap is not None
+    assert swap.cut == "Forest" and swap.copies == 1
+    assert swap.add == "Best"
+    assert "drawing mostly lands" in swap.reason
+
+
+async def test_four_copy_cap():
+    calls, progress = [], FakeProgress()
+    # modify seed so Good starts at 3 copies
+    seed_with_good = {"Forest": 24, "Dud": 4, "Meh": 4, "Filler": 25, "Good": 3}
+
+    result = await ds.playtest(seed_with_good, OPPONENTS, LANDS, fake_evaluate(calls), find_add,
+                               lambda main, cut: False, progress, rng_seed=5)
+    # at most 1 copy of Dud can be swapped for Good (since Good is at 3)
+    if result.changes:
+        assert result.changes[0]["copies"] == 1
+    # verify all evaluated decks total 60 cards
+    for main, games, _ in calls:
+        assert sum(main.values()) == 60
