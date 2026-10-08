@@ -203,6 +203,7 @@ export interface ChatResponse {
   deck?: Partial<Deck>;
   suggestions?: string[];
   card_suggestions?: CardSuggestionGroup[];
+  simulation_id?: string;
 }
 
 export interface CardExplanationResponse {
@@ -323,109 +324,91 @@ export interface RegisterRequest {
   display_name?: string;
 }
 
-// Simulation types
-export interface TurnAction {
-  turn_number: number;
-  active_player: string; // "you" or "opponent" (or "opponent_1", etc. for multiplayer)
-  life_totals: Record<string, number>;
-  actions: string[];
-  board_state?: Record<string, any>;
+// Forge simulation
+export interface SimMatchup {
+  opponent: string;
+  share: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  games?: number;
+  win_rate?: number;
+  lo?: number;
+  hi?: number;
+  label?: 'favored' | 'even' | 'unfavored';
+  avg_turns?: number;
 }
 
-export interface GameResult {
-  game_number: number;
-  winner: string; // 'you', 'opponent', or 'opponent_1', 'opponent_2', etc. for multiplayer
-  turns: number;
-  your_life: number;
-  opponent_life: number;
-  // Multiplayer support
-  life_totals?: Record<string, number>; // {"you": 40, "opponent_1": 35, ...}
-  elimination_order?: string[]; // Order players were eliminated
-  win_condition: string;
-  key_moments: string[];
-  your_key_cards: string[];
-  opponent_key_cards: string[];
-  opponent_key_cards_by_player?: Record<string, string[]>; // Per-opponent in multiplayer
-  sideboard_in?: string[];
-  sideboard_out?: string[];
-  transcript?: TurnAction[]; // Full turn-by-turn game data
+export interface SimEvent {
+  at: string;
+  text: string;
+  kind: 'info' | 'tried' | 'kept';
 }
 
-export interface KeyCardAnalysis {
-  card: string;
-  importance: number;
-  reason: string;
+export interface SimProgress {
+  stage: string;
+  games_done: number;
+  games_planned: number;
+  started_at: string;
+  matchups: SimMatchup[];
+  events: SimEvent[];
+  deck?: DeckEntry[] | null;
 }
 
-export interface DeckRecommendation {
-  category: 'add_cards' | 'remove_cards' | 'adjust_quantities' | 'sideboard' | 'strategy';
-  priority: 'high' | 'medium' | 'low';
-  suggestion: string;
-  cards_mentioned: string[];
-  reasoning: string;
-}
-
-export interface MatchupAnalysisResult {
-  your_deck_name: string;
-  opponent_deck_name: string;
-  games_played: number;
-  your_wins: number;
-  opponent_wins: number;
+export interface SimRate {
   win_rate: number;
-  average_game_length: number;
-  matchup_assessment: 'favored' | 'even' | 'unfavored';
-  key_cards_for_you: KeyCardAnalysis[];
-  key_cards_against_you: KeyCardAnalysis[];
-  sideboard_guide: { in: string[]; out: string[] };
-  strategic_advice: string[];
-  mulligan_advice: string;
-  games: GameResult[];
+  lo: number;
+  hi: number;
+  games: number;
+}
+
+export interface SimCardStat {
+  name: string;
+  copies: number;
+  games_cast: number;
+  cast_share: number;
+  win_rate_when_cast: number | null;
+  median_turn: number | null;
+}
+
+export interface SimChange {
+  cut: string;
+  add: string;
+  copies: number;
+  before: number;
+  after: number;
+  best_matchup: { opponent: string; before: number; after: number } | null;
+}
+
+export interface SimReport {
+  overall: SimRate;
+  baseline: SimRate | null;
+  matchups: SimMatchup[];
+  changes: SimChange[];
+  cards: { strongest: SimCardStat[]; weakest: SimCardStat[]; too_few: string[] };
+  mana: { mulligan_rate: number; screw_rate: number; flood_rate: number; advice: string[] };
+  games: { win: string[] | null; loss: string[] | null };
+  not_simulated: { cards: string[]; sideboard: boolean };
+  limits: string;
+  stopped: string | null;
 }
 
 export interface SimulationRun {
   id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  your_deck_id?: string;
-  your_deck_name: string;
-  opponent_deck_name: string;
-  opponent_archetype?: string;
-  // Multiplayer support
-  num_players?: number;
-  opponent_deck_names?: string[];
-  opponent_archetypes?: string[];
+  kind: 'test' | 'build';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
   format: string;
-  num_games: number;
-  include_sideboard_games: boolean;
-  games_completed: number;
-  current_game_turn?: number;
-  current_game_turns?: TurnAction[];  // Live turns from in-progress game
-
-  // Results (when completed)
-  your_wins?: number;
-  opponent_wins?: number;
-  // Multiplayer results
-  first_place_count?: number;
-  your_placement_avg?: number;
-  win_rate?: number;
-  average_game_length?: number;
-  matchup_assessment?: 'favored' | 'even' | 'unfavored';
-  games?: GameResult[];
-  key_cards_for_you?: KeyCardAnalysis[];
-  key_cards_against_you?: KeyCardAnalysis[];
-  sideboard_guide?: { in: string[]; out: string[] };
-  strategic_advice?: string[];
-  mulligan_advice?: string;
-  deck_recommendations?: DeckRecommendation[];
-
-  error_message?: string;
-  created_at?: string;
-  started_at?: string;
-  completed_at?: string;
-}
-
-export interface SimulationRunListResponse {
-  items: SimulationRun[];
-  total: number;
+  deck: { name?: string; main_deck: DeckEntry[]; sideboard?: DeckEntry[] };
+  opponents?: string[] | null;
+  games_per_matchup: number;
+  progress?: SimProgress | null;
+  report?: SimReport | null;
+  final_deck?: { name?: string; main_deck: DeckEntry[]; sideboard?: DeckEntry[] } | null;
+  error?: string | null;
+  queue_position?: number | null;
+  stop_requested?: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 // API response types

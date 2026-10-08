@@ -19,6 +19,7 @@ export function useChat(mode?: ConversationMode) {
     setCardSuggestions,
     conversationMode,
     setConversationMode,
+    setSimulationId,
   } = useConversationStore();
 
   const { setCurrentDeck } = useDeckStore();
@@ -31,6 +32,7 @@ export function useChat(mode?: ConversationMode) {
       // Different mode — start fresh
       setCurrentConversation(null);
       setCurrentDeck(null);
+      setSimulationId(null);
       setSuggestions([]);
       setCardSuggestions(null);
       const defaultFormat = usePreferencesStore.getState().defaultFormat;
@@ -96,6 +98,7 @@ export function useChat(mode?: ConversationMode) {
       // Update deck if included in response (full deck generation / modification)
       if (data.deck) {
         setCurrentDeck(data.deck);
+        setSimulationId(data.simulation_id ?? null);
       }
 
       // Update card suggestions if included (persisted in conversation store)
@@ -121,7 +124,7 @@ export function useChat(mode?: ConversationMode) {
     } finally {
       setIsLoading(false);
     }
-  }, [currentConversation, addMessage, setCurrentConversation, setCurrentDeck, setCardSuggestions, isLoading, mode]);
+  }, [currentConversation, addMessage, setCurrentConversation, setCurrentDeck, setCardSuggestions, isLoading, mode, setSimulationId]);
 
   const explainCard = useCallback(async (cardName: string) => {
     if (isLoading) return;
@@ -162,12 +165,13 @@ export function useChat(mode?: ConversationMode) {
   const startNewConversation = useCallback(() => {
     setCurrentConversation(null);
     setCurrentDeck(null);
+    setSimulationId(null);
     setSuggestions([]);
     setCardSuggestions(null);
     // Reset format to user's default preference
     const defaultFormat = usePreferencesStore.getState().defaultFormat;
     useConversationStore.getState().setFormat(defaultFormat);
-  }, [setCurrentConversation, setCurrentDeck, setCardSuggestions]);
+  }, [setCurrentConversation, setCurrentDeck, setCardSuggestions, setSimulationId]);
 
   const setFormat = useCallback((format: string) => {
     useConversationStore.getState().setFormat(format);

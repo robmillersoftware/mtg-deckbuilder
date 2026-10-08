@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/store/auth';
-import type { IdentityOverrides } from '@/types';
+import type { DeckEntry, IdentityOverrides, SimulationRun } from '@/types';
 
 const API_BASE_URL = '/api';
 
@@ -297,39 +297,21 @@ export const guidedBuildApi = {
     }),
 };
 
-// Simulation API
+// Forge simulations
 export const simulationApi = {
-  // Legacy synchronous endpoints
-  runSimulation: (request: {
-    your_deck: { deck_id?: string; main_deck?: { card_name: string; quantity: number }[]; sideboard?: { card_name: string; quantity: number }[]; name?: string };
-    opponent_deck: { deck_id?: string; main_deck?: { card_name: string; quantity: number }[]; sideboard?: { card_name: string; quantity: number }[]; name?: string };
-    num_games?: number;
-    include_sideboard_games?: boolean;
-    format?: string;
-  }) => api.post('/simulation', request),
+  create: (body: {
+    deck_id?: string;
+    deck?: { name?: string; main_deck: DeckEntry[]; sideboard?: DeckEntry[] };
+    format: string;
+    opponents?: string[];
+    games?: number;
+  }) => api.post<SimulationRun>('/simulations', body),
 
-  simulateVsArchetype: (request: {
-    deck_id: string;
-    opponent_archetype: string;
-    num_games?: number;
-  }) => api.post('/simulation/vs-archetype', request),
+  get: (id: string) => api.get<SimulationRun>(`/simulations/${id}`),
 
-  getAvailableArchetypes: (format: string = 'standard') =>
-    api.get<string[]>('/simulation/archetypes', { params: { format } }),
+  list: () => api.get<SimulationRun[]>('/simulations'),
 
-  // Persistent simulation runs (background execution)
-  listRuns: (params?: { limit?: number; offset?: number; status?: string }) =>
-    api.get('/simulation/runs', { params }),
+  stop: (id: string) => api.post<SimulationRun>(`/simulations/${id}/stop`),
 
-  createRun: (request: {
-    deck_id: string;
-    opponent_archetype: string;
-    num_games?: number;
-  }) => api.post('/simulation/runs', request),
-
-  getRun: (id: string) => api.get(`/simulation/runs/${id}`),
-
-  deleteRun: (id: string) => api.delete(`/simulation/runs/${id}`),
-
-  retryRun: (id: string) => api.post(`/simulation/runs/${id}/retry`),
+  archetypes: (format: string) => api.get<string[]>('/simulations/archetypes', { params: { format } }),
 };

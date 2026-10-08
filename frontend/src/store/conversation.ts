@@ -13,6 +13,7 @@ interface ConversationState {
   lastConversationId: string | null;
   conversationIds: string[]; // conversations this browser started, for signed-out history
   conversationMode: ConversationMode;
+  simulationId: string | null;
 
   setCurrentConversation: (conversation: Conversation | null) => void;
   setConversations: (conversations: Conversation[]) => void;
@@ -21,6 +22,7 @@ interface ConversationState {
   setFormat: (format: string) => void;
   setCardSuggestions: (suggestions: CardSuggestionGroup[] | null) => void;
   setConversationMode: (mode: ConversationMode) => void;
+  setSimulationId: (id: string | null) => void;
   reset: () => void;
 }
 
@@ -35,6 +37,7 @@ export const useConversationStore = create<ConversationState>()(
       lastConversationId: null,
       conversationIds: [],
       conversationMode: null,
+      simulationId: null,
 
       setCurrentConversation: (conversation) => {
         // When loading a conversation, also set its format from current_deck if available
@@ -82,6 +85,8 @@ export const useConversationStore = create<ConversationState>()(
 
       setConversationMode: (conversationMode) => set({ conversationMode }),
 
+      setSimulationId: (simulationId) => set({ simulationId }),
+
       reset: () =>
         set({
           currentConversation: null,
@@ -91,6 +96,7 @@ export const useConversationStore = create<ConversationState>()(
           cardSuggestions: null,
           lastConversationId: null,
           conversationMode: null,
+          simulationId: null,
         }),
     }),
     {
@@ -102,6 +108,7 @@ export const useConversationStore = create<ConversationState>()(
         lastConversationId: state.lastConversationId,
         conversationIds: state.conversationIds,
         conversationMode: state.conversationMode,
+        simulationId: state.simulationId,
       }),
     }
   )

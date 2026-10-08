@@ -7,11 +7,14 @@ import { ConversationList } from '@/components/ConversationList';
 import { useDeckStore } from '@/store/deck';
 import { useConversationStore } from '@/store/conversation';
 import { useAuth } from '@/hooks/useAuth';
-import { conversationsApi } from '@/services/api';
+import { conversationsApi, simulationApi } from '@/services/api';
+import { isActive, useSimulationRun } from '@/hooks/useSimulation';
+import { SimulationProgress } from '@/components/SimulationProgress';
+import { SimulationReport } from '@/components/SimulationReport';
 import clsx from 'clsx';
 
 export function HomePage() {
-  const { currentDeck, updateCardQuantity, addCard } = useDeckStore();
+  const { currentDeck, updateCardQuantity, addCard, setCurrentDeck } = useDeckStore();
   const { isAuthenticated } = useAuth();
   const [mobileTab, setMobileTab] = useState<'chat' | 'deck'>('chat');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -21,7 +24,23 @@ export function HomePage() {
     currentConversation,
     lastConversationId,
     setCurrentConversation,
+    simulationId,
   } = useConversationStore();
+  const { data: playtest } = useSimulationRun(simulationId);
+  const [added, setAdded] = useState<string[]>([]);
+  const lastDeck = useRef<string>('');
+
+  // A kept swap changes the playtest's deck: show it in place and highlight what came in.
+  useEffect(() => {
+    const entries = playtest?.progress?.deck;
+    if (!entries || !currentDeck) return;
+    const key = JSON.stringify(entries);
+    if (key === lastDeck.current) return;
+    const before = new Set((currentDeck.main_deck || []).map((e) => e.card_name));
+    if (lastDeck.current) setAdded(entries.filter((e) => !before.has(e.card_name)).map((e) => e.card_name));
+    lastDeck.current = key;
+    setCurrentDeck({ ...currentDeck, main_deck: entries });
+  }, [playtest?.progress?.deck]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Restore last conversation on mount (from URL param or persisted ID)
   useEffect(() => {
@@ -132,6 +151,7 @@ export function HomePage() {
               title={currentDeck.name || 'Current Deck'}
               cardExplanations={currentDeck.card_explanations}
               flagged={currentDeck.fit_flagged}
+              highlighted={added}
               onQuantityChange={handleQuantityChange}
               onAddCard={handleAddCard}
               editable
@@ -139,6 +159,20 @@ export function HomePage() {
             />
             {isAuthenticated && (
               <DeckActions deck={currentDeck} />
+            )}
+            {playtest && isActive(playtest) && (
+              <SimulationProgress run={playtest} onStop={() => simulationApi.stop(playtest.id)} />
+            )}
+            {playtest?.status === 'failed' && (
+              <div className="bg-gray-900 rounded-lg p-3 text-xs text-red-300">{playtest.error}</div>
+            )}
+            {playtest?.report && (
+              <>
+                <SimulationReport report={playtest.report} kind="build" compact />
+                <a href={`/simulate?run=${playtest.id}`} className="text-xs text-primary-400 hover:underline">
+                  Full playtest report
+                </a>
+              </>
             )}
           </>
         ) : (
