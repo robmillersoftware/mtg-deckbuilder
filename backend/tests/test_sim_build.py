@@ -237,3 +237,19 @@ async def test_run_build_writes_the_deck_back_unless_the_user_edited_it(monkeypa
         assert conversation.current_deck["main_deck"] == [
             {"card_name": "Forest", "quantity": 24, "card": {"type_line": "Basic Land"}},
             {"card_name": "Bolt", "quantity": 32, "card": card}, {"card_name": "Shock", "quantity": 4}]
+
+
+async def test_run_build_tallies_only_the_baseline_in_the_live_table(monkeypatch):
+    db = _wire(monkeypatch, True)
+    tallies = []
+    real = sb.Progress.games
+
+    async def games(self, key, records, tally=True):
+        tallies.append(tally)
+        await real(self, key, records, tally)
+    monkeypatch.setattr(sb.Progress, "games", games)
+    monkeypatch.setattr(sb, "replacement", AsyncMock(return_value="Shock"))
+    run = _build_run()
+    run.options["requested"] = []  # so Bolt can be swapped and a candidate gets played
+    await sb.run_build(db, run)
+    assert tallies[:2] == [True, True] and len(tallies) > 2 and not any(tallies[2:])

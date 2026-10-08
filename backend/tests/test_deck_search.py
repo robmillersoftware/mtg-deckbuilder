@@ -47,6 +47,10 @@ class FakeProgress:
     def __init__(self, stop_after=None):
         self.events, self.stages, self.decks, self.matchups = [], [], [], []
         self.stop_after, self.checks = stop_after, 0
+        self.plans = []
+
+    def plan(self, games_left):
+        self.plans.append(games_left)
 
     async def stage(self, text):
         self.stages.append(text)
@@ -80,6 +84,9 @@ async def test_keeps_a_clearly_better_swap_and_confirms_it():
     assert any(kind == "kept" and "Dud" in text and "Good" in text for kind, text in progress.events)
     assert any(kind == "tried" and "Dud won 0% of the games it was cast in" in text for kind, text in progress.events)
     assert progress.decks[-1] == result.main
+    # 2 opponents: round 1 tries 2 swaps (32 games) + confirmation (48); after the kept swap,
+    # one more round of up to 3 (48) + confirmation; round 2 tries 2 swaps again.
+    assert progress.plans == [32 + 48, 48 + 48, 32 + 48]
 
 
 async def test_protected_cards_are_never_cut():

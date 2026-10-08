@@ -27,7 +27,7 @@ from app.services.sim_runs import Progress, SimError, enqueue, entries_of, main_
 
 logger = logging.getLogger(__name__)
 
-BUILD_MINUTES = 8
+BUILD_MINUTES = 10
 NOT_RUNNING_NOTE = "Couldn't playtest this deck (the simulator isn't running), so this is the untested build."
 REPLACE_QUESTION = ("Which card should replace the card in `deck.cut`? It underperformed when this deck was "
                     "playtested; prefer a card that helps against the decks in `deck.losing_to`.")
@@ -160,16 +160,21 @@ async def run_build(db: AsyncSession, run: SimulationRun) -> None:
     protect = make_protect(protected, opts.get("synergy"), rows)
     colors = list(opts.get("colors") or colors_of(list(rows.values())))
     cfg = SearchConfig()
-    planned = len(opponents) * (cfg.screen_games * (1 + cfg.max_rounds * cfg.candidates) + 2 * cfg.confirm_games)
+    # The baseline, one round and the confirmation; the search re-plans after each round.
+    planned = len(opponents) * (cfg.screen_games * (1 + cfg.candidates) + 2 * cfg.confirm_games)
     progress = Progress(db, run, opponents, planned)
     await progress.deck(seed_main)
     for name in missing:
         await progress.event(f"Forge can't play [[{name}]] yet, so it was left out of testing and kept in your list.")
     matchups = [forge.Matchup(o.archetype, o.main) for o in opponents]
 
+    baseline = [True]  # the first evaluation is the first draft's: tally it in the live table
+
     async def evaluate(main: Dict[str, int], games: int, seed: int):
+        tally, baseline[0] = baseline[0], False
+
         async def counted(key, records):
-            await progress.games(key, records, tally=False)
+            await progress.games(key, records, tally=tally)
         return await forge.play(main, matchups, games, seed, counted)
 
     async with jev.session(None) as client:

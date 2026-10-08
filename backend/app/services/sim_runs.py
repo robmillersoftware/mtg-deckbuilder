@@ -108,6 +108,10 @@ class Progress:
         if await self.stop_requested():
             raise Stopped()
 
+    def plan(self, games_left: int) -> None:
+        """Re-estimate the games still to play (shown on the next save)."""
+        self.data["games_planned"] = self.data["games_done"] + games_left
+
     async def set_matchups(self, stats: Sequence[MatchupStats]) -> None:
         self.data["matchups"] = [{"opponent": m.opponent, "share": m.share, "wins": m.wins, "losses": m.losses,
                                   "draws": m.draws} for m in stats]

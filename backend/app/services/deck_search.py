@@ -138,6 +138,8 @@ async def playtest(seed_main: Dict[str, int], opponents: Sequence[Opponent], lan
                    cfg: SearchConfig = SearchConfig(), clock: Callable[[], float] = time.monotonic,
                    rng_seed: int = 0) -> SearchResult:
     start = clock()
+    per_round = cfg.candidates * len(opponents) * cfg.screen_games  # games, at most
+    confirm = 2 * len(opponents) * cfg.confirm_games
 
     def stats_of(records: Dict[str, List[GameRecord]]) -> List[MatchupStats]:
         return [matchup_stats(o.archetype, o.share, records.get(o.archetype, [])) for o in opponents]
@@ -169,6 +171,7 @@ async def playtest(seed_main: Dict[str, int], opponents: Sequence[Opponent], lan
                 stopped = "no_candidates"
                 await progress.event("No more swaps worth trying")
                 break
+            progress.plan(len(swaps) * len(opponents) * cfg.screen_games + confirm)
             await progress.stage(f"Round {round_no} of {cfg.max_rounds}: trying {len(swaps)} swaps")
             for swap in swaps:
                 await progress.event(swap.reason, "tried")
@@ -186,6 +189,7 @@ async def playtest(seed_main: Dict[str, int], opponents: Sequence[Opponent], lan
                                      f"{pct(rate)} → {pct(candidate_rate)} against the meta", "kept")
                 current_main, current_records, current = swap.apply(current_main), records, stats
                 rate, se = candidate_rate, candidate_se
+                progress.plan((per_round if round_no < cfg.max_rounds else 0) + confirm)
                 await progress.set_matchups(current)
                 await progress.deck(current_main)
             else:
