@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { decksApi, simulationApi } from '@/services/api';
 import { useAuth } from '@/hooks/useAuth';
+import { useDeckStore } from '@/store/deck';
 import { isActive, useSimulationRun } from '@/hooks/useSimulation';
 import { SimulationProgress } from '@/components/SimulationProgress';
 import { SimulationReport } from '@/components/SimulationReport';
@@ -10,12 +11,15 @@ import { Deck, SimulationRun } from '@/types';
 
 const GAME_OPTIONS = [20, 50, 100];
 const MAX_OPPONENTS = 10; // the API's limit
+const CURRENT = 'current'; // the deck in the current conversation
 
 export function SimulationPage() {
   const { isAuthenticated } = useAuth();
   const [params, setParams] = useSearchParams();
   const [decks, setDecks] = useState<Deck[]>([]);
-  const [deckId, setDeckId] = useState(params.get('deck') ?? '');
+  const currentDeck = useDeckStore((s) => s.currentDeck);
+  const hasCurrent = (currentDeck?.main_deck?.length ?? 0) > 0;
+  const [deckId, setDeckId] = useState(params.get('deck') ?? (hasCurrent ? CURRENT : ''));
   const [archetypes, setArchetypes] = useState<string[]>([]);
   const [chosen, setChosen] = useState<string[]>([]);
   const [games, setGames] = useState(50);
@@ -32,19 +36,28 @@ export function SimulationPage() {
     }
   }, [isAuthenticated, run?.status]);
 
-  const format = decks.find((d) => d.id === deckId)?.format ?? 'standard';
+  const format = (deckId === CURRENT ? currentDeck?.format : decks.find((d) => d.id === deckId)?.format) ?? 'standard';
   useEffect(() => {
     setChosen([]);
     simulationApi.archetypes(format).then((r) => setArchetypes(r.data.slice(0, 12))).catch(() => setArchetypes([]));
   }, [format]);
 
   const start = async () => {
-    const deck = decks.find((d) => d.id === deckId);
-    if (!deck) return;
+    const saved = decks.find((d) => d.id === deckId);
+    const current = deckId === CURRENT && hasCurrent ? currentDeck : null;
+    if (!saved && !current) return;
     setStarting(true);
     try {
       const { data } = await simulationApi.create({
-        deck_id: deck.id, format: deck.format, games, opponents: chosen.length ? chosen : undefined,
+        ...(saved
+          ? { deck_id: saved.id }
+          : {
+              deck: {
+                name: current?.name || 'Current deck',
+                main_deck: (current?.main_deck ?? []).map((e) => ({ card_name: e.card_name, quantity: e.quantity })),
+              },
+            }),
+        format, games, opponents: chosen.length ? chosen : undefined,
       });
       setParams({ run: data.id });
     } catch (e: any) {
@@ -80,7 +93,8 @@ export function SimulationPage() {
             <span className="text-gray-300">Deck</span>
             <select value={deckId} onChange={(e) => setDeckId(e.target.value)}
                     className="mt-1 w-full bg-gray-800 text-white rounded p-2">
-              <option value="">Choose a saved deck…</option>
+              <option value="">Choose a deck…</option>
+              {hasCurrent && <option value={CURRENT}>Current deck{currentDeck?.name ? ` (${currentDeck.name})` : ''}</option>}
               {decks.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </label>

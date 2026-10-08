@@ -53,7 +53,7 @@ export function Layout() {
     { name: 'Build', href: '/', tourId: 'build' },
     { name: 'Guided Build', href: '/build', tourId: 'guided-build' },
     { name: 'My Decks', href: '/decks', auth: true, tourId: 'my-decks' },
-    { name: 'Simulate', href: '/simulate', auth: true, tourId: 'simulate' },
+    { name: 'Simulate', href: '/simulate', auth: false, tourId: 'simulate' },
     { name: 'Import', href: '/import', auth: true, tourId: 'import' },
     { name: 'History', href: '/conversations', auth: true },
     { name: 'Meta', href: '/meta', tourId: 'meta' },
