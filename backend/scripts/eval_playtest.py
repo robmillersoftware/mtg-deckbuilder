@@ -43,6 +43,9 @@ def main():
     for ask, requested in CASES:
         print(f"\n=== {ask}")
         chat = call(base, "/conversations/chat", {"message": ask, "mode": "build", "format": "standard"})
+        if not chat.get("deck"):  # advice, not a build: accept the offer to build it
+            chat = call(base, "/conversations/chat", {"message": "Yes, build the full decklist", "mode": "build",
+                                                     "format": "standard", "conversation_id": chat["conversation_id"]})
         sim_id = chat.get("simulation_id")
         if not chat.get("deck"):
             failures.append(f"{ask}: no deck ({chat.get('response', '')[:120]})")
