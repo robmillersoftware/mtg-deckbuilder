@@ -99,8 +99,6 @@ class TestPlay:
 
         out = await forge.play({"Forest": 60}, [forge.Matchup("A", {"Forest": 60}), forge.Matchup("B", {"Forest": 60})],
                                games=25, seed=7, on_progress=on_progress)
-        # Note: extracted tuples must be sorted by (directory, seed) not (directory, games, seed)
-        # to match expected order. Tuples sorted: [(d, s, n) for d, n, s, _ in calls]
         by_dir_seed = sorted(((d, s, n) for d, n, s, _ in calls), key=lambda x: (x[0], x[1]))
         expected = [("0", 7, 10), ("0", 8, 10), ("0", 9, 5), ("1", 7, 10), ("1", 8, 10), ("1", 9, 5)]
         assert by_dir_seed == expected
@@ -130,3 +128,17 @@ class TestPlay:
         with pytest.raises(Stop):
             await forge.play({"Forest": 60}, [forge.Matchup("A", {"Forest": 60})], games=5, seed=1, on_progress=stop)
         assert len(calls) < 5
+
+    async def test_raises_when_forge_produces_no_games(self, monkeypatch):
+        monkeypatch.setattr(forge, "command", lambda d, g, s: [sys.executable, "-c", "print('Simulation mode\\nAi(1) vs Ai(2)'); print('Turn: Turn 1')"])
+        monkeypatch.setattr(forge, "card_names", lambda: KNOWN)
+        with pytest.raises(forge.ForgeError, match="played no games"):
+            await forge.play({"Forest": 60}, [forge.Matchup("A", {"Forest": 60})], games=1, seed=1)
+
+    async def test_run_timeout_raises_forge_error(self):
+        import time
+        start = time.time()
+        with pytest.raises(forge.ForgeError, match="took longer"):
+            await forge._run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.5)
+        elapsed = time.time() - start
+        assert elapsed < 10, f"Timeout took {elapsed}s, should cancel quickly"

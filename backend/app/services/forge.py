@@ -169,7 +169,7 @@ async def _run(cmd: List[str], timeout: float) -> str:
     text = out.decode("utf-8", "replace")
     if proc.returncode != 0:
         raise ForgeError(f"Forge exited with code {proc.returncode}: {text[-500:].strip()}")
-    return text
+    return text  # ponytail: always return text; tail is checked by caller if needed
 
 
 OnProgress = Optional[Callable[[str, List[GameRecord]], Awaitable[None]]]
@@ -197,7 +197,10 @@ async def play(tested: Dict[str, int], matchups: Sequence[Matchup], games: int, 
 
         async def run(key: str, deck_dir: Path, n: int, chunk_seed: int) -> None:
             async with limit:
-                records = parse_games(await _run(command(deck_dir, n, chunk_seed), n * GAME_TIMEOUT_S + 120))
+                output = await _run(command(deck_dir, n, chunk_seed), n * GAME_TIMEOUT_S + 120)
+                records = parse_games(output)
+            if not records:
+                raise ForgeError(f"Forge played no games: {output[-500:].strip()}")
             results[key].extend(records)
             if on_progress:
                 await on_progress(key, records)
