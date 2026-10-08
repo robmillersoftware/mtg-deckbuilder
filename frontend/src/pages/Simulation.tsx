@@ -8,7 +8,8 @@ import { SimulationProgress } from '@/components/SimulationProgress';
 import { SimulationReport } from '@/components/SimulationReport';
 import { Deck, SimulationRun } from '@/types';
 
-const GAME_OPTIONS = [20, 50, 100, 200];
+const GAME_OPTIONS = [20, 50, 100];
+const MAX_OPPONENTS = 10; // the API's limit
 
 export function SimulationPage() {
   const { isAuthenticated } = useAuth();
@@ -58,6 +59,8 @@ export function SimulationPage() {
     setStopping(true);
     try {
       await simulationApi.stop(run.id);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? "Couldn't stop the test");
     } finally {
       setStopping(false);
     }
@@ -83,11 +86,14 @@ export function SimulationPage() {
           </label>
           <div>
             <span className="text-gray-300">Opponents</span>
-            <p className="text-xs text-gray-500">None chosen: the top 5 decks, weighted by meta share.</p>
+            <p className="text-xs text-gray-500">
+              None chosen: the top 5 decks, weighted by meta share. Choose up to {MAX_OPPONENTS}.
+            </p>
             <div className="mt-1 flex flex-wrap gap-1">
               {archetypes.map((a) => (
                 <button key={a} onClick={() => toggle(a)} aria-pressed={chosen.includes(a)}
-                        className={`text-xs px-2 py-1 rounded ${chosen.includes(a) ? 'bg-primary-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
+                        disabled={!chosen.includes(a) && chosen.length >= MAX_OPPONENTS}
+                        className={`text-xs px-2 py-1 rounded disabled:opacity-40 ${chosen.includes(a) ? 'bg-primary-600 text-white' : 'bg-gray-800 text-gray-300'}`}>
                   {a}
                 </button>
               ))}

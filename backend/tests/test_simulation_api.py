@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.api.routes import simulation as api
 from app.models.simulation import SimulationRun
@@ -56,6 +57,29 @@ async def test_create_rejects_bad_input(monkeypatch):
         with pytest.raises(HTTPException) as e:
             await api.create_simulation(body, db_returning(), None)
         assert e.value.status_code == 400
+
+
+async def test_create_limits_the_size_of_a_test(monkeypatch):
+    monkeypatch.setattr(api, "sim_worker_running", lambda: True)
+    monkeypatch.setattr(api, "enqueue", lambda run_id: None)
+    monkeypatch.setattr(api, "queue_position", lambda run_id: 1)
+    with pytest.raises(ValidationError):
+        api.SimulationCreate(deck=DECK, games=101)
+    names = [f"Deck {i}" for i in range(11)]
+    with pytest.raises(HTTPException) as e:
+        await api.create_simulation(api.SimulationCreate(deck=DECK, opponents=names, games=20), db_returning(), None)
+    assert (e.value.status_code, e.value.detail) == (400, api.TOO_MANY_OPPONENTS)
+    # The largest test the other limits allow, 10 opponents x 100 games, is exactly the cap.
+    resp = await api.create_simulation(api.SimulationCreate(deck=DECK, opponents=names[:10], games=100),
+                                       db_returning(), None)
+    assert resp.status == "queued"
+    # No opponents chosen counts as the gauntlet's 5.
+    monkeypatch.setattr(api, "MAX_TOTAL_GAMES", 499)
+    with pytest.raises(HTTPException) as e:
+        await api.create_simulation(api.SimulationCreate(deck=DECK, games=100), db_returning(), None)
+    assert (e.value.status_code, e.value.detail) == (400, api.TOO_MANY_GAMES)
+    monkeypatch.setattr(api, "MAX_TOTAL_GAMES", 500)
+    assert (await api.create_simulation(api.SimulationCreate(deck=DECK, games=100), db_returning(), None)).status == "queued"
 
 
 @pytest.mark.parametrize("owner,caller,ok", [(None, None, True), (ALICE.id, ALICE, True),

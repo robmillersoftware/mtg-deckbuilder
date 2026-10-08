@@ -23,7 +23,9 @@ from app.services.sim_stats import MatchupStats, matchup_stats
 
 logger = logging.getLogger(__name__)
 
-MIN_GAMES, MAX_GAMES, TEST_GAMES = 10, 200, 50
+MIN_GAMES, MAX_GAMES, TEST_GAMES = 10, 100, 50
+# At about 0.6 games/s, 1000 games is about 28 minutes, inside the job timeout.
+MAX_OPPONENTS, MAX_TOTAL_GAMES = 10, 1000
 MAX_EVENTS = 60
 JOB_TIMEOUT_S = 3600
 

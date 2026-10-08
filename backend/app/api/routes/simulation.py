@@ -17,7 +17,9 @@ from app.models.meta import MetaSnapshot
 from app.models.simulation import SimulationRun
 from app.models.user import User
 from app.services.deck_fill import SIXTY_CARD_FORMATS
-from app.services.sim_runs import MAX_GAMES, MIN_GAMES, TEST_GAMES, enqueue, queue_position
+from app.services.gauntlet import GAUNTLET_SIZE
+from app.services.sim_runs import (MAX_GAMES, MAX_OPPONENTS, MAX_TOTAL_GAMES, MIN_GAMES, TEST_GAMES,
+                                  enqueue, queue_position)
 
 router = APIRouter()
 
@@ -34,6 +36,8 @@ def reap_if_stale(run: SimulationRun) -> bool:
 
 
 NOT_RUNNING = "The simulator isn't running right now, so this deck can't be tested. Try again in a few minutes."
+TOO_MANY_OPPONENTS = f"Choose at most {MAX_OPPONENTS} opponents."
+TOO_MANY_GAMES = "That's too many games for one test: choose fewer opponents or games."
 
 
 class SimulationCreate(BaseModel):
@@ -99,6 +103,10 @@ async def create_simulation(body: SimulationCreate, db: AsyncSession = Depends(g
                             current_user: Optional[User] = Depends(get_current_user)):
     if body.format not in SIXTY_CARD_FORMATS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Simulation supports 60-card formats only.")
+    if len(body.opponents or []) > MAX_OPPONENTS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, TOO_MANY_OPPONENTS)
+    if body.games * len(body.opponents or [None] * GAUNTLET_SIZE) > MAX_TOTAL_GAMES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, TOO_MANY_GAMES)
     deck = await _deck_for(body, db, current_user)
     if not sim_worker_running():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, NOT_RUNNING)
