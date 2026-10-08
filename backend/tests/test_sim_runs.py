@@ -82,6 +82,7 @@ async def test_no_opponents_is_a_user_facing_error(wired, monkeypatch):
 
 
 async def test_execute_marks_failures_in_plain_words(monkeypatch):
+    real_run_test = sim_runs.run_test
     run = make_run(status="queued")
     db = fake_db()
     db.get = AsyncMock(return_value=run)
@@ -101,6 +102,14 @@ async def test_execute_marks_failures_in_plain_words(monkeypatch):
     run.status = "queued"
     await sim_runs.execute(run.id)
     assert run.status == "failed" and run.error == "Couldn't finish playtesting: the simulator isn't set up yet."
+
+    monkeypatch.setattr(forge, "available", lambda: True)
+    monkeypatch.setattr(sim_runs, "run_test", real_run_test)
+    monkeypatch.setattr(sim_runs, "gauntlet", AsyncMock(return_value=[]))
+    run.status = "queued"
+    await sim_runs.execute(run.id)
+    assert run.error == ("Couldn't finish playtesting: there are no recent decklists for these opponents "
+                         "to play against.")
 
 
 def test_deck_entry_conversions():

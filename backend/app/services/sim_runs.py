@@ -31,7 +31,8 @@ JOB_TIMEOUT_S = 3600
 
 
 class SimError(ValueError):
-    """A reason the run can't go on, worded for the user."""
+    """A reason the run can't go on, worded for the user to follow "Couldn't finish
+    playtesting: ", so it starts lowercase."""
 
 
 def main_of(entries: Sequence[Dict]) -> Dict[str, int]:
@@ -129,7 +130,7 @@ class Progress:
 async def run_test(db: AsyncSession, run: SimulationRun) -> None:
     opponents = await gauntlet(db, run.format, run.opponents)
     if not opponents:
-        raise SimError("There are no recent decklists for these opponents to play against.")
+        raise SimError("there are no recent decklists for these opponents to play against.")
     main = main_of(run.deck["main_deck"])
     known = forge.card_names()
     missing = forge.missing_cards(main, known)

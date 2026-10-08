@@ -49,6 +49,8 @@ async def gauntlet(db: AsyncSession, format: str, archetypes: Optional[Sequence[
         row = (await db.execute(LIST_SQL, {"format": format, "archetype": name})).first()
         if row is None or not row.main_deck:
             continue
-        main = {e["card_name"]: int(e["quantity"]) for e in row.main_deck}
+        main: Dict[str, int] = {}
+        for e in row.main_deck:  # a list can name a card on more than one line
+            main[e["card_name"]] = main.get(e["card_name"], 0) + int(e["quantity"])
         out.append(Opponent(name, 1.0 if archetypes else shares.get(name.lower(), 0.0), main))
     return out

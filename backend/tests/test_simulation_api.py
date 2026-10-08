@@ -136,3 +136,18 @@ async def test_recently_updated_run_stays_running(monkeypatch):
     run = saved_run(user_id=None, status="running", updated_at=datetime.utcnow() - timedelta(minutes=1))
     resp = await api.get_simulation(run.id, db_returning(run), None)
     assert resp.status == "running" and resp.error is None
+
+
+@pytest.mark.parametrize("visibility,caller,ok", [("public", BOB, True), ("unlisted", None, True),
+                                                  ("private", BOB, False), (None, BOB, False), (None, None, False),
+                                                  (None, ALICE, True), ("private", ALICE, True)])
+async def test_saved_decks_are_private_unless_shared(visibility, caller, ok):
+    deck = SimpleNamespace(id=uuid4(), name="Brew", visibility=visibility, owner_id=ALICE.id,
+                           main_deck=[{"card_name": "Forest", "quantity": 60}], sideboard=[])
+    body = api.SimulationCreate(deck_id=deck.id)
+    if ok:
+        assert (await api._deck_for(body, db_returning(deck), caller))["name"] == "Brew"
+    else:
+        with pytest.raises(HTTPException) as e:
+            await api._deck_for(body, db_returning(deck), caller)
+        assert e.value.status_code == 400

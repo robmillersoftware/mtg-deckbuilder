@@ -38,3 +38,10 @@ async def test_chosen_archetypes_weigh_equally_and_skip_missing():
     db = fake_db([None, [], [{"card_name": "Forest", "quantity": 20}]])
     got = await g.gauntlet(db, "standard", ["No Lists", "no lists ", "Empty", "Mono Green", "mono green"])
     assert got == [g.Opponent("Mono Green", 1.0, {"Forest": 20})]
+
+
+async def test_duplicate_lines_in_a_list_are_summed():
+    db = fake_db([[{"card_name": "Forest", "quantity": 2}, {"card_name": "Bear", "quantity": 4},
+                   {"card_name": "Forest", "quantity": "18"}]])
+    got = await g.gauntlet(db, "standard", ["Mono Green"])
+    assert got[0].main == {"Forest": 20, "Bear": 4}

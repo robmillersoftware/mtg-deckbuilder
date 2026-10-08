@@ -149,7 +149,7 @@ async def run_build(db: AsyncSession, run: SimulationRun) -> None:
     opts = run.options or {}
     opponents = await gauntlet(db, run.format)
     if not opponents:
-        raise SimError("There are no recent decklists to playtest against.")
+        raise SimError("there are no recent decklists to playtest against.")
     seed_main = main_of(run.deck["main_deck"])
     known = forge.card_names()
     missing = forge.missing_cards(seed_main, known)

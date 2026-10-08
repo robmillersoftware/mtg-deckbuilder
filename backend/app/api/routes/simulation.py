@@ -81,7 +81,8 @@ def visible(run: Optional[SimulationRun], user: Optional[User]) -> bool:
 async def _deck_for(body: SimulationCreate, db: AsyncSession, user: Optional[User]) -> Dict[str, Any]:
     if body.deck_id:
         deck = await db.get(Deck, body.deck_id)
-        if deck is None or (deck.visibility == "private" and (user is None or deck.owner_id != user.id)):
+        shared = deck is not None and deck.visibility in ("public", "unlisted")  # NULL counts as private
+        if deck is None or (not shared and (user is None or deck.owner_id != user.id)):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "That deck wasn't found.")
         return {"name": deck.name, "main_deck": deck.main_deck or [], "sideboard": deck.sideboard or []}
     if body.deck and body.deck.get("main_deck"):
