@@ -5,19 +5,29 @@ import { SimReport } from '@/types';
 
 const pct = (x: number) => `${Math.round(100 * x)}%`;
 const LABEL_STYLE = { favored: 'text-green-400', even: 'text-gray-300', unfavored: 'text-red-400' } as const;
+// Why a build's search ended.
 const STOPPED: Record<string, string> = {
   user: 'Stopped early; this is the best deck found so far.',
   budget: 'The search ran out of time; this is the best deck found.',
   reverted: "The swaps didn't hold up over more games, so the first draft stands.",
+  no_improvement: 'Tried other cards; none was clearly better over this many games, so the first draft stands.',
+  no_candidates: 'No promising swaps to try; the first draft stands.',
+  max_rounds: 'Used every round of playtesting.',
+};
+const TEST_STOPPED: Record<string, string> = {
+  user: 'Stopped early; these results cover the games played so far.',
 };
 
 interface Props {
   report: SimReport;
   kind: 'test' | 'build';
   compact?: boolean;
+  /** The run played chosen opponents rather than the top meta decks. */
+  chosenOpponents?: boolean;
 }
 
-export function SimulationReport({ report, kind, compact }: Props) {
+export function SimulationReport({ report, kind, compact, chosenOpponents }: Props) {
+  const stopped = report.stopped ? (kind === 'build' ? STOPPED : TEST_STOPPED)[report.stopped] : undefined;
   const [game, setGame] = useState<'win' | 'loss' | null>(null);
   const { overall, baseline } = report;
   return (
@@ -29,16 +39,14 @@ export function SimulationReport({ report, kind, compact }: Props) {
           <>
             <div className="text-2xl font-semibold text-white">{pct(overall.win_rate)}</div>
             <div className="text-gray-400">
-              against the top decks, likely {pct(overall.lo)}–{pct(overall.hi)} ({overall.games} games)
+              against the {chosenOpponents ? 'chosen' : 'top'} decks, likely {pct(overall.lo)}–{pct(overall.hi)} ({overall.games} games)
             </div>
           </>
         )}
         {kind === 'build' && baseline && (
           <div className="text-gray-400 mt-1">First draft: {pct(baseline.win_rate)}</div>
         )}
-        {report.stopped && STOPPED[report.stopped] && (
-          <div className="text-amber-300 mt-1">{STOPPED[report.stopped]}</div>
-        )}
+        {stopped && <div className="text-amber-300 mt-1">{stopped}</div>}
       </div>
 
       {report.matchups.length > 0 && (
@@ -69,7 +77,7 @@ export function SimulationReport({ report, kind, compact }: Props) {
             {report.changes.map((c, i) => (
               <li key={i}>
                 −{c.copies} <CardTooltip cardName={c.cut}>{c.cut}</CardTooltip> +{c.copies}{' '}
-                <CardTooltip cardName={c.add}>{c.add}</CardTooltip>: {pct(c.before)} → {pct(c.after)} overall
+                <CardTooltip cardName={c.add}>{c.add}</CardTooltip>: {pct(c.before)} → {pct(c.after)} overall (in screening)
                 {c.best_matchup &&
                   `; vs ${c.best_matchup.opponent} ${pct(c.best_matchup.before)} → ${pct(c.best_matchup.after)}`}
               </li>
@@ -129,7 +137,7 @@ export function SimulationReport({ report, kind, compact }: Props) {
             <ol className="max-h-64 overflow-y-auto bg-gray-950 rounded p-2 space-y-0.5 font-mono">
               {(report.games[game] ?? []).map((line, i) => (
                 <li key={i} className={line.startsWith('Turn ') ? 'text-white mt-1' : 'text-gray-400'}>
-                  {line.replace(/^Tested/, 'You').replace(/^Opponent/, 'Opponent')}
+                  {line.replace(/\bTested\b/g, 'You')}
                 </li>
               ))}
             </ol>

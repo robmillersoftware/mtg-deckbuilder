@@ -137,7 +137,7 @@ export function SimulationPage() {
         {run && run.status === 'stopped' && !run.report && (
           <div className="bg-gray-900 rounded-lg p-4 text-gray-300 text-sm">Stopped before any games finished.</div>
         )}
-        {run?.report && <SimulationReport report={run.report} kind={run.kind} />}
+        {run?.report && <SimulationReport report={run.report} kind={run.kind} chosenOpponents={!!run.opponents?.length} />}
       </div>
     </div>
   );
