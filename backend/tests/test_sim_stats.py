@@ -27,9 +27,17 @@ class TestWinRates:
         d = m.as_dict()
         assert d["label"] == "even" and d["opponent"] == "A" and d["games"] == 3 and d["lo"] < 0.5 < d["hi"]
 
-    def test_labels(self):
-        assert ss.label(0.56) == "favored" and ss.label(0.55) == "even" and ss.label(0.44) == "unfavored"
-        assert ss.label(0.45) == "even"
+    def test_labels_need_the_interval_to_exclude_half(self):
+        assert ss.label(0.51, 0.9) == "favored" and ss.label(0.1, 0.49) == "unfavored"
+        assert ss.label(0.5, 0.9) == "even" and ss.label(0.1, 0.5) == "even" and ss.label(0.3, 0.7) == "even"
+
+    def test_a_high_rate_on_few_games_is_even(self):
+        # 5-3 (63%) has an interval of about 31-86%: no directional claim.
+        five_three = ss.matchup_stats("A", 10.0, [game(TESTED)] * 5 + [game(OPPONENT)] * 3).as_dict()
+        assert five_three["label"] == "even"
+        # 16-4 (80%), about 58-92%, is favored; 4-16 is unfavored.
+        assert ss.matchup_stats("A", 10.0, [game(TESTED)] * 16 + [game(OPPONENT)] * 4).as_dict()["label"] == "favored"
+        assert ss.matchup_stats("A", 10.0, [game(TESTED)] * 4 + [game(OPPONENT)] * 16).as_dict()["label"] == "unfavored"
 
     def test_overall_weights_by_meta_share(self):
         a = ss.matchup_stats("A", 30.0, [game(TESTED)] * 8 + [game(OPPONENT)] * 2)

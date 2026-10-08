@@ -2,6 +2,17 @@ import clsx from 'clsx';
 import { SimulationRun } from '@/types';
 
 const pct = (x: number) => `${Math.round(100 * x)}%`;
+const Z = 1.96;
+
+/** 95% Wilson interval for score/n, the same formula as the backend's sim_stats.wilson. */
+function wilson(score: number, n: number): [number, number] {
+  if (n === 0) return [0, 1];
+  const p = score / n;
+  const d = 1 + (Z * Z) / n;
+  const centre = (p + (Z * Z) / (2 * n)) / d;
+  const half = (Z * Math.sqrt((p * (1 - p)) / n + (Z * Z) / (4 * n * n))) / d;
+  return [Math.max(0, centre - half), Math.min(1, centre + half)];
+}
 
 function timeLeft(run: SimulationRun): string | null {
   const p = run.progress;
@@ -66,12 +77,13 @@ export function SimulationProgress({ run, onStop, stopping }: Props) {
             {p.matchups.map((m) => {
               const games = m.wins + m.losses + m.draws;
               const rate = games ? (m.wins + m.draws / 2) / games : null;
+              const [lo, hi] = wilson(m.wins + m.draws / 2, games);
               return (
                 <tr key={m.opponent} className="text-gray-200">
                   <td className="py-0.5">{m.opponent}</td>
                   <td className="text-right text-gray-400">{m.share > 1 ? `${m.share.toFixed(1)}%` : ''}</td>
                   <td className="text-right">{m.wins}–{m.losses}{m.draws ? `–${m.draws}` : ''}</td>
-                  <td className={clsx('text-right', rate !== null && (rate > 0.55 ? 'text-green-400' : rate < 0.45 ? 'text-red-400' : 'text-gray-200'))}>
+                  <td className={clsx('text-right', rate !== null && (lo > 0.5 ? 'text-green-400' : hi < 0.5 ? 'text-red-400' : 'text-gray-200'))}>
                     {rate === null ? '—' : pct(rate)}
                   </td>
                 </tr>

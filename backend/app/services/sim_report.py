@@ -35,7 +35,7 @@ def build_report(matchups: Sequence[MatchupStats], records: Sequence[GameRecord]
     return {
         "overall": overall(matchups).as_dict(),
         "baseline": overall(baseline).as_dict() if baseline else None,
-        "matchups": [m.as_dict() for m in matchups],
+        "matchups": [m.as_dict() for m in matchups if m.games],  # no games, nothing to label
         "changes": list(changes),
         "cards": {"strongest": [c.as_dict() for c in strongest], "weakest": [c.as_dict() for c in weakest],
                   "too_few": sorted(c.name for c in cards if c.games_cast < MIN_CASTS)},

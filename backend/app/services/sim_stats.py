@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 from app.services.forge import OPPONENT, TESTED, GameRecord
 
 Z = 1.96  # 95% intervals
-FAVORED, UNFAVORED = 0.55, 0.45
 SCREW_TURN, SCREW_LANDS = 5, 3  # lost after reaching own turn 5 with 3 or fewer lands played
 FLOOD_TURN, FLOOD_LANDS, FLOOD_SPELLS = 7, 7, 4  # lost with 7+ lands and 4 or fewer spells by own turn 7
 ADVICE_RATE = 0.15
@@ -32,8 +31,9 @@ def wilson(score: float, n: int) -> Tuple[float, float]:
     return (max(0.0, centre - half), min(1.0, centre + half))
 
 
-def label(rate: float) -> str:
-    return "favored" if rate > FAVORED else "unfavored" if rate < UNFAVORED else "even"
+def label(lo: float, hi: float) -> str:
+    """Favored or unfavored only when the 95% interval excludes 50%."""
+    return "favored" if lo > 0.5 else "unfavored" if hi < 0.5 else "even"
 
 
 @dataclass
@@ -56,7 +56,7 @@ class MatchupStats:
     def as_dict(self) -> Dict:
         lo, hi = wilson(self.wins + 0.5 * self.draws, self.games)
         return {**asdict(self), "games": self.games, "win_rate": self.win_rate, "lo": lo, "hi": hi,
-                "label": label(self.win_rate)}
+                "label": label(lo, hi)}
 
 
 def matchup_stats(opponent: str, share: float, records: Sequence[GameRecord]) -> MatchupStats:

@@ -23,10 +23,16 @@ export function SimulationReport({ report, kind, compact }: Props) {
   return (
     <div className="bg-gray-900 rounded-lg p-4 space-y-4 text-sm text-gray-200">
       <div>
-        <div className="text-2xl font-semibold text-white">{pct(overall.win_rate)}</div>
-        <div className="text-gray-400">
-          against the top decks, likely {pct(overall.lo)}–{pct(overall.hi)} ({overall.games} games)
-        </div>
+        {overall.games === 0 ? (
+          <div className="text-2xl font-semibold text-white">No games finished.</div>
+        ) : (
+          <>
+            <div className="text-2xl font-semibold text-white">{pct(overall.win_rate)}</div>
+            <div className="text-gray-400">
+              against the top decks, likely {pct(overall.lo)}–{pct(overall.hi)} ({overall.games} games)
+            </div>
+          </>
+        )}
         {kind === 'build' && baseline && (
           <div className="text-gray-400 mt-1">First draft: {pct(baseline.win_rate)}</div>
         )}
@@ -35,24 +41,26 @@ export function SimulationReport({ report, kind, compact }: Props) {
         )}
       </div>
 
-      <section>
-        <h3 className="text-white font-medium mb-1">Matchups</h3>
-        <table className="w-full text-xs">
-          <tbody>
-            {report.matchups.map((m) => (
-              <tr key={m.opponent}>
-                <td className="py-0.5">{m.opponent}</td>
-                <td className="text-right">{m.win_rate !== undefined ? pct(m.win_rate) : '—'}</td>
-                <td className="text-right text-gray-500">
-                  {m.lo !== undefined && m.hi !== undefined ? `${pct(m.lo)}–${pct(m.hi)}` : ''}
-                </td>
-                <td className={clsx('text-right', m.label && LABEL_STYLE[m.label])}>{m.label}</td>
-                {!compact && <td className="text-right text-gray-500">{m.avg_turns ? `ends turn ${m.avg_turns.toFixed(1)}` : ''}</td>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      {report.matchups.length > 0 && (
+        <section>
+          <h3 className="text-white font-medium mb-1">Matchups</h3>
+          <table className="w-full text-xs">
+            <tbody>
+              {report.matchups.map((m) => (
+                <tr key={m.opponent}>
+                  <td className="py-0.5">{m.opponent}</td>
+                  <td className="text-right">{m.win_rate !== undefined ? pct(m.win_rate) : '—'}</td>
+                  <td className="text-right text-gray-500">
+                    {m.lo !== undefined && m.hi !== undefined ? `${pct(m.lo)}–${pct(m.hi)}` : ''}
+                  </td>
+                  <td className={clsx('text-right', m.label && LABEL_STYLE[m.label])}>{m.label}</td>
+                  {!compact && <td className="text-right text-gray-500">{m.avg_turns ? `ends turn ${m.avg_turns.toFixed(1)}` : ''}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
 
       {report.changes.length > 0 && (
         <section>

@@ -97,7 +97,7 @@ This is where most of the user-facing work is.
 ### The report (build and test)
 
 - **Headline:** overall win rate against the meta with its range ("53% against the top 5 decks, likely 48-58%"), and the change from the first draft for a build.
-- **Matchups:** per opponent, the win rate with range and a favored / even / unfavored label (above 55%, 45-55%, below 45%), and the average turn games end.
+- **Matchups:** per opponent, the win rate with range and a favored / even / unfavored label (favored when the 95% range is all above 50%, unfavored when it is all below, even otherwise), and the average turn games end.
 - **What changed** (builds): each kept swap with its before/after win rate overall and against the matchup it helped most.
 - **Card performance:** the 5 strongest and 5 weakest cards by win rate when cast, with cast counts, so a weak result is traceable to cards. Cards with too few casts to judge are listed as such rather than ranked.
 - **Mana:** mulligan rate, screw and flood rates, with a plain sentence when one is high ("Lost 18% of games stuck on 3 lands: consider a 24th land").
