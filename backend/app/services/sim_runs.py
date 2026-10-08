@@ -15,6 +15,7 @@ from app.core.queue import sim_queue
 from app.db.session import async_session_factory
 from app.models.simulation import SimulationRun
 from app.services import forge
+from app.services.deck_search import Stopped
 from app.services.forge import GameRecord
 from app.services.gauntlet import Opponent, gauntlet
 from app.services.sim_report import build_report
@@ -29,10 +30,6 @@ JOB_TIMEOUT_S = 1800
 
 class SimError(ValueError):
     """A reason the run can't go on, worded for the user."""
-
-
-class Stopped(Exception):
-    """The user asked to stop."""
 
 
 def main_of(entries: Sequence[Dict]) -> Dict[str, int]:
