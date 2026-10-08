@@ -4,7 +4,7 @@ each as its most recent best-placing list from the recent window."""
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.meta import MetaSnapshot
@@ -32,17 +32,22 @@ async def gauntlet(db: AsyncSession, format: str, archetypes: Optional[Sequence[
     """With `archetypes`, those (equal weight); otherwise the top GAUNTLET_SIZE by meta
     share (weighted by share). Archetypes without a recent list are skipped."""
     snapshots = (await db.execute(
-        select(MetaSnapshot).where(MetaSnapshot.format == format)
+        select(MetaSnapshot).where(
+            MetaSnapshot.format == format,
+            MetaSnapshot.snapshot_date == select(func.max(MetaSnapshot.snapshot_date))
+            .where(MetaSnapshot.format == format).scalar_subquery())
         .order_by(MetaSnapshot.meta_percentage.desc()))).scalars().all()
     shares = {s.archetype.strip().lower(): float(s.meta_percentage or 0) for s in snapshots}
     names = [a.strip() for a in archetypes] if archetypes else [s.archetype.strip() for s in snapshots]
+    seen: set = set()
+    names = [n for n in names if not (n.lower() in seen or seen.add(n.lower()))]  # case-insensitive dedupe
     size = len(names) if archetypes else GAUNTLET_SIZE
     out: List[Opponent] = []
     for name in names:
         if len(out) >= size:
             break
         row = (await db.execute(LIST_SQL, {"format": format, "archetype": name})).first()
-        if row is None:
+        if row is None or not row.main_deck:
             continue
         main = {e["card_name"]: int(e["quantity"]) for e in row.main_deck}
         out.append(Opponent(name, 1.0 if archetypes else shares.get(name.lower(), 0.0), main))

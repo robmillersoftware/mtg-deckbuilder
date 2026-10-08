@@ -29,10 +29,12 @@ async def test_meta_gauntlet_uses_shares_and_skips_archetypes_without_lists(monk
     assert got == [g.Opponent("Dimir Aggro", 10.9, {"Island": 24}), g.Opponent("Boros Dragons", 10.3, {"Mountain": 22})]
     list_sql, params = db.execute.call_args_list[1].args
     assert params == {"format": "standard", "archetype": "Dimir Aggro"}
+    snap_sql = str(db.execute.call_args_list[0].args[0])
+    assert "max(" in snap_sql and "snapshot_date" in snap_sql
     assert "lower(trim(d.archetype)) = lower(trim(:archetype))" in str(list_sql)
 
 
 async def test_chosen_archetypes_weigh_equally_and_skip_missing():
-    db = fake_db([None, [{"card_name": "Forest", "quantity": 20}]])
-    got = await g.gauntlet(db, "standard", ["No Lists", "Mono Green"])
+    db = fake_db([None, [], [{"card_name": "Forest", "quantity": 20}]])
+    got = await g.gauntlet(db, "standard", ["No Lists", "no lists ", "Empty", "Mono Green", "mono green"])
     assert got == [g.Opponent("Mono Green", 1.0, {"Forest": 20})]
