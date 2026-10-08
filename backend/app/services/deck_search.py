@@ -1,6 +1,7 @@
 """Playtest search: play the deck against the gauntlet, swap out what underperforms,
 keep a swap only when it clearly wins more, and confirm the result on fresh games."""
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional, Sequence, Set
@@ -175,16 +176,16 @@ async def playtest(seed_main: Dict[str, int], opponents: Sequence[Opponent], lan
             for swap in swaps:
                 records = await evaluate(swap.apply(current_main), cfg.screen_games, rng_seed)
                 stats = stats_of(records)
-                candidate_rate = overall(stats).win_rate
-                if best is None or candidate_rate > best[1]:
-                    best = (swap, candidate_rate, records, stats)
-            swap, candidate_rate, records, stats = best
-            if candidate_rate - rate > se:
+                candidate = overall(stats)
+                if best is None or candidate.win_rate > best[1]:
+                    best = (swap, candidate.win_rate, candidate.se, records, stats)
+            swap, candidate_rate, candidate_se, records, stats = best
+            if candidate_rate - rate > math.hypot(se, candidate_se):  # more than one SE of the difference
                 changes.append(_change(swap, current, stats, rate, candidate_rate))
                 await progress.event(f"Kept −{swap.copies} {swap.cut} +{swap.copies} {swap.add}: "
                                      f"{pct(rate)} → {pct(candidate_rate)} against the meta", "kept")
                 current_main, current_records, current = swap.apply(current_main), records, stats
-                rate, se = candidate_rate, overall(stats).se
+                rate, se = candidate_rate, candidate_se
                 await progress.set_matchups(current)
                 await progress.deck(current_main)
             else:
@@ -208,12 +209,13 @@ async def playtest(seed_main: Dict[str, int], opponents: Sequence[Opponent], lan
     except Stopped:
         return SearchResult(current_main, first_stats, current, current_records, changes, "user")
     baseline, final = stats_of(seed_records), stats_of(final_records)
-    if overall(final).win_rate <= overall(baseline).win_rate:
+    b, f = overall(baseline), overall(final)
+    if f.win_rate - b.win_rate <= math.hypot(b.se, f.se):
         await progress.event("The changes didn't hold up over more games, so the first draft stands")
         await progress.set_matchups(baseline)
         await progress.deck(seed_main)
         return SearchResult(dict(seed_main), baseline, baseline, seed_records, [], "reverted")
     await progress.set_matchups(final)
-    await progress.event(f"Confirmed: {pct(overall(baseline).win_rate)} → {pct(overall(final).win_rate)} "
+    await progress.event(f"Confirmed: {pct(b.win_rate)} → {pct(f.win_rate)} "
                          "against the meta", "kept")
     return SearchResult(current_main, baseline, final, final_records, changes, stopped)

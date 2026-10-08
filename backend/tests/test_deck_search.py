@@ -16,11 +16,11 @@ def rate_of(main):
     return min(0.95, max(0.05, 0.5 + sum(EFFECT.get(n, 0) * q for n, q in main.items())))
 
 
-def fake_evaluate(calls, flip_on_confirm=False):
+def fake_evaluate(calls, flip_on_confirm=False, rate_fn=None):
     """Deterministic games: Dud is cast only in losses, Good only in wins."""
     async def evaluate(main, games, seed):
         calls.append((dict(main), games, seed))
-        rate = rate_of(main)
+        rate = rate_fn(main, games) if rate_fn else rate_of(main)
         if flip_on_confirm and games == ds.SearchConfig().confirm_games:
             rate = 1 - rate
         out = {}
@@ -96,6 +96,31 @@ async def test_changes_that_fail_confirmation_are_reverted():
                                lambda main, cut: False, progress)
     assert result.main == SEED and result.changes == [] and result.stopped == "reverted"
     assert progress.decks[-1] == SEED
+
+
+async def test_a_gain_inside_the_se_of_the_difference_is_not_kept():
+    # 50% -> 62.5% at 8 games per matchup: more than the baseline's SE (about 11%),
+    # less than the SE of the difference (about 15%).
+    def rate(main, games):
+        return 0.5 if "Dud" in main else 0.625
+    progress = FakeProgress()
+    result = await ds.playtest(SEED, OPPONENTS, LANDS, fake_evaluate([], rate_fn=rate), find_add,
+                               lambda main, cut: False, progress)
+    assert result.main == SEED and result.changes == [] and result.stopped == "no_improvement"
+
+
+async def test_a_small_confirmed_gain_is_reverted():
+    # Screening sees the large Dud -> Good effect; on the confirmation games the final deck
+    # wins 7 of 12 against the first draft's 6 of 12, inside the SE of the difference.
+    def rate(main, games):
+        if games != ds.SearchConfig().confirm_games:
+            return rate_of(main)
+        return 0.5 if "Dud" in main else 7 / 12
+    progress = FakeProgress()
+    result = await ds.playtest(SEED, OPPONENTS, LANDS, fake_evaluate([], rate_fn=rate), find_add,
+                               lambda main, cut: False, progress)
+    assert result.main == SEED and result.changes == [] and result.stopped == "reverted"
+    assert any("didn't hold up" in text for _, text in progress.events)
 
 
 async def test_budget_and_user_stop():
