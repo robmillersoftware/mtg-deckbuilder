@@ -37,6 +37,7 @@ export function ConversationList({ className }: ConversationListProps) {
     try {
       const response = await conversationsApi.getById(conversation.id);
       setCurrentConversation(response.data);
+      useConversationStore.getState().clearSimulationUnless(response.data.id);
       // Also load the deck if one exists in the conversation
       if (response.data.current_deck) {
         setCurrentDeck(response.data.current_deck);

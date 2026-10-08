@@ -13,6 +13,8 @@ interface ConversationState {
   lastConversationId: string | null;
   conversationIds: string[]; // conversations this browser started, for signed-out history
   conversationMode: ConversationMode;
+  simulationId: string | null;
+  simulationConversationId: string | null; // the conversation the playtest belongs to
 
   setCurrentConversation: (conversation: Conversation | null) => void;
   setConversations: (conversations: Conversation[]) => void;
@@ -21,6 +23,8 @@ interface ConversationState {
   setFormat: (format: string) => void;
   setCardSuggestions: (suggestions: CardSuggestionGroup[] | null) => void;
   setConversationMode: (mode: ConversationMode) => void;
+  setSimulationId: (id: string | null, conversationId?: string | null) => void;
+  clearSimulationUnless: (conversationId: string) => void;
   reset: () => void;
 }
 
@@ -35,6 +39,8 @@ export const useConversationStore = create<ConversationState>()(
       lastConversationId: null,
       conversationIds: [],
       conversationMode: null,
+      simulationId: null,
+      simulationConversationId: null,
 
       setCurrentConversation: (conversation) => {
         // When loading a conversation, also set its format from current_deck if available
@@ -82,6 +88,17 @@ export const useConversationStore = create<ConversationState>()(
 
       setConversationMode: (conversationMode) => set({ conversationMode }),
 
+      setSimulationId: (simulationId, conversationId = null) =>
+        set({ simulationId, simulationConversationId: simulationId ? conversationId : null }),
+
+      // Drop the playtest unless it belongs to the conversation being loaded.
+      clearSimulationUnless: (conversationId) =>
+        set((state) =>
+          state.simulationConversationId === conversationId
+            ? {}
+            : { simulationId: null, simulationConversationId: null }
+        ),
+
       reset: () =>
         set({
           currentConversation: null,
@@ -91,6 +108,8 @@ export const useConversationStore = create<ConversationState>()(
           cardSuggestions: null,
           lastConversationId: null,
           conversationMode: null,
+          simulationId: null,
+          simulationConversationId: null,
         }),
     }),
     {
@@ -102,6 +121,8 @@ export const useConversationStore = create<ConversationState>()(
         lastConversationId: state.lastConversationId,
         conversationIds: state.conversationIds,
         conversationMode: state.conversationMode,
+        simulationId: state.simulationId,
+        simulationConversationId: state.simulationConversationId,
       }),
     }
   )

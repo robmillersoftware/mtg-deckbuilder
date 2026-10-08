@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # meta and matchup answers: a stronger model invents fewer card abilities
     ANSWER_MODEL: str = "anthropic/claude-haiku-4.5"
 
+    # Forge game simulation (the sim-worker container)
+    FORGE_HOME: str = "/opt/forge"
+    FORGE_SNAPSHOT_URL: str = ""  # build-time only: read by docker compose, set by scripts/update_forge.sh
+    FORGE_WORKERS: int = 0  # concurrent Forge JVMs; 0 picks CPU count - 2, at most 6
+    FORGE_ENABLED: bool = True  # playtest decks built from chat when the sim worker is running
+
     # OpenAI (for embeddings)
     OPENAI_API_KEY: Optional[str] = None
 

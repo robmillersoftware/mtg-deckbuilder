@@ -19,6 +19,9 @@ interface DeckListProps {
   editable?: boolean;
   className?: string;
   flagged?: string[];
+  highlighted?: string[];
+  /** Cards just cut, still listed (struck through, not counted) so the change is visible. */
+  struck?: DeckEntry[];
 }
 
 export function DeckList({
@@ -32,14 +35,18 @@ export function DeckList({
   onQuantityChange,
   onAddCard,
   flagged,
+  highlighted,
+  struck,
   editable = false,
   className,
 }: DeckListProps) {
   const flaggedSet = new Set((flagged ?? []).map(normalizeCardName));
+  const highlightedSet = new Set((highlighted ?? []).map(normalizeCardName));
   // Check if this is a commander format
   const isCommanderFormat = format === 'commander' || format === 'cedh';
   // Group cards by type
-  const groupedMain = useMemo(() => groupCardsByType(mainDeck), [mainDeck]);
+  const struckSet = new Set((struck ?? []).map((e) => e.card_name));
+  const groupedMain = useMemo(() => groupCardsByType([...mainDeck, ...(struck ?? [])]), [mainDeck, struck]);
 
   const mainCount = useMemo(
     () => mainDeck.reduce((sum, e) => sum + e.quantity, 0),
@@ -86,6 +93,7 @@ export function DeckList({
                 target="main"
                 explanation={cardExplanations?.[commander.card_name]}
                 flagged={flaggedSet.has(normalizeCardName(commander.card_name))}
+                highlighted={highlightedSet.has(normalizeCardName(commander.card_name))}
                 onClick={onCardClick}
                 editable={false}
               />
@@ -102,7 +110,7 @@ export function DeckList({
           {Object.entries(groupedMain).map(([type, cards]) => (
             <div key={type} className="mb-3">
               <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">
-                {type} ({cards.reduce((sum, c) => sum + c.quantity, 0)})
+                {type} ({cards.reduce((sum, c) => sum + (struckSet.has(c.card_name) ? 0 : c.quantity), 0)})
               </h4>
               <div className="space-y-0.5">
                 {cards.map((entry) => (
@@ -112,9 +120,11 @@ export function DeckList({
                     target="main"
                     explanation={cardExplanations?.[entry.card_name]}
                 flagged={flaggedSet.has(normalizeCardName(entry.card_name))}
+                highlighted={highlightedSet.has(normalizeCardName(entry.card_name))}
+                    struck={struckSet.has(entry.card_name)}
                     onClick={onCardClick}
                     onQuantityChange={onQuantityChange}
-                    editable={editable}
+                    editable={editable && !struckSet.has(entry.card_name)}
                   />
                 ))}
               </div>
@@ -136,6 +146,7 @@ export function DeckList({
                   target="sideboard"
                   explanation={cardExplanations?.[entry.card_name]}
                 flagged={flaggedSet.has(normalizeCardName(entry.card_name))}
+                highlighted={highlightedSet.has(normalizeCardName(entry.card_name))}
                   onClick={onCardClick}
                   onQuantityChange={onQuantityChange}
                   editable={editable}
@@ -174,9 +185,11 @@ interface CardEntryProps {
   onQuantityChange?: (cardName: string, quantity: number, target: 'main' | 'sideboard') => void;
   editable?: boolean;
   flagged?: boolean;
+  highlighted?: boolean;
+  struck?: boolean;
 }
 
-function CardEntry({ entry, target, explanation, onClick, onQuantityChange, editable, flagged }: CardEntryProps) {
+function CardEntry({ entry, target, explanation, onClick, onQuantityChange, editable, flagged, highlighted, struck }: CardEntryProps) {
   const handleClick = () => {
     onClick?.(entry.card_name);
   };
@@ -206,7 +219,12 @@ function CardEntry({ entry, target, explanation, onClick, onQuantityChange, edit
           {entry.quantity}
         </span>
         <CardTooltip cardName={entry.card_name} explanation={explanation}>
-          <span className="text-white text-sm">{entry.card_name}</span>
+          <span
+            className={clsx('text-sm', struck ? 'text-gray-500 line-through' : highlighted ? 'text-green-300' : 'text-white')}
+            title={struck ? 'Cut by the playtest' : undefined}
+          >
+            {entry.card_name}
+          </span>
         </CardTooltip>
         {flagged && (
           <span title="Low fit with this deck's theme" className="text-xs text-amber-400">

@@ -104,6 +104,7 @@ class DeckGenerator:
         # Jev assembly builds 60-card decks from recent tournament cards. It raises
         # when Jev is unavailable or fails, or for cEDH/Commander: then the LLM path.
         deck_data = None
+        assembly = None
         try:
             # SAVEPOINT: a SQL error inside assemble must not abort the session the LLM path reuses
             async with self.db.begin_nested():
@@ -116,6 +117,7 @@ class DeckGenerator:
                     include_sideboard=include_sideboard,
                     archetype=parsed_request.get("archetype", ""),
                 )
+            assembly = {k: deck_data.get(k) for k in ("reference", "relatives", "colors", "synergy", "requested")}
         except Exception as e:
             logger.warning(f"[DECK-GEN] Jev assembly unavailable, using the LLM path: {e}", exc_info=True)
 
@@ -256,6 +258,7 @@ class DeckGenerator:
         ]
 
         return DeckGenerateResponse(
+            assembly=assembly,
             deck=DeckResponse(
                 id=deck.id,
                 owner_id=user_id or uuid4(),
