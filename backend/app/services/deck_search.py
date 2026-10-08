@@ -25,11 +25,11 @@ class Stopped(Exception):
 
 @dataclass
 class SearchConfig:
-    screen_games: int = 20  # per matchup, for the baseline and each candidate
-    confirm_games: int = 50  # per matchup, for the final check
-    max_rounds: int = 6
-    candidates: int = 6  # swaps tried per round
-    budget_s: float = 360.0
+    screen_games: int = 8  # per matchup, for the baseline and each candidate
+    confirm_games: int = 12  # per matchup, for the final check
+    max_rounds: int = 3
+    candidates: int = 3  # swaps tried per round
+    budget_s: float = 240.0
     min_casts: int = 5  # games cast before a card's win rate is trusted
     stuck_rate: float = 0.15  # cast in fewer games than this: stuck in hand or uncastable
     problem_rate: float = 0.15  # screw or flood rate that earns a land-count candidate

@@ -26,7 +26,7 @@ from app.services.sim_runs import Progress, SimError, enqueue, entries_of, main_
 
 logger = logging.getLogger(__name__)
 
-BUILD_MINUTES = 6
+BUILD_MINUTES = 8
 NOT_RUNNING_NOTE = "Couldn't playtest this deck (the simulator isn't running), so this is the untested build."
 REPLACE_QUESTION = ("Which card should replace the card in `deck.cut`? It underperformed when this deck was "
                     "playtested; prefer a card that helps against the decks in `deck.losing_to`.")

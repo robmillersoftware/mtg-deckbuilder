@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 MIN_GAMES, MAX_GAMES, TEST_GAMES = 10, 200, 50
 MAX_EVENTS = 60
-JOB_TIMEOUT_S = 1800
+JOB_TIMEOUT_S = 3600
 
 
 class SimError(ValueError):

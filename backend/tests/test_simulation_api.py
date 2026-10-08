@@ -94,3 +94,21 @@ async def test_archetypes_use_the_latest_snapshot_and_dedupe():
     assert await api.list_archetypes("standard", db) == ["Dimir Aggro", "UW Control"]
     stmt = str(db.execute.call_args.args[0])
     assert "max(" in stmt and "snapshot_date" in stmt
+
+
+async def test_stalled_run_is_reported_failed(monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setattr(api, "queue_position", lambda run_id: None)
+    run = saved_run(user_id=None, status="running", updated_at=datetime.utcnow() - timedelta(minutes=20))
+    db = db_returning(run)
+    resp = await api.get_simulation(run.id, db, None)
+    assert resp.status == "failed" and resp.error == "The playtest stopped responding before it finished."
+    db.commit.assert_awaited()
+
+
+async def test_recently_updated_run_stays_running(monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setattr(api, "queue_position", lambda run_id: None)
+    run = saved_run(user_id=None, status="running", updated_at=datetime.utcnow() - timedelta(minutes=1))
+    resp = await api.get_simulation(run.id, db_returning(run), None)
+    assert resp.status == "running" and resp.error is None

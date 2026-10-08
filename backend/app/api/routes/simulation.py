@@ -1,6 +1,6 @@
 """Forge simulations: test a deck against the meta, read live progress and the report, stop a run."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
@@ -20,6 +20,18 @@ from app.services.deck_fill import SIXTY_CARD_FORMATS
 from app.services.sim_runs import MAX_GAMES, MIN_GAMES, TEST_GAMES, enqueue, queue_position
 
 router = APIRouter()
+
+STALE_AFTER = timedelta(minutes=15)
+STALLED = "The playtest stopped responding before it finished."
+
+
+def reap_if_stale(run: SimulationRun) -> bool:
+    """Fail a running run that has not reported progress for STALE_AFTER (its job died)."""
+    if run.status == "running" and run.updated_at and datetime.utcnow() - run.updated_at > STALE_AFTER:
+        run.status, run.error = "failed", STALLED
+        return True
+    return False
+
 
 NOT_RUNNING = "The simulator isn't running right now, so this deck can't be tested. Try again in a few minutes."
 
@@ -107,6 +119,8 @@ async def list_simulations(db: AsyncSession = Depends(get_db),
         return []
     runs = (await db.execute(select(SimulationRun).where(SimulationRun.user_id == current_user.id)
                              .order_by(SimulationRun.created_at.desc()).limit(20))).scalars().all()
+    if any([reap_if_stale(r) for r in runs]):
+        await db.commit()
     return [to_response(r) for r in runs]
 
 
@@ -132,6 +146,8 @@ async def get_simulation(simulation_id: UUID, db: AsyncSession = Depends(get_db)
     run = await db.get(SimulationRun, simulation_id)
     if not visible(run, current_user):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Simulation not found")
+    if reap_if_stale(run):
+        await db.commit()
     return to_response(run)
 
 
@@ -142,6 +158,8 @@ async def stop_simulation(simulation_id: UUID, db: AsyncSession = Depends(get_db
     run = await db.get(SimulationRun, simulation_id)
     if not visible(run, current_user):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Simulation not found")
+    if reap_if_stale(run):
+        await db.commit()
     if run.status in ("completed", "failed", "stopped"):
         return to_response(run)
     run.stop_requested = True

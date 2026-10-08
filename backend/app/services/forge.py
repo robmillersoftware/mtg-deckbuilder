@@ -23,7 +23,7 @@ SIDES = (TESTED, OPPONENT)
 GAMES_PER_PROCESS = 10  # games per JVM; a JVM takes about 4 s to start
 GAME_TIMEOUT_S = 60  # Forge calls a slower game a draw
 JVM_ARGS = ["-Xmx1g", "-Djava.awt.headless=true", "-Dio.netty.tryReflectionSetAccessible=true",
-            "-Dfile.encoding=UTF-8"]
+            "-Dfile.encoding=UTF-8", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1"]
 
 
 class ForgeError(RuntimeError):

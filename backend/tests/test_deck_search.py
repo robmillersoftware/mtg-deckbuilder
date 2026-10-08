@@ -74,8 +74,8 @@ async def test_keeps_a_clearly_better_swap_and_confirms_it():
     change = result.changes[0]
     assert change["before"] == pytest.approx(0.25) and change["after"] == pytest.approx(0.75)
     assert result.stopped == "no_improvement"
-    screen = {seed for _, games, seed in calls if games == 20}
-    confirm = [(m, seed) for m, games, seed in calls if games == 50]
+    screen = {seed for _, games, seed in calls if games == ds.SearchConfig().screen_games}
+    confirm = [(m, seed) for m, games, seed in calls if games == ds.SearchConfig().confirm_games]
     assert screen == {5} and [m for m, _ in confirm] == [SEED, result.main] and len({s for _, s in confirm}) == 1
     assert any(kind == "kept" and "Dud" in text and "Good" in text for kind, text in progress.events)
     assert any(kind == "tried" and "Dud won 0% of the games it was cast in" in text for kind, text in progress.events)
@@ -142,8 +142,8 @@ async def test_stop_after_a_kept_change():
     assert result.main == {"Forest": 24, "Meh": 4, "Filler": 28, "Good": 4}
     # baseline is first-draft stats, final is after the swap
     assert result.baseline[0].win_rate != result.final[0].win_rate
-    # no 50-game confirmation calls
-    confirm = [(m, games) for m, games, _ in calls if games == 50]
+    # no confirmation calls
+    confirm = [(m, games) for m, games, _ in calls if games == ds.SearchConfig().confirm_games]
     assert len(confirm) == 0
 
 
@@ -167,7 +167,7 @@ async def test_max_rounds():
     assert result.stopped == "max_rounds"
     assert len(result.changes) == 1  # round 1 keeps the swap
     # confirmation still runs
-    confirm = [(m, games) for m, games, _ in calls if games == 50]
+    confirm = [(m, games) for m, games, _ in calls if games == ds.SearchConfig().confirm_games]
     assert len(confirm) == 2  # seed and final
 
 
