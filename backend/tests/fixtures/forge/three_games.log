@@ -1,0 +1,987 @@
+Simulation mode
+Ai(1)-Tested vs Ai(2)-Opponent - three games of Constructed seed 7
+Mulligan: Ai(1)-Tested has kept a hand of 7 cards
+Mulligan: Ai(2)-Opponent has kept a hand of 7 cards
+Turn: Turn 1 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (46)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Mana: Forest (46) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Sazh's Chocobo
+Resolve Stack: Sazh's Chocobo - Creature 0 / 1
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 2 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: Inspiring Vantage enters tapped unless you control two or fewer other lands.
+Land: Ai(2)-Opponent played Inspiring Vantage (98)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 3 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Replacement Effect: This land enters tapped unless you control a basic land.
+Land: Ai(1)-Tested played Ba Sing Se (50)
+Add To Stack: Ai(1)-Tested triggered Sazh's Chocobo
+Resolve Stack: Landfall — Whenever a land you control enters, put a +1/+1 counter on this creature. [Zone Changer: Ba Sing Se (50)]
+Mana: Forest (46) - {T}: Add {G}.
+Mana: Ba Sing Se (50) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Shared Roots
+Resolve Stack: Shared Roots (54) - Ai(1)-Tested searches their library for a basic land card, puts it onto the battlefield tapped, then shuffles.
+Add To Stack: Ai(1)-Tested triggered Sazh's Chocobo
+Resolve Stack: Landfall — Whenever a land you control enters, put a +1/+1 counter on this creature. [Zone Changer: Forest (39)]
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Combat: Ai(1)-Tested assigned Sazh's Chocobo (8) to attack Ai(2)-Opponent.
+Phase: Ai(1)-Tested's Declare Blockers Step
+Combat: Ai(2)-Opponent didn't block Sazh's Chocobo (8).
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Damage: Sazh's Chocobo (8) deals 2 combat damage to Ai(2)-Opponent.
+Life: Life: Ai(2)-Opponent 20 > 18
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Mana: Inspiring Vantage (98) - {T}: Add {R} or {W}.
+Add To Stack: Ai(2)-Opponent cast Burst Lightning targeting [Ai(1)-Tested]
+Damage: Burst Lightning (130) deals 2 non-combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 20 > 18
+Resolve Stack: Burst Lightning (130) - Burst Lightning (130) deals 2 damage to Ai(1)-Tested.
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 4 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: Inspiring Vantage enters tapped unless you control two or fewer other lands.
+Land: Ai(2)-Opponent played Inspiring Vantage (101)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Mana: Inspiring Vantage (98) - {T}: Add {R} or {W}.
+Mana: Inspiring Vantage (101) - {T}: Add {R} or {W}.
+Add To Stack: Ai(2)-Opponent cast Voice of Victory
+Resolve Stack: Voice of Victory - Creature 1 / 3
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 5 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Escape Tunnel (31)
+Add To Stack: Ai(1)-Tested triggered Sazh's Chocobo
+Resolve Stack: Landfall — Whenever a land you control enters, put a +1/+1 counter on this creature. [Zone Changer: Escape Tunnel (31)]
+Zone Change: Escape Tunnel (31) was put into Graveyard from Battlefield.
+Add To Stack: Ai(1)-Tested activated Escape Tunnel
+Resolve Stack: Escape Tunnel (31) - Ai(1)-Tested searches their library for a basic land card, puts it onto the battlefield tapped, then shuffles.
+Add To Stack: Ai(1)-Tested triggered Sazh's Chocobo
+Resolve Stack: Landfall — Whenever a land you control enters, put a +1/+1 counter on this creature. [Zone Changer: Forest (49)]
+Mana: Forest (46) - {T}: Add {G}.
+Mana: Forest (39) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Esper Origins
+Resolve Stack: Ai(1)-Tested surveiled 2 card(s) to the top of the library
+Life: Life: Ai(1)-Tested 18 > 20
+Resolve Stack: Esper Origins (21) - Ai(1)-Tested surveils (2). Ai(1)-Tested gains 2 life. Exile Esper Origins (21). Put  onto the battlefield. 
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Combat: Ai(1)-Tested assigned Sazh's Chocobo (8) to attack Ai(2)-Opponent.
+Phase: Ai(1)-Tested's Declare Blockers Step
+Combat: Ai(2)-Opponent didn't block Sazh's Chocobo (8).
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Damage: Sazh's Chocobo (8) deals 4 combat damage to Ai(2)-Opponent.
+Life: Life: Ai(2)-Opponent 18 > 14
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 6 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Combat: Ai(2)-Opponent assigned Voice of Victory (96) to attack Ai(1)-Tested.
+Add To Stack: Ai(2)-Opponent triggered Voice of Victory
+Resolve Stack: Mobilize 2 (When this creature attacks, create two tapped and attacking 1/1 red Warrior creature tokens. Sacrifice them at the beginning of the next end step.) [Attacker: Voice of Victory (96)]
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Combat: Ai(1)-Tested didn't block Voice of Victory (96).
+Ai(1)-Tested didn't block Warrior Token (153).
+Ai(1)-Tested didn't block Warrior Token (154).
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Damage: Voice of Victory (96) deals 1 combat damage to Ai(1)-Tested.
+Damage: Warrior Token (153) deals 1 combat damage to Ai(1)-Tested.
+Damage: Warrior Token (154) deals 1 combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 20 > 17
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Mana: Inspiring Vantage (98) - {T}: Add {R} or {W}.
+Mana: Inspiring Vantage (101) - {T}: Add {R} or {W}.
+Add To Stack: Ai(2)-Opponent cast Voice of Victory
+Resolve Stack: Voice of Victory - Creature 1 / 3
+Phase: Ai(2)-Opponent's End step
+Add To Stack: Ai(2)-Opponent triggered Voice of Victory
+Zone Change: Warrior Token (153) was put into Graveyard from Battlefield.
+Zone Change: Warrior Token (154) was put into Graveyard from Battlefield.
+Resolve Stack: Sacrifice Warrior Token (153) and Warrior Token (154) at the beginning of the next end step. ([Warrior Token (153), Warrior Token (154)]) [Phase: Ai(2)-Opponent]
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 7 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Mana: Forest (46) - {T}: Add {G}.
+Mana: Forest (39) - {T}: Add {G}.
+Mana: Forest (49) - {T}: Add {G}.
+Mana: Ba Sing Se (50) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Esper Origins
+Resolve Stack: Ai(1)-Tested surveiled 2 card(s) to the top of the library
+Life: Life: Ai(1)-Tested 17 > 19
+Replacement Effect: Summon: Esper Maduin enters with a lore counter on it.
+Resolve Stack: Esper Origins (21) - Ai(1)-Tested surveils (2). Ai(1)-Tested gains 2 life. Exile Summon: Esper Maduin (21). Put  onto the battlefield. 
+Add To Stack: Ai(1)-Tested triggered Summon: Esper Maduin
+Resolve Stack: I — Reveal the top card of your library. If it's a permanent card, put it into your hand. [Added once: Summon: Esper Maduin (21)]
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Combat: Ai(1)-Tested assigned Sazh's Chocobo (8) to attack Ai(2)-Opponent.
+Phase: Ai(1)-Tested's Declare Blockers Step
+Combat: Ai(2)-Opponent didn't block Sazh's Chocobo (8).
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Damage: Sazh's Chocobo (8) deals 4 combat damage to Ai(2)-Opponent.
+Life: Life: Ai(2)-Opponent 14 > 10
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 8 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: As this land enters, choose a basic land type. Then you may pay 2 life. If you don't, it enters tapped.
+Land: Ai(2)-Opponent played Multiversal Passage (132)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 9 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Add To Stack: Ai(1)-Tested triggered Summon: Esper Maduin
+Resolve Stack: II — Add {G}{G}. [Added once: Summon: Esper Maduin (21)]
+Mana: Forest (46) - {T}: Add {G}.
+Mana: Forest (39) - {T}: Add {G}.
+Mana: Forest (49) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Sapling Nursery
+Resolve Stack: Sapling Nursery
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Combat: Ai(1)-Tested assigned Sazh's Chocobo (8) and Summon: Esper Maduin (21) to attack Ai(2)-Opponent.
+Phase: Ai(1)-Tested's Declare Blockers Step
+Combat: Ai(2)-Opponent assigned Voice of Victory (96) to block Sazh's Chocobo (8).
+Ai(2)-Opponent didn't block Summon: Esper Maduin (21).
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Damage: Sazh's Chocobo (8) deals 4 damage to Voice of Victory (96).
+Damage: Summon: Esper Maduin (21) deals 4 combat damage to Ai(2)-Opponent.
+Damage: Voice of Victory (96) deals 1 damage to Sazh's Chocobo (8).
+Life: Life: Ai(2)-Opponent 10 > 6
+Zone Change: Voice of Victory (96) was put into Graveyard from Battlefield.
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 10 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Mana: Inspiring Vantage (98) - {T}: Add {R} or {W}.
+Mana: Multiversal Passage (132) - {T}: Add {U}.
+Mana: Inspiring Vantage (101) - {T}: Add {R} or {W}.
+Add To Stack: Ai(2)-Opponent cast Clarion Conqueror
+Resolve Stack: Clarion Conqueror - Creature 3 / 3
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 11 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Add To Stack: Ai(1)-Tested triggered Summon: Esper Maduin
+Resolve Stack: III — Other creatures you control get +2/+2 and gain trample until end of turn. [Added once: Summon: Esper Maduin (21)]
+Zone Change: Summon: Esper Maduin (21) was put into Exile from Battlefield.
+Replacement Effect: If Summon: Esper Maduin would die, exile it instead.
+Mana: Forest (46) - {T}: Add {G}.
+Mana: Forest (39) - {T}: Add {G}.
+Mana: Forest (49) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested activated Ba Sing Se targeting [Forest (46)]
+Resolve Stack: Ba Sing Se (50) - Earthbend 2. (Target land you control becomes a 0/0 creature with haste that's still a land. Put  two +1/+1 counters on it. When it dies or is exiled, return it to the battlefield tapped under your control.)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Combat: Ai(1)-Tested assigned Sazh's Chocobo (8) to attack Ai(2)-Opponent.
+Phase: Ai(1)-Tested's Declare Blockers Step
+Combat: Ai(2)-Opponent assigned Voice of Victory (94) and Clarion Conqueror (109) to block Sazh's Chocobo (8).
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Damage: Sazh's Chocobo (8) deals 3 damage to Clarion Conqueror (109).
+Damage: Sazh's Chocobo (8) deals 3 damage to Voice of Victory (94).
+Damage: Voice of Victory (94) deals 1 damage to Sazh's Chocobo (8).
+Damage: Clarion Conqueror (109) deals 3 damage to Sazh's Chocobo (8).
+Zone Change: Voice of Victory (94) was put into Graveyard from Battlefield.
+Zone Change: Clarion Conqueror (109) was put into Graveyard from Battlefield.
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 12 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Mana: Inspiring Vantage (98) - {T}: Add {R} or {W}.
+Add To Stack: Ai(2)-Opponent cast Burst Lightning targeting [Forest (46)]
+Damage: Burst Lightning (129) deals 2 damage to Forest (46).
+Resolve Stack: Burst Lightning (129) - Burst Lightning (129) deals 2 damage to Forest (46).
+Zone Change: Forest (46) was put into Graveyard from Battlefield.
+Add To Stack: Ai(1)-Tested triggered Ba Sing Se
+Resolve Stack: When it dies or is exiled, return it to the battlefield tapped. ([Forest (46)]) [Zone Changer: Forest (46)]
+Add To Stack: Ai(1)-Tested triggered Sazh's Chocobo
+Add To Stack: Ai(1)-Tested triggered Sapling Nursery
+Resolve Stack: Landfall — Whenever a land you control enters, create a 3/4 green Treefolk creature token with reach. [Zone Changer: Forest (46)]
+Resolve Stack: Landfall — Whenever a land you control enters, put a +1/+1 counter on this creature. [Zone Changer: Forest (46)]
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Life: Life: Ai(2)-Opponent 6 > 4
+Replacement Effect: As Sacred Foundry enters, you may pay 2 life. If you don't, it enters tapped.
+Land: Ai(2)-Opponent played Sacred Foundry (87)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Mana: Inspiring Vantage (101) - {T}: Add {R} or {W}.
+Mana: Multiversal Passage (132) - {T}: Add {U}.
+Mana: Sacred Foundry (87) - {T}: Add {R}.
+Add To Stack: Ai(2)-Opponent cast Clarion Conqueror
+Resolve Stack: Clarion Conqueror - Creature 3 / 3
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 13 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Mana: Forest (39) - {T}: Add {G}.
+Mana: Forest (49) - {T}: Add {G}.
+Mana: Forest (46) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested activated Ba Sing Se targeting [Forest (39)]
+Resolve Stack: Ba Sing Se (50) - Earthbend 2. (Target land you control becomes a 0/0 creature with haste that's still a land. Put  two +1/+1 counters on it. When it dies or is exiled, return it to the battlefield tapped under your control.)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Combat: Ai(1)-Tested assigned Sazh's Chocobo (8) and Treefolk Token (157) to attack Ai(2)-Opponent.
+Phase: Ai(1)-Tested's Declare Blockers Step
+Combat: Ai(2)-Opponent assigned Clarion Conqueror (107) to block Sazh's Chocobo (8).
+Ai(2)-Opponent didn't block Treefolk Token (157).
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Damage: Sazh's Chocobo (8) deals 5 damage to Clarion Conqueror (107).
+Damage: Treefolk Token (157) deals 3 combat damage to Ai(2)-Opponent.
+Damage: Clarion Conqueror (107) deals 3 damage to Sazh's Chocobo (8).
+Life: Life: Ai(2)-Opponent 4 > 1
+Zone Change: Clarion Conqueror (107) was put into Graveyard from Battlefield.
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 14 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: As this land enters, choose a basic land type. Then you may pay 2 life. If you don't, it enters tapped.
+Land: Ai(2)-Opponent played Multiversal Passage (135)
+Mana: Inspiring Vantage (98) - {T}: Add {R} or {W}.
+Mana: Inspiring Vantage (101) - {T}: Add {R} or {W}.
+Mana: Multiversal Passage (132) - {T}: Add {U}.
+Mana: Sacred Foundry (87) - {T}: Add {R}.
+Add To Stack: Ai(2)-Opponent cast Smaug the Magnificent
+Resolve Stack: Smaug the Magnificent - Creature 4 / 3
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 15 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Mana: Forest (49) - {T}: Add {G}.
+Mana: Forest (46) - {T}: Add {G}.
+Mana: Forest (39) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested activated Ba Sing Se targeting [Forest (49)]
+Resolve Stack: Ba Sing Se (50) - Earthbend 2. (Target land you control becomes a 0/0 creature with haste that's still a land. Put  two +1/+1 counters on it. When it dies or is exiled, return it to the battlefield tapped under your control.)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Combat: Ai(1)-Tested assigned Sazh's Chocobo (8) and Treefolk Token (157) to attack Ai(2)-Opponent.
+Phase: Ai(1)-Tested's Declare Blockers Step
+Combat: Ai(2)-Opponent assigned Smaug the Magnificent (118) to block Sazh's Chocobo (8).
+Ai(2)-Opponent didn't block Treefolk Token (157).
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Damage: Sazh's Chocobo (8) deals 5 damage to Smaug the Magnificent (118).
+Damage: Treefolk Token (157) deals 3 combat damage to Ai(2)-Opponent.
+Damage: Smaug the Magnificent (118) deals 4 damage to Sazh's Chocobo (8).
+Life: Life: Ai(2)-Opponent 1 > -2
+Player Control: Ai(1)-Tested has restored control over themself
+Player Control: Ai(2)-Opponent has restored control over themself
+Game Outcome: Match Duration 0m : 01s
+Game Outcome: Turn 8
+Game Outcome: Ai(1)-Tested has won because all opponents have lost
+Game Outcome: Ai(2)-Opponent has lost because life total reached 0
+Match Result: Ai(1)-Tested: 1 Ai(2)-Opponent: 0 
+
+Game Result: Game 1 ended in 1904 ms. Ai(1)-Tested has won!
+
+Sarkhan, Dragon Ascendant Did not have activator set in SpellAbilityRestriction.canPlay()
+Voice of Victory Did not have activator set in SpellAbilityRestriction.canPlay()
+Mulligan: Ai(2)-Opponent has kept a hand of 7 cards
+Mulligan: Ai(1)-Tested has kept a hand of 7 cards
+Turn: Turn 1 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: As Sacred Foundry enters, you may pay 2 life. If you don't, it enters tapped.
+Land: Ai(2)-Opponent played Sacred Foundry (89)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 2 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (36)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 3 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: As Cavern of Souls enters, choose a creature type.
+Land: Ai(2)-Opponent played Cavern of Souls (77)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Mana: Sacred Foundry (89) - {T}: Add {R}.
+Mana: Cavern of Souls (77) - {T}: Add {C}.
+Add To Stack: Ai(2)-Opponent cast Sarkhan, Dragon Ascendant
+Resolve Stack: Sarkhan, Dragon Ascendant - Creature 2 / 2
+Add To Stack: Ai(2)-Opponent triggered Sarkhan, Dragon Ascendant
+Resolve Stack: When Sarkhan enters, you may behold a Dragon. If you do, create a Treasure token. (To behold a Dragon, choose a Dragon you control or reveal a Dragon card from your hand.) [Zone Changer: Sarkhan, Dragon Ascendant (113)]
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 4 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (48)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 5 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: As this land enters, choose a basic land type. Then you may pay 2 life. If you don't, it enters tapped.
+Land: Ai(2)-Opponent played Multiversal Passage (132)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Combat: Ai(2)-Opponent assigned Sarkhan, Dragon Ascendant (113) to attack Ai(1)-Tested.
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Combat: Ai(1)-Tested didn't block Sarkhan, Dragon Ascendant (113).
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Damage: Sarkhan, Dragon Ascendant (113) deals 2 combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 20 > 18
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Mana: Sacred Foundry (89) - {T}: Add {W}.
+Mana: Cavern of Souls (77) - {T}: Add {C}.
+Add To Stack: Ai(2)-Opponent cast Voice of Victory
+Resolve Stack: Voice of Victory - Creature 1 / 3
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 6 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (40)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Mana: Forest (36) - {T}: Add {G}.
+Mana: Forest (48) - {T}: Add {G}.
+Mana: Forest (40) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Surrak, Elusive Hunter
+Resolve Stack: Surrak, Elusive Hunter - Creature 4 / 3
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 7 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: Inspiring Vantage enters tapped unless you control two or fewer other lands.
+Land: Ai(2)-Opponent played Inspiring Vantage (99)
+Mana: Sacred Foundry (89) - {T}: Add {R}.
+Mana: Multiversal Passage (132) - {T}: Add {U}.
+Add To Stack: Ai(2)-Opponent cast Charring Bite targeting [Surrak, Elusive Hunter (59)]
+Add To Stack: Ai(1)-Tested triggered Surrak, Elusive Hunter
+Resolve Stack: Whenever a creature you control or a creature spell you control becomes the target of a spell or ability an opponent controls, draw a card. [Source: Charring Bite (119), Target: Surrak, Elusive Hunter (59)]
+Damage: Charring Bite (119) deals 5 damage to Surrak, Elusive Hunter (59).
+Resolve Stack: Charring Bite (119) - Charring Bite (119) deals 5 damage to Surrak, Elusive Hunter (59).
+Replacement Effect: Omen
+Zone Change: Surrak, Elusive Hunter (59) was put into Graveyard from Battlefield.
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Combat: Ai(2)-Opponent assigned Voice of Victory (95) and Sarkhan, Dragon Ascendant (113) to attack Ai(1)-Tested.
+Add To Stack: Ai(2)-Opponent triggered Voice of Victory
+Resolve Stack: Mobilize 2 (When this creature attacks, create two tapped and attacking 1/1 red Warrior creature tokens. Sacrifice them at the beginning of the next end step.) [Attacker: Voice of Victory (95)]
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Combat: Ai(1)-Tested didn't block Voice of Victory (95).
+Ai(1)-Tested didn't block Sarkhan, Dragon Ascendant (113).
+Ai(1)-Tested didn't block Warrior Token (157).
+Ai(1)-Tested didn't block Warrior Token (158).
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Damage: Voice of Victory (95) deals 1 combat damage to Ai(1)-Tested.
+Damage: Sarkhan, Dragon Ascendant (113) deals 2 combat damage to Ai(1)-Tested.
+Damage: Warrior Token (157) deals 1 combat damage to Ai(1)-Tested.
+Damage: Warrior Token (158) deals 1 combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 18 > 13
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Zone Change: Treasure Token (154) was put into Graveyard from Battlefield.
+Mana: Treasure Token (154) - {T}, Sacrifice this token: Add one mana of any color.
+Mana: Cavern of Souls (77) - {T}: Add {C}.
+Add To Stack: Ai(2)-Opponent cast Voice of Victory
+Resolve Stack: Voice of Victory - Creature 1 / 3
+Phase: Ai(2)-Opponent's End step
+Add To Stack: Ai(2)-Opponent triggered Voice of Victory
+Zone Change: Warrior Token (157) was put into Graveyard from Battlefield.
+Zone Change: Warrior Token (158) was put into Graveyard from Battlefield.
+Resolve Stack: Sacrifice Warrior Token (157) and Warrior Token (158) at the beginning of the next end step. ([Warrior Token (157), Warrior Token (158)]) [Phase: Ai(2)-Opponent]
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 8 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (43)
+Mana: Forest (36) - {T}: Add {G}.
+Mana: Forest (48) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Esper Origins
+Resolve Stack: Ai(1)-Tested surveiled 2 card(s) to the top of the library
+Life: Life: Ai(1)-Tested 13 > 15
+Resolve Stack: Esper Origins (21) - Ai(1)-Tested surveils (2). Ai(1)-Tested gains 2 life. Exile Esper Origins (21). Put  onto the battlefield. 
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Mana: Forest (40) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Llanowar Elves
+Resolve Stack: Llanowar Elves - Creature 1 / 1
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 9 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Life: Life: Ai(2)-Opponent 20 > 18
+Replacement Effect: As Sacred Foundry enters, you may pay 2 life. If you don't, it enters tapped.
+Land: Ai(2)-Opponent played Sacred Foundry (86)
+Mana: Inspiring Vantage (99) - {T}: Add {R} or {W}.
+Mana: Sacred Foundry (89) - {T}: Add {R}.
+Mana: Multiversal Passage (132) - {T}: Add {U}.
+Mana: Sacred Foundry (86) - {T}: Add {R}.
+Mana: Cavern of Souls (77) - {T}: Add one mana of any color. Spend this mana only to cast a creature spell of the chosen type, and that spell can't be countered.
+Add To Stack: Ai(2)-Opponent cast Nova Hellkite
+Resolve Stack: Nova Hellkite - Creature 4 / 5
+Add To Stack: Ai(2)-Opponent triggered Nova Hellkite targeting [Llanowar Elves (25)]
+Add To Stack: Ai(2)-Opponent triggered Sarkhan, Dragon Ascendant
+Resolve Stack: Whenever a Dragon you control enters, put a +1/+1 counter on Sarkhan. Until end of turn, Sarkhan becomes a Dragon in addition to its other types and gains flying. [Zone Changer: Nova Hellkite (125)]
+Damage: Nova Hellkite (125) deals 1 damage to Llanowar Elves (25).
+Resolve Stack: When this creature enters, it deals 1 damage to target creature an opponent controls. (Targeting: [[Llanowar Elves (25)]]) [Zone Changer: Nova Hellkite (125)]
+Zone Change: Llanowar Elves (25) was put into Graveyard from Battlefield.
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Combat: Ai(2)-Opponent assigned Voice of Victory (95), Voice of Victory (94), Nova Hellkite (125) and Sarkhan, Dragon Ascendant (113) to attack Ai(1)-Tested.
+Add To Stack: Ai(2)-Opponent triggered Voice of Victory
+Add To Stack: Ai(2)-Opponent triggered Voice of Victory
+Resolve Stack: Mobilize 2 (When this creature attacks, create two tapped and attacking 1/1 red Warrior creature tokens. Sacrifice them at the beginning of the next end step.) [Attacker: Voice of Victory (94)]
+Resolve Stack: Mobilize 2 (When this creature attacks, create two tapped and attacking 1/1 red Warrior creature tokens. Sacrifice them at the beginning of the next end step.) [Attacker: Voice of Victory (95)]
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Combat: Ai(1)-Tested didn't block Voice of Victory (95).
+Ai(1)-Tested didn't block Voice of Victory (94).
+Ai(1)-Tested didn't block Nova Hellkite (125).
+Ai(1)-Tested didn't block Sarkhan, Dragon Ascendant (113).
+Ai(1)-Tested didn't block Warrior Token (163).
+Ai(1)-Tested didn't block Warrior Token (164).
+Ai(1)-Tested didn't block Warrior Token (166).
+Ai(1)-Tested didn't block Warrior Token (167).
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Damage: Voice of Victory (95) deals 1 combat damage to Ai(1)-Tested.
+Damage: Voice of Victory (94) deals 1 combat damage to Ai(1)-Tested.
+Damage: Nova Hellkite (125) deals 4 combat damage to Ai(1)-Tested.
+Damage: Sarkhan, Dragon Ascendant (113) deals 3 combat damage to Ai(1)-Tested.
+Damage: Warrior Token (163) deals 1 combat damage to Ai(1)-Tested.
+Damage: Warrior Token (164) deals 1 combat damage to Ai(1)-Tested.
+Damage: Warrior Token (166) deals 1 combat damage to Ai(1)-Tested.
+Damage: Warrior Token (167) deals 1 combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 15 > 2
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Phase: Ai(2)-Opponent's End step
+Add To Stack: Ai(2)-Opponent triggered Voice of Victory
+Add To Stack: Ai(2)-Opponent triggered Voice of Victory
+Zone Change: Warrior Token (166) was put into Graveyard from Battlefield.
+Zone Change: Warrior Token (167) was put into Graveyard from Battlefield.
+Resolve Stack: Sacrifice Warrior Token (166) and Warrior Token (167) at the beginning of the next end step. ([Warrior Token (166), Warrior Token (167)]) [Phase: Ai(2)-Opponent]
+Zone Change: Warrior Token (163) was put into Graveyard from Battlefield.
+Zone Change: Warrior Token (164) was put into Graveyard from Battlefield.
+Resolve Stack: Sacrifice Warrior Token (163) and Warrior Token (164) at the beginning of the next end step. ([Warrior Token (163), Warrior Token (164)]) [Phase: Ai(2)-Opponent]
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 10 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (39)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Mana: Forest (36) - {T}: Add {G}.
+Mana: Forest (48) - {T}: Add {G}.
+Mana: Forest (40) - {T}: Add {G}.
+Mana: Forest (43) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Icetill Explorer
+Resolve Stack: Icetill Explorer - Creature 2 / 4
+Land: Ai(1)-Tested played Fabled Passage (1)
+Add To Stack: Ai(1)-Tested triggered Icetill Explorer
+Zone Change: Ai(1)-Tested milled Shared Roots (53).
+Resolve Stack: Landfall — Whenever a land you control enters, mill a card. [Zone Changer: Fabled Passage (1)]
+Zone Change: Fabled Passage (1) was put into Graveyard from Battlefield.
+Add To Stack: Ai(1)-Tested activated Fabled Passage
+Resolve Stack: Fabled Passage (1) - Search your library for a basic land card, put it onto the battlefield tapped, then shuffle. Then if you control four or more lands, untap that land.  
+Add To Stack: Ai(1)-Tested triggered Icetill Explorer
+Zone Change: Ai(1)-Tested milled Fabled Passage (4).
+Resolve Stack: Landfall — Whenever a land you control enters, mill a card. [Zone Changer: Forest (47)]
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 11 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Mana: Inspiring Vantage (99) - {T}: Add {R} or {W}.
+Mana: Multiversal Passage (132) - {T}: Add {U}.
+Mana: Sacred Foundry (89) - {T}: Add {R}.
+Mana: Sacred Foundry (86) - {T}: Add {R}.
+Mana: Cavern of Souls (77) - {T}: Add {C}.
+Add To Stack: Ai(2)-Opponent cast Burst Lightning targeting [Ai(1)-Tested]
+Damage: Burst Lightning (130) deals 4 non-combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 2 > -2
+Resolve Stack: Burst Lightning (130) - Burst Lightning (130) deals 4 damage to Ai(1)-Tested.
+Player Control: Ai(1)-Tested has restored control over themself
+Player Control: Ai(2)-Opponent has restored control over themself
+Game Outcome: Match Duration 0m : 00s
+Game Outcome: Turn 6
+Game Outcome: Ai(1)-Tested has lost because life total reached 0
+Game Outcome: Ai(2)-Opponent has won because all opponents have lost
+Match Result: Ai(1)-Tested: 1 Ai(2)-Opponent: 1 
+
+Game Result: Game 2 ended in 648 ms. Ai(2)-Opponent has won!
+
+Mulligan: Ai(1)-Tested has kept a hand of 7 cards
+Mulligan: Ai(2)-Opponent has kept a hand of 7 cards
+Turn: Turn 1 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (45)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Mana: Forest (45) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Llanowar Elves
+Resolve Stack: Llanowar Elves - Creature 1 / 1
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 2 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Land: Ai(2)-Opponent played Plains (123)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Mana: Plains (123) - {T}: Add {W}.
+Add To Stack: Ai(2)-Opponent cast Erode targeting [Llanowar Elves (26)]
+Zone Change: Llanowar Elves (26) was put into Graveyard from Battlefield.
+Resolve Stack: Erode (122) - Destroy Llanowar Elves (26). 
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 3 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Replacement Effect: This land enters tapped unless you control a basic land.
+Land: Ai(1)-Tested played Ba Sing Se (50)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Mana: Forest (45) - {T}: Add {G}.
+Mana: Forest (39) - {T}: Add {G}.
+Mana: Ba Sing Se (50) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested cast Mightform Harmonizer
+Resolve Stack: Mightform Harmonizer - Creature 4 / 4 (Warped)
+Phase: Ai(1)-Tested's End step
+Add To Stack: Ai(1)-Tested triggered Mightform Harmonizer
+Zone Change: Mightform Harmonizer (19) was put into Exile from Battlefield.
+Resolve Stack: Exile Mightform Harmonizer (19) at the beginning of the next end step. ([Mightform Harmonizer (19)]) [Phase: Ai(1)-Tested]
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 4 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Land: Ai(2)-Opponent played Sunbillow Verge (91)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Mana: Plains (123) - {T}: Add {W}.
+Add To Stack: Ai(2)-Opponent cast Momo, Friendly Flier
+Resolve Stack: Momo, Friendly Flier - Creature 1 / 1
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 5 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (46)
+Mana: Forest (45) - {T}: Add {G}.
+Mana: Forest (39) - {T}: Add {G}.
+Mana: Forest (46) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested activated Ba Sing Se targeting [Forest (45)]
+Resolve Stack: Ba Sing Se (50) - Earthbend 2. (Target land you control becomes a 0/0 creature with haste that's still a land. Put  two +1/+1 counters on it. When it dies or is exiled, return it to the battlefield tapped under your control.)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 6 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Mana: Sunbillow Verge (91) - {T}: Add {R}. Activate only if you control a Mountain or a Plains.
+Add To Stack: Ai(2)-Opponent cast Burst Lightning targeting [Forest (45)]
+Damage: Burst Lightning (128) deals 2 damage to Forest (45).
+Resolve Stack: Burst Lightning (128) - Burst Lightning (128) deals 2 damage to Forest (45).
+Zone Change: Forest (45) was put into Graveyard from Battlefield.
+Add To Stack: Ai(1)-Tested triggered Ba Sing Se
+Resolve Stack: When it dies or is exiled, return it to the battlefield tapped. ([Forest (45)]) [Zone Changer: Forest (45)]
+Phase: Ai(2)-Opponent's Main phase, precombat
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Combat: Ai(2)-Opponent assigned Momo, Friendly Flier (82) to attack Ai(1)-Tested.
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Combat: Ai(1)-Tested didn't block Momo, Friendly Flier (82).
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Damage: Momo, Friendly Flier (82) deals 1 combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 20 > 19
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Replacement Effect: As Cavern of Souls enters, choose a creature type.
+Land: Ai(2)-Opponent played Cavern of Souls (78)
+Mana: Plains (123) - {T}: Add {W}.
+Mana: Cavern of Souls (78) - {T}: Add one mana of any color. Spend this mana only to cast a creature spell of the chosen type, and that spell can't be countered.
+Add To Stack: Ai(2)-Opponent cast Clarion Conqueror
+Resolve Stack: Clarion Conqueror - Creature 3 / 3
+Add To Stack: Ai(2)-Opponent triggered Momo, Friendly Flier
+Resolve Stack: Whenever another creature you control with flying enters, Momo gets +1/+1 until end of turn. [Zone Changer: Clarion Conqueror (107)]
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 7 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Forest (40)
+Mana: Forest (39) - {T}: Add {G}.
+Mana: Forest (46) - {T}: Add {G}.
+Mana: Forest (45) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested activated Ba Sing Se targeting [Forest (39)]
+Resolve Stack: Ba Sing Se (50) - Earthbend 2. (Target land you control becomes a 0/0 creature with haste that's still a land. Put  two +1/+1 counters on it. When it dies or is exiled, return it to the battlefield tapped under your control.)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 8 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Replacement Effect: Inspiring Vantage enters tapped unless you control two or fewer other lands.
+Land: Ai(2)-Opponent played Inspiring Vantage (98)
+Mana: Sunbillow Verge (91) - {T}: Add {R}. Activate only if you control a Mountain or a Plains.
+Mana: Cavern of Souls (78) - {T}: Add one mana of any color. Spend this mana only to cast a creature spell of the chosen type, and that spell can't be countered.
+Mana: Plains (123) - {T}: Add {W}.
+Add To Stack: Ai(2)-Opponent cast Smaug the Magnificent
+Resolve Stack: Smaug the Magnificent - Creature 4 / 3
+Add To Stack: Ai(2)-Opponent triggered Momo, Friendly Flier
+Resolve Stack: Whenever another creature you control with flying enters, Momo gets +1/+1 until end of turn. [Zone Changer: Smaug the Magnificent (115)]
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Combat: Ai(2)-Opponent assigned Smaug the Magnificent (115), Clarion Conqueror (107) and Momo, Friendly Flier (82) to attack Ai(1)-Tested.
+Add To Stack: Ai(2)-Opponent triggered Smaug the Magnificent targeting [Ai(1)-Tested]
+Resolve Stack: Whenever Smaug attacks, he deals damage equal to the number of Treasures you control to any target. (Targeting: [[Ai(1)-Tested]]) [Attacker: Smaug the Magnificent (115)]
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Combat: Ai(1)-Tested didn't block Smaug the Magnificent (115).
+Ai(1)-Tested didn't block Clarion Conqueror (107).
+Ai(1)-Tested didn't block Momo, Friendly Flier (82).
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Damage: Smaug the Magnificent (115) deals 4 combat damage to Ai(1)-Tested.
+Damage: Clarion Conqueror (107) deals 3 combat damage to Ai(1)-Tested.
+Damage: Momo, Friendly Flier (82) deals 2 combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 19 > 10
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 9 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Land: Ai(1)-Tested played Fabled Passage (3)
+Zone Change: Fabled Passage (3) was put into Graveyard from Battlefield.
+Add To Stack: Ai(1)-Tested activated Fabled Passage
+Resolve Stack: Fabled Passage (3) - Search your library for a basic land card, put it onto the battlefield tapped, then shuffle. Then if you control four or more lands, untap that land.  
+Mana: Forest (46) - {T}: Add {G}.
+Mana: Forest (45) - {T}: Add {G}.
+Mana: Forest (40) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested activated Ba Sing Se targeting [Forest (46)]
+Resolve Stack: Ba Sing Se (50) - Earthbend 2. (Target land you control becomes a 0/0 creature with haste that's still a land. Put  two +1/+1 counters on it. When it dies or is exiled, return it to the battlefield tapped under your control.)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Combat: Ai(1)-Tested assigned Forest (39) to attack Ai(2)-Opponent.
+Phase: Ai(1)-Tested's Declare Blockers Step
+Combat: Ai(2)-Opponent didn't block Forest (39).
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Damage: Forest (39) deals 2 combat damage to Ai(2)-Opponent.
+Life: Life: Ai(2)-Opponent 20 > 18
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 10 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Add To Stack: Ai(2)-Opponent triggered Smaug the Magnificent
+Resolve Stack: At the beginning of your upkeep, create a Treasure token. [Phase: Ai(2)-Opponent]
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Land: Ai(2)-Opponent played Sunbillow Verge (90)
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Combat: Ai(2)-Opponent assigned Smaug the Magnificent (115), Clarion Conqueror (107) and Momo, Friendly Flier (82) to attack Ai(1)-Tested.
+Add To Stack: Ai(2)-Opponent triggered Smaug the Magnificent targeting [Ai(1)-Tested]
+Damage: Smaug the Magnificent (115) deals 1 non-combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 10 > 9
+Resolve Stack: Whenever Smaug attacks, he deals damage equal to the number of Treasures you control to any target. (Targeting: [[Ai(1)-Tested]]) [Attacker: Smaug the Magnificent (115)]
+Phase: Ai(2)-Opponent's Declare Blockers Step
+Combat: Ai(1)-Tested didn't block Smaug the Magnificent (115).
+Ai(1)-Tested didn't block Clarion Conqueror (107).
+Ai(1)-Tested didn't block Momo, Friendly Flier (82).
+Phase: Ai(2)-Opponent's First Strike Damage Step
+Phase: Ai(2)-Opponent's Combat Damage Step
+Damage: Smaug the Magnificent (115) deals 4 combat damage to Ai(1)-Tested.
+Damage: Clarion Conqueror (107) deals 3 combat damage to Ai(1)-Tested.
+Damage: Momo, Friendly Flier (82) deals 1 combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 9 > 1
+Phase: Ai(2)-Opponent's End of Combat Step
+Phase: Ai(2)-Opponent's Main phase, postcombat
+Mana: Plains (123) - {T}: Add {W}.
+Mana: Inspiring Vantage (98) - {T}: Add {R} or {W}.
+Add To Stack: Ai(2)-Opponent cast Clarion Conqueror
+Resolve Stack: Clarion Conqueror - Creature 3 / 3
+Add To Stack: Ai(2)-Opponent triggered Momo, Friendly Flier
+Resolve Stack: Whenever another creature you control with flying enters, Momo gets +1/+1 until end of turn. [Zone Changer: Clarion Conqueror (106)]
+Phase: Ai(2)-Opponent's End step
+Phase: Ai(2)-Opponent's Cleanup step
+Turn: Turn 11 (Ai(1)-Tested)
+Phase: Ai(1)-Tested's Untap step
+Phase: Ai(1)-Tested's Upkeep step
+Phase: Ai(1)-Tested's Draw step
+Phase: Ai(1)-Tested's Main phase, precombat
+Replacement Effect: This land enters tapped unless you control a basic land.
+Land: Ai(1)-Tested played Ba Sing Se (52)
+Mana: Forest (45) - {T}: Add {G}.
+Mana: Forest (40) - {T}: Add {G}.
+Mana: Forest (49) - {T}: Add {G}.
+Add To Stack: Ai(1)-Tested activated Ba Sing Se targeting [Forest (45)]
+Resolve Stack: Ba Sing Se (50) - Earthbend 2. (Target land you control becomes a 0/0 creature with haste that's still a land. Put  two +1/+1 counters on it. When it dies or is exiled, return it to the battlefield tapped under your control.)
+Phase: Ai(1)-Tested's Beginning of Combat Step
+Phase: Ai(1)-Tested's Declare Attackers Step
+Phase: Ai(1)-Tested's Declare Blockers Step
+Phase: Ai(1)-Tested's First Strike Damage Step
+Phase: Ai(1)-Tested's Combat Damage Step
+Phase: Ai(1)-Tested's End of Combat Step
+Phase: Ai(1)-Tested's Main phase, postcombat
+Phase: Ai(1)-Tested's End step
+Phase: Ai(1)-Tested's Cleanup step
+Turn: Turn 12 (Ai(2)-Opponent)
+Phase: Ai(2)-Opponent's Untap step
+Phase: Ai(2)-Opponent's Upkeep step
+Add To Stack: Ai(2)-Opponent triggered Smaug the Magnificent
+Resolve Stack: At the beginning of your upkeep, create a Treasure token. [Phase: Ai(2)-Opponent]
+Phase: Ai(2)-Opponent's Draw step
+Phase: Ai(2)-Opponent's Main phase, precombat
+Phase: Ai(2)-Opponent's Beginning of Combat Step
+Phase: Ai(2)-Opponent's Declare Attackers Step
+Combat: Ai(2)-Opponent assigned Smaug the Magnificent (115), Clarion Conqueror (107), Clarion Conqueror (106) and Momo, Friendly Flier (82) to attack Ai(1)-Tested.
+Add To Stack: Ai(2)-Opponent triggered Smaug the Magnificent targeting [Ai(1)-Tested]
+Damage: Smaug the Magnificent (115) deals 2 non-combat damage to Ai(1)-Tested.
+Life: Life: Ai(1)-Tested 1 > -1
+Resolve Stack: Whenever Smaug attacks, he deals damage equal to the number of Treasures you control to any target. (Targeting: [[Ai(1)-Tested]]) [Attacker: Smaug the Magnificent (115)]
+Player Control: Ai(1)-Tested has restored control over themself
+Player Control: Ai(2)-Opponent has restored control over themself
+Game Outcome: Match Duration 0m : 00s
+Game Outcome: Turn 6
+Game Outcome: Ai(1)-Tested has lost because life total reached 0
+Game Outcome: Ai(2)-Opponent has won because all opponents have lost
+Match Result: Ai(1)-Tested: 1 Ai(2)-Opponent: 2 
+
+Game Result: Game 3 ended in 577 ms. Ai(2)-Opponent has won!
+

@@ -52,6 +52,7 @@ yarn-error.log*
 dist/
 build/
 *.log
+!backend/tests/fixtures/forge/*.log
 
 # Test
 .coverage
