@@ -180,11 +180,13 @@ async def play(tested: Dict[str, int], matchups: Sequence[Matchup], games: int, 
     """`games` games of `tested` against each matchup, split into GAMES_PER_PROCESS
     chunks on up to workers() concurrent JVMs. Chunk i of every matchup uses seed + i,
     so two decks played with the same seed see paired shuffles as far as Forge's RNG
-    allows. `on_progress(key, records)` runs after each chunk; if it raises, the other
-    chunks are cancelled and the exception propagates."""
+    allows. `on_progress(key, records)` runs after each chunk, one call at a time (callers
+    commit a shared DB session in it); if it raises, the other chunks are cancelled and
+    the exception propagates."""
     known = card_names()
     results: Dict[str, List[GameRecord]] = {m.key: [] for m in matchups}
     limit = asyncio.Semaphore(workers())
+    progress_lock = asyncio.Lock()
     with tempfile.TemporaryDirectory(prefix="forge-") as tmp:
         jobs = []
         for i, matchup in enumerate(matchups):
@@ -203,7 +205,8 @@ async def play(tested: Dict[str, int], matchups: Sequence[Matchup], games: int, 
                 raise ForgeError(f"Forge played no games: {output[-500:].strip()}")
             results[key].extend(records)
             if on_progress:
-                await on_progress(key, records)
+                async with progress_lock:
+                    await on_progress(key, records)
 
         try:
             async with asyncio.TaskGroup() as group:

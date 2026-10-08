@@ -1,5 +1,6 @@
 """Forge engine: card names, .dck files, log parsing, and running games in parallel."""
 
+import asyncio
 import sys
 import zipfile
 from pathlib import Path
@@ -105,6 +106,24 @@ class TestPlay:
         assert {name for *_, name in calls} == {"Name=Tested"}
         assert len(out["A"]) == len(out["B"]) == 9  # the fixture holds 3 games per process
         assert sorted(seen) == [("A", 3)] * 3 + [("B", 3)] * 3
+
+    async def test_on_progress_calls_never_overlap(self, monkeypatch):
+        calls, active, overlaps = [], [0], []
+        monkeypatch.setattr(forge, "command", replay_fixture(calls))
+        monkeypatch.setattr(forge, "card_names", lambda: KNOWN)
+        monkeypatch.setattr(forge, "GAMES_PER_PROCESS", 1)
+        monkeypatch.setattr(forge, "workers", lambda: 4)
+
+        async def on_progress(key, records):
+            active[0] += 1
+            overlaps.append(active[0] > 1)
+            await asyncio.sleep(0.05)
+            active[0] -= 1
+
+        await forge.play({"Forest": 60}, [forge.Matchup("A", {"Forest": 60}), forge.Matchup("B", {"Forest": 60})],
+                         games=4, seed=1, on_progress=on_progress)
+        assert len(overlaps) == 8
+        assert not any(overlaps)
 
     async def test_a_failed_process_raises_forge_error(self, monkeypatch):
         monkeypatch.setattr(forge, "command", lambda d, g, s: [sys.executable, "-c", "print('boom'); raise SystemExit(3)"])
