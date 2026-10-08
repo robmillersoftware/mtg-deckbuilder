@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.queue import sim_worker_running
+from app.models.conversation import Conversation
 from app.models.simulation import SimulationRun
 from app.services import forge, jev
 from app.services.deck_fill import (
@@ -124,6 +125,26 @@ async def replacement(db: AsyncSession, client, main: Dict[str, int], cut: str, 
     return picks[0][0] if picks else None
 
 
+def merge_entries(entries: Sequence[Dict[str, Any]], main: Dict[str, int]) -> List[Dict[str, Any]]:
+    """`main` as deck entries, keeping each existing entry (and its card object) with its
+    quantity updated; new cards get bare {card_name, quantity} entries."""
+    by_name = {e["card_name"]: e for e in entries}
+    return [{**by_name.get(n, {}), "card_name": n, "quantity": q} for n, q in main.items() if q > 0]
+
+
+async def write_back(db: AsyncSession, run: SimulationRun, main: Dict[str, int]) -> None:
+    """Put the playtested main deck into the run's conversation, unless the user has
+    changed the deck since the run started."""
+    if not run.conversation_id or main == main_of(run.deck["main_deck"]):
+        return
+    conversation = await db.get(Conversation, run.conversation_id)
+    deck = conversation.current_deck if conversation else None
+    # ponytail: read-then-write without a row lock; a chat edit landing in between is lost
+    if not deck or main_of(deck.get("main_deck") or []) != main_of(run.deck["main_deck"]):
+        return
+    conversation.current_deck = {**deck, "main_deck": merge_entries(deck["main_deck"], main)}
+
+
 async def run_build(db: AsyncSession, run: SimulationRun) -> None:
     opts = run.options or {}
     opponents = await gauntlet(db, run.format)
@@ -169,6 +190,7 @@ async def run_build(db: AsyncSession, run: SimulationRun) -> None:
     if run.status == "failed":  # the reaper gave up on this run while it played
         return
     run.error = None
+    await write_back(db, run, result.main)
     run.final_deck = {**run.deck, "main_deck": entries_of(result.main)}
     run.report = build_report(result.final, [r for rs in result.records.values() for r in rs], result.main, lands,
                               missing, baseline=result.baseline, changes=result.changes, stopped=result.stopped)

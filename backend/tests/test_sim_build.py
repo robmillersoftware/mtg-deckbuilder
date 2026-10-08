@@ -196,3 +196,44 @@ async def test_run_build_leaves_a_reaped_run_failed(monkeypatch):
     db.refresh = reaped
     await sb.run_build(db, run)
     assert run.status == "failed" and run.final_deck is None
+
+
+def test_merge_entries_keeps_card_objects():
+    card = {"type_line": "Instant"}
+    entries = [{"card_name": "Bolt", "quantity": 4, "card": card}, {"card_name": "Dud", "quantity": 4, "card": {}}]
+    assert sb.merge_entries(entries, {"Bolt": 3, "Shock": 1}) == [
+        {"card_name": "Bolt", "quantity": 3, "card": card}, {"card_name": "Shock", "quantity": 1}]
+
+
+def _swapped_search(monkeypatch):
+    from app.services.deck_search import SearchResult
+    final = {"Forest": 24, "Bolt": 32, "Shock": 4}
+
+    async def search(seed_main, opponents, *a, **k):
+        return SearchResult(final, [], [], {o.archetype: _records(8) for o in opponents},
+                            [{"cut": "Bolt", "add": "Shock", "copies": 4}], "no_improvement")
+    monkeypatch.setattr(sb, "playtest", search)
+    return final
+
+
+@pytest.mark.parametrize("edited", [False, True])
+async def test_run_build_writes_the_deck_back_unless_the_user_edited_it(monkeypatch, edited):
+    db = _wire(monkeypatch, True)
+    final = _swapped_search(monkeypatch)
+    run = _build_run()
+    run.conversation_id = uuid4()
+    card = {"type_line": "Instant"}
+    deck = {"name": "Brew", "format": "standard", "sideboard": [],
+            "main_deck": [{"card_name": "Forest", "quantity": 24, "card": {"type_line": "Basic Land"}},
+                          {"card_name": "Bolt", "quantity": 35 if edited else 36, "card": card}]}
+    conversation = SimpleNamespace(current_deck=deck)
+    db.get = AsyncMock(return_value=conversation)
+    await sb.run_build(db, run)
+    assert run.status == "completed" and sb.main_of(run.final_deck["main_deck"]) == final
+    if edited:
+        assert conversation.current_deck is deck
+    else:
+        assert conversation.current_deck["name"] == "Brew"
+        assert conversation.current_deck["main_deck"] == [
+            {"card_name": "Forest", "quantity": 24, "card": {"type_line": "Basic Land"}},
+            {"card_name": "Bolt", "quantity": 32, "card": card}, {"card_name": "Shock", "quantity": 4}]
