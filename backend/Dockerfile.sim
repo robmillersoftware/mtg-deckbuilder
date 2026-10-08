@@ -1,0 +1,26 @@
+# Simulation worker: the backend plus Java and Forge (github.com/Card-Forge/forge)
+FROM python:3.11-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    default-jre-headless \
+    curl \
+    bzip2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# A Forge release tarball; scripts/update_forge.sh sets the newest daily snapshot in .env
+ARG FORGE_SNAPSHOT_URL
+RUN test -n "$FORGE_SNAPSHOT_URL" || (echo "Set FORGE_SNAPSHOT_URL: run scripts/update_forge.sh" && exit 1)
+RUN mkdir -p /opt/forge && curl -fsSL "$FORGE_SNAPSHOT_URL" | tar xj -C /opt/forge
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["python", "rq_worker.py", "--queues", "spellbook_sim"]

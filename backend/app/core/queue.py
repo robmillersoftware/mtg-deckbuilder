@@ -7,7 +7,7 @@ beyond HTTP request completion.
 
 import logging
 from redis import Redis
-from rq import Queue
+from rq import Queue, Worker
 
 from app.core.config import settings
 
@@ -21,6 +21,18 @@ job_queue = Queue("spellbook_jobs", connection=redis_conn)
 
 # High priority queue for urgent tasks
 high_priority_queue = Queue("spellbook_high", connection=redis_conn)
+
+# Forge simulations run on their own worker: the sim-worker container has Java and Forge
+SIM_QUEUE = "spellbook_sim"
+sim_queue = Queue(SIM_QUEUE, connection=redis_conn)
+
+
+def sim_worker_running() -> bool:
+    """Whether any worker listens on the simulation queue."""
+    try:
+        return any(SIM_QUEUE in w.queue_names() for w in Worker.all(connection=redis_conn))
+    except Exception:
+        return False
 
 
 def get_queue(priority: str = "default") -> Queue:
