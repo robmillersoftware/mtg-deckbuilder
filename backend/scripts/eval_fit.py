@@ -45,7 +45,7 @@ CASES = [
     (GRAVEYARD, c("Rest in Peace", "Enchantment",
                   "When Rest in Peace enters the battlefield, exile all graveyards.\nIf a card or token would be put into a graveyard from anywhere, exile it instead.", "{1}{W}"), "anti"),
     (GRAVEYARD, c("Lazotep Reaver", "Creature — Zombie Beast",
-                  "When Lazotep Reaver enters the battlefield, amass 1.", "{1}{B}"), "good"),
+                  "When Lazotep Reaver enters the battlefield, amass 1.", "{1}{B}"), "bad"),
     (GRAVEYARD, c("Healing Salve", "Instant", "You gain 3 life.", "{W}"), "bad"),
     (GRAVEYARD, c("Cling to Dust", "Instant",
                   "Exile target card from a graveyard. If it was a creature card, you gain 3 life. Otherwise, scry 1.", "{B}"), "bad"),

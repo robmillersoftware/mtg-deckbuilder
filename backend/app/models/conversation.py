@@ -55,13 +55,12 @@ class Conversation(Base):
 
     def add_message(self, role: str, content: str) -> None:
         """Add a message to the conversation."""
-        if self.messages is None:
-            self.messages = []
-        self.messages.append({
+        # a new list, not append: SQLAlchemy doesn't see in-place JSONB changes
+        self.messages = [*(self.messages or []), {
             "role": role,
             "content": content,
             "timestamp": datetime.utcnow().isoformat(),
-        })
+        }]
 
     def get_message_count(self) -> int:
         """Get the number of messages in the conversation."""

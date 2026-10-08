@@ -61,8 +61,12 @@ class TestApplyOverrides:
 
 class TestRank:
     def test_drops_anti_synergy_and_orders_by_total(self):
-        fit = {"Good": fs(1.0, 1.0), "Meh": fs(0.3, 0.3), "Anti": fs(1.0, 1.0, anti=0.9)}
+        fit = {"Good": fs(1.0, 1.0), "Meh": fs(0.4, 0.3), "Anti": fs(1.0, 1.0, anti=0.9)}
         assert deck_fit.rank(["Meh", "Anti", "Good"], fit, {}) == ["Good", "Meh"]
+
+    def test_drops_plan_fit_below_cutoff_even_when_popular(self):
+        fit = {"Fits": fs(0.34), "Low": fs(0.33, 1.0)}
+        assert deck_fit.rank(["Low", "Fits"], fit, {"low": 99}) == ["Fits"]
 
     def test_meta_frequency_breaks_fit_ties(self):
         fit = {"A": fs(0.5, 0.5), "B": fs(0.5, 0.5)}
@@ -199,8 +203,8 @@ class TestScoreFit:
         fit = await deck_fit.score_fit(DeckIdentity(), [], [card("A"), card("B")], client=client)
         assert fit == {}
 
-    async def test_no_api_key_returns_empty(self, monkeypatch):
-        monkeypatch.setattr(deck_fit.settings, "TYPESAFE_API_KEY", None)
+    async def test_no_api_key_returns_empty(self):
+        # conftest blanks TYPESAFE_API_KEY, so no client can be built
         assert await deck_fit.score_fit(DeckIdentity(), [], [card("A")]) == {}
 
     async def test_cancels_pending_tasks_on_first_failure(self):
@@ -329,3 +333,37 @@ async def test_deck_fit_route_includes_commander(monkeypatch):
     deck.main_deck.append({"card_name": "Cmdr"})
     await decks._deck_fit(MagicMock(commit=AsyncMock()), deck)
     assert seen["names"] == ["A", "Cmdr"]
+
+
+class TestRoleCheck:
+    async def test_role_nouls_per_candidate_roles(self):
+        def answer(state, qs):
+            nouls = {k: 0.0 for k, q in qs.items() if type(q).__name__ == "Noul"}
+            nouls.update({k: 0.8 for k in qs if k.startswith("role:")})
+            return nouls, {"plan_fit": 3.0}
+        client = FakeClient(answer)
+        fit = await deck_fit.score_fit(
+            DeckIdentity(), [], [card("A"), card("B")], client=client,
+            roles_by_candidate={"A": ["removal", "cards with surveil"]})
+        assert fit["A"].roles == {"removal": 0.8, "cards with surveil": 0.8}
+        assert fit["B"].roles == {}
+        qs_a = next(qs for s, qs in client.calls if s["candidate"]["name"] == "A")
+        assert qs_a["role:0"].instructions["role"] == deck_fit.role_description("removal")
+        assert qs_a["role:1"].instructions["role"] == "cards with surveil"
+        qs_b = next(qs for s, qs in client.calls if s["candidate"]["name"] == "B")
+        assert not any(k.startswith("role:") for k in qs_b)
+
+
+def test_role_description_expands_role_map_and_falls_back_to_name():
+    from app.models.card import ROLE_DEFINITIONS
+    assert deck_fit.role_description("Counterspells ") == ROLE_DEFINITIONS["counterspell"]
+    removal = deck_fit.role_description("removal")
+    assert ROLE_DEFINITIONS["removal_targeted"] in removal and ROLE_DEFINITIONS["removal_mass"] in removal
+    assert deck_fit.role_description("cards with surveil") == "cards with surveil"
+    assert deck_fit.role_description("payoffs") == "payoffs"
+
+
+def test_role_map_targets_are_defined_roles():
+    from app.models.card import CARD_ROLES, ROLE_DEFINITIONS, ROLE_MAP
+    assert set(ROLE_DEFINITIONS) == set(CARD_ROLES)
+    assert all(r in ROLE_DEFINITIONS for targets in ROLE_MAP.values() for r in targets)

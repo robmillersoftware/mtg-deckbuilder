@@ -20,7 +20,7 @@ from app.schemas.deck import (
 )
 from app.services.card_service import CardService
 from app.services.deck_validator import DeckValidator
-from app.services import deck_fit
+from app.services import deck_fill, deck_fit
 from app.services.ai_service import AIService
 from app.core.security import generate_share_token
 
@@ -48,6 +48,7 @@ class DeckGenerator:
         format: str = "standard",
         colors: Optional[List[str]] = None,
         specific_cards: Optional[List[str]] = None,
+        include_explanations: bool = False,
     ) -> DeckGenerateResponse:
         """
         Generate a deck based on natural language prompt.
@@ -60,6 +61,7 @@ class DeckGenerator:
             format: Game format (standard, historic, modern, legacy, cedh)
             colors: Optional explicit colors (skip parsing if provided)
             specific_cards: Optional explicit specific cards (skip parsing if provided)
+            include_explanations: Whether to generate per-card explanations (one extra LLM call)
 
         Returns:
             DeckGenerateResponse with complete deck and strategy
@@ -99,33 +101,51 @@ class DeckGenerator:
                     colors = commander_colors
                     break  # Use the first card's color identity (assume it's the commander)
 
-        # Get meta data for context
-        meta_data = await self._get_meta_context(format=format)
+        # Jev assembly builds 60-card decks from recent tournament cards. It raises
+        # when Jev is unavailable or fails, or for cEDH/Commander: then the LLM path.
+        deck_data = None
+        try:
+            # SAVEPOINT: a SQL error inside assemble must not abort the session the LLM path reuses
+            async with self.db.begin_nested():
+                deck_data = await deck_fill.assemble(
+                    self.db,
+                    prompt,
+                    colors,
+                    specific_cards,
+                    format=format,
+                    include_sideboard=include_sideboard,
+                    archetype=parsed_request.get("archetype", ""),
+                )
+        except Exception as e:
+            logger.warning(f"[DECK-GEN] Jev assembly unavailable, using the LLM path: {e}", exc_info=True)
 
-        # Get archetype template for role distribution guidance
-        archetype_template = await self._get_archetype_template(
-            parsed_request.get("archetype", ""),
-            format=format,
-        )
-        if archetype_template:
-            logger.info(
-                f"Using {archetype_template['archetype_category']} template "
-                f"(from {archetype_template['sample_size']} tournament decks)"
+        if deck_data is None:
+            # Get meta data for context
+            meta_data = await self._get_meta_context(format=format)
+
+            # Get archetype template for role distribution guidance
+            archetype_template = await self._get_archetype_template(
+                parsed_request.get("archetype", ""),
+                format=format,
             )
+            if archetype_template:
+                logger.info(
+                    f"Using {archetype_template['archetype_category']} template "
+                    f"(from {archetype_template['sample_size']} tournament decks)"
+                )
 
-        # Generate the deck
-        # Preserve colors if user explicitly specified them (prevents tournament data override)
-        deck_data = await self.ai_service.generate_deck(
-            archetype=parsed_request.get("archetype", ""),
-            colors=colors,
-            strategy=parsed_request.get("strategy", ""),
-            meta_context=meta_data,
-            include_sideboard=include_sideboard,
-            specific_cards=specific_cards,
-            archetype_template=archetype_template,
-            format=format,
-            preserve_colors=colors_specified,
-        )
+            # Preserve colors if user explicitly specified them (prevents tournament data override)
+            deck_data = await self.ai_service.generate_deck(
+                archetype=parsed_request.get("archetype", ""),
+                colors=colors,
+                strategy=parsed_request.get("strategy", ""),
+                meta_context=meta_data,
+                include_sideboard=include_sideboard,
+                specific_cards=specific_cards,
+                archetype_template=archetype_template,
+                format=format,
+                preserve_colors=colors_specified,
+            )
 
         # Validate all cards exist and are legal
         main_deck = deck_data.get("main_deck", [])
@@ -152,6 +172,18 @@ class DeckGenerator:
         _, fit = await deck_fit.review_deck(self.db, fit_entries, prompt)
         fit_flagged = deck_fit.flag_low_fit(fit)
 
+        card_explanations = None
+        if include_explanations:
+            card_explanations = await self.ai_service.generate_card_explanations(
+                deck_data={
+                    "name": deck_data.get("name", "Generated Deck"),
+                    "main_deck": validated_main,
+                    "sideboard": validated_sideboard,
+                },
+                archetype=parsed_request.get("archetype", ""),
+                strategy=deck_data.get("strategy_summary", parsed_request.get("strategy", "")),
+            ) or None
+
         # Generate unique deck name if user is logged in
         deck_name = deck_data.get("name", "Generated Deck")
         if user_id:
@@ -168,6 +200,7 @@ class DeckGenerator:
             main_deck=validated_main,
             sideboard=validated_sideboard,
             strategy_summary=deck_data.get("strategy_summary", ""),
+            card_explanations=card_explanations,
             is_validated=validation.is_valid,
             validation_errors=[e.model_dump() for e in validation.errors] if validation.errors else None,
         )

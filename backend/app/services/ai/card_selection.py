@@ -303,6 +303,70 @@ class CardSelectionMixin:
         # Only include themes with meaningful signal (score >= 0.75)
         return [t for t, s in sorted_themes if s >= 0.75][:7]
 
+    async def _get_tournament_synergy_cards(
+        self,
+        themes: List[str],
+        limit: int = 40,
+        format: str = "standard"
+    ) -> List[Dict[str, Any]]:
+        """Get tournament-played cards that match the given themes."""
+        from app.models.card import Card
+        from app.models.meta import Decklist, Event
+
+        if not themes:
+            return []
+
+        # Get recent tournament decklists for the specified format
+        query = select(Decklist).join(Event).where(
+            Event.format == format
+        ).limit(100)
+        result = await self.db.execute(query)
+        decklists = result.scalars().all()
+
+        # Collect all cards from decklists
+        card_counts = defaultdict(int)
+        for decklist in decklists:
+            for entry in (decklist.main_deck or []):
+                card_name = entry.get("card_name", "")
+                if card_name:
+                    card_counts[card_name] += 1
+
+        # Get card data for the most played cards
+        top_cards = sorted(card_counts.items(), key=lambda x: x[1], reverse=True)[:200]
+        card_names = [c[0] for c in top_cards]
+
+        if not card_names:
+            return []
+
+        query = select(Card).where(
+            func.lower(Card.name).in_([n.lower() for n in card_names])
+        )
+        result = await self.db.execute(query)
+        cards = result.scalars().all()
+
+        # Filter to cards matching themes
+        matching_cards = []
+        for card in cards:
+            oracle = (card.oracle_text or "").lower()
+            type_line = (card.type_line or "").lower()
+            name_lower = card.name.lower()
+
+            for theme in themes:
+                theme_lower = theme.lower()
+                if (theme_lower in oracle or theme_lower in type_line or
+                    theme_lower in name_lower):
+                    matching_cards.append({
+                        "name": card.name,
+                        "mana_cost": card.mana_cost,
+                        "type_line": card.type_line,
+                        "recommended_quantity": 4,
+                        "frequency": card_counts.get(card.name, 1),
+                    })
+                    break
+
+        matching_cards.sort(key=lambda x: x["frequency"], reverse=True)
+        return matching_cards[:limit]
+
     async def _get_synergy_cards(
         self,
         themes: List[str],

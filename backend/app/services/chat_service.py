@@ -1,9 +1,10 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from uuid import UUID
+import asyncio
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from sqlalchemy import func as sqlfunc
 
@@ -19,8 +20,27 @@ from app.services.ai_service import AIService
 from app.services.guided_builder import DeckAnalyzer
 from app.services import deck_fit
 from app.core.config import settings
+from app.services import llm
+from app.services import chat_routing
+from app.services.deck_plan import RECENT
 
 logger = logging.getLogger(__name__)
+
+TEXT_ONLY_REPLY = "\n\nFor this turn, reply in text only; no tools are available."
+
+GROUNDED_ANSWER_SYSTEM = (
+    "You are Spellbook, a Magic: The Gathering deckbuilding partner. Answer the player's "
+    "message directly and commit to a recommendation: name the deck or approach you'd pick "
+    "and why. Don't refuse, hedge or hand back a menu of options. Use only the information "
+    "below: name only cards and decks that appear in it, and describe what a card does only "
+    "from its rules text there. Recommend a deck whose cards are listed, and cite only cards "
+    "from its own list as its cards; cards from other lists are what it plays against. It has no matchup win rates, so argue what beats what from "
+    "what the cards do. Never mention the information itself, data, rules text or where it "
+    "comes from. Write every card name as [[Card Name]] and deck names in bold, never in brackets. End with one concrete offer, such "
+    "as building the deck you recommended. Under 150 words; markdown is fine."
+)
+META_DECKS_WITH_CARDS = 6  # top meta archetypes whose key cards analyze_meta shows the LLM
+OPPONENT_CARDS = 15  # most-played main-deck cards shown for a named opponent archetype
 
 # Tool definitions for Claude - incremental collaborative builder
 TOOLS = [
@@ -56,7 +76,7 @@ TOOLS = [
                 "roles": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Role groups to suggest cards for. MUST use from: threats, creatures, removal, card advantage, card draw, counterspells, protection, ramp, burn, recursion, finishers, interaction, discard, lifegain, graveyard hate, tutors, sacrifice outlets, board wipes, spot removal, cheap threats, big threats"
+                    "description": "Role groups to suggest cards for. MUST use from: " + ", ".join(chat_routing.CORE_ROLES)
                 }
             },
             "required": ["strategy", "colors", "roles"]
@@ -163,6 +183,22 @@ TOOLS = [
 ]
 
 
+# The Build page shows a deck, not suggestion groups: there, a request that would
+# suggest cards for a deck that doesn't exist yet generates the whole deck instead.
+SUGGESTION_ACTIONS = {"suggest_core", "suggest_package"}
+
+
+def full_deck_prompt(colors: List[str], archetype: Optional[str], strategy: str,
+                     specific_cards: List[str]) -> str:
+    """The generator prompt for generate_full_deck; no archetype is invented when none was given."""
+    prompt = " ".join(["Build a", *colors, *([archetype] if archetype else []), "deck"])
+    if strategy:
+        prompt += f" focused on {strategy}"
+    if specific_cards:
+        prompt += f" including {', '.join(specific_cards)}"
+    return prompt
+
+
 class ChatService:
     """
     Chat service for processing user messages and generating responses.
@@ -258,11 +294,14 @@ class ChatService:
         user_id: Optional[UUID] = None,
         format: str = "standard",
         current_deck: Optional[Dict[str, Any]] = None,
+        mode: Optional[str] = None,
     ) -> ChatResponse:
         """
-        Process a user message using Claude with tools for incremental deck building.
+        Process a user message, routing it to a deck-building tool or a text reply.
+        `mode` is the frontend page: "build" generates whole decks, "guided" suggests cards.
         """
         self._current_format = format
+        self._routed_inputs = None
         logger.info(f"[CHAT] process_message called with format={format!r}")
 
         # Get or create conversation
@@ -283,13 +322,10 @@ class ChatService:
         # Add user message to conversation
         conversation.add_message("user", message)
 
-        if not settings.ANTHROPIC_API_KEY:
+        if not llm.is_configured():
             return await self._fallback_response(message, conversation, user_id)
 
         try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
             # Resolve card names mentioned in the message
             resolved_cards = await self._resolve_card_mentions(message, format)
 
@@ -374,6 +410,7 @@ RULES:
 - For questions about matchups, strategy, or "how do I beat X" - use get_matchup_info or respond with text advice only.
 - When the user says "what's good" or similar vague exploration, use analyze_meta.
 - Be concise in your text responses. Focus on actionable advice.
+- Write every card name as [[Card Name]].
 - If CARD REFERENCES are provided below, the card has already been identified from the database. Proceed directly with suggest_core using the resolved card.
 - IMPORTANT: When the user asks for "more support", "more help", "more options", or similar continuation requests, continue building on the CURRENT STRATEGY described in the conversation context above. Suggest more cards, offer alternative approaches within the strategy, or advance to the next phase.{card_context}"""
 
@@ -404,42 +441,38 @@ RULES:
             has_build_intent = any(
                 kw in message.lower() for kw in build_intent_keywords
             )
-            api_kwargs = {
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 2048,
-                "system": system_prompt,
-                "tools": TOOLS,
-                "messages": api_messages,
-            }
-            if (resolved_cards or format_illegal_cards or has_build_intent) and not deck:
-                # User named a card or expressed build intent and no deck
-                # exists yet -> force a tool call so cards go through the UI
-                api_kwargs["tool_choice"] = {"type": "any"}
+            # User named a card or expressed build intent and no deck exists
+            # yet -> force a tool call so cards go through the UI
+            require_tool = bool(
+                (resolved_cards or format_illegal_cards or has_build_intent) and not deck
+            )
+            response_text, tool_calls = await self._route_with_jev(
+                message, conversation, deck, resolved_cards, format,
+                require_tool, system_prompt, api_messages,
+            )
+            if not response_text and not tool_calls:
+                logger.info("[ROUTE] LLM tool call (Jev unavailable, failed, or not confident)")
+                response_text, tool_calls = llm.chat_with_tools(
+                    system=system_prompt,
+                    messages=api_messages,
+                    tools=TOOLS,
+                    require_tool=require_tool,
+                    max_tokens=2048,
+                )
 
-            response = client.messages.create(**api_kwargs)
+            if mode == "build" and not (deck or {}).get("main_deck"):
+                tool_calls = [self._as_full_deck(name, inp) for name, inp in tool_calls]
 
-            # Capture text content alongside tool use
-            response_text = ""
-            for content in response.content:
-                if hasattr(content, "text"):
-                    response_text += content.text
+            for tool_name, tool_input in tool_calls:
+                logger.debug(f"[CHAT-SERVICE] LLM called tool: {tool_name} with input: {tool_input}")
 
-            # Process tool calls
-            if response.stop_reason == "tool_use":
-                for content in response.content:
-                    if content.type == "tool_use":
-                        tool_name = content.name
-                        tool_input = content.input
+                result = await self._dispatch_tool(
+                    tool_name, tool_input, conversation, user_id, response_text
+                )
+                if result:
+                    return result
 
-                        logger.debug(f"[CHAT-SERVICE] Claude called tool: {tool_name} with input: {tool_input}")
-
-                        result = await self._dispatch_tool(
-                            tool_name, tool_input, conversation, user_id, response_text
-                        )
-                        if result:
-                            return result
-
-            # Claude responded with text only (no tool use)
+            # Text-only reply (no tool use)
             if response_text:
                 conversation.add_message("assistant", response_text)
                 await self.db.commit()
@@ -454,6 +487,81 @@ RULES:
             logger.error(f"Chat processing error: {e}", exc_info=True)
 
         return await self._fallback_response(message, conversation, user_id)
+
+    async def _route_with_jev(
+        self,
+        message: str,
+        conversation: Conversation,
+        deck: Optional[Dict[str, Any]],
+        resolved_cards: List[Dict[str, Any]],
+        format: str,
+        require_tool: bool,
+        system_prompt: str,
+        api_messages: List[Dict[str, str]],
+    ) -> Tuple[str, List[Tuple[str, Dict[str, Any]]]]:
+        """(reply text, tool calls) decided by Jev, or ("", []) to use the LLM tool call."""
+        ctx = conversation.get_context()
+        routed = await chat_routing.route(
+            message=message,
+            history=conversation.messages or [],
+            summary=chat_routing.deck_summary(deck, ctx.get("colors") or []),
+            strategy=ctx.get("strategy") or "",
+            card_names=[c["name"] for c in resolved_cards],
+            meta_archetypes=await self._meta_archetypes(format),
+            tools=TOOLS,
+        )
+        if routed is None or routed.confidence < chat_routing.ROUTE_CONFIDENCE:
+            return "", []
+        action = routed.action
+        if action == chat_routing.REPLY and require_tool:
+            action = routed.top_tool()
+        logger.info(f"[ROUTE] Jev action={action} confidence={routed.confidence:.2f}")
+        if action == chat_routing.REPLY:
+            transcript = "\n\n".join(f"{m['role']}: {m['content']}" for m in api_messages)
+            return llm.complete(system=system_prompt + TEXT_ONLY_REPLY, user=transcript), []
+        if action not in routed.inputs:
+            return "", []
+        self._routed_inputs = routed.inputs
+        return "", [(action, routed.inputs[action])]
+
+    def _as_full_deck(self, name: str, tool_input: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """Swap a suggestion action for full-deck generation, keeping its colors and strategy.
+        Prefers the inputs Jev routing already built for generate_full_deck."""
+        if name not in SUGGESTION_ACTIONS:
+            return name, tool_input
+        routed = (getattr(self, "_routed_inputs", None) or {}).get("generate_full_deck")
+        if routed is not None:
+            return "generate_full_deck", routed
+        keep = {k: tool_input[k] for k in ("colors", "strategy") if k in tool_input}
+        return "generate_full_deck", keep
+
+    async def _meta_archetypes(self, format: str) -> List[str]:
+        """Up to 10 unique archetype names from the format's latest snapshot, most-played
+        first. [] when Jev is not configured (nothing to route) or the query fails."""
+        from app.core.config import settings
+        from app.models.meta import MetaSnapshot
+
+        if not settings.TYPESAFE_API_KEY:
+            return []
+        latest = (
+            select(sqlfunc.max(MetaSnapshot.snapshot_date))
+            .where(MetaSnapshot.format == format)
+            .scalar_subquery()
+        )
+        try:
+            # SAVEPOINT: a failure undoes only this query, not the turn's pending work
+            async with self.db.begin_nested():
+                result = await self.db.execute(
+                    select(MetaSnapshot.archetype)
+                    .where(MetaSnapshot.format == format, MetaSnapshot.snapshot_date == latest)
+                    .order_by(MetaSnapshot.meta_percentage.desc().nulls_last())
+                    .limit(30)
+                )
+                names = result.scalars().all()
+            return list(dict.fromkeys(names))[:10]
+        except Exception as e:  # meta is optional context; never abort the turn
+            logger.warning(f"Meta archetype lookup failed, routing without it: {e}")
+            return []
 
     def _build_conversation_context(self, conversation: Conversation) -> str:
         """Build a structured context string from persisted conversation state.
@@ -739,8 +847,7 @@ RULES:
         snapshots = result.scalars().all()
 
         format_name = "cEDH" if format == "cedh" else format.capitalize()
-        response = ai_text + "\n\n" if ai_text else ""
-        response += f"**Current {format_name} Meta:**\n\n"
+        response = f"**Current {format_name} Meta:**\n\n"
 
         if snapshots:
             for snap in snapshots:
@@ -750,6 +857,14 @@ RULES:
             response += "No meta data available yet.\n"
 
         response += "\nWhat direction interests you? Name a card, pick colors, or choose an archetype and I'll start suggesting cards."
+        facts = response.rsplit("\nWhat direction", 1)[0]
+        for snap in snapshots[:META_DECKS_WITH_CARDS]:
+            cards = await self._archetype_cards(snap.archetype, format)
+            if cards:
+                facts += f"\n{snap.archetype}: most-played main-deck cards:\n" + "\n".join(cards) + "\n"
+        response = await self._answer_from_data(conversation, facts, response)
+        if ai_text:
+            response = ai_text + "\n\n" + response
 
         conversation.add_message("assistant", response)
         await self.db.commit()
@@ -1298,7 +1413,14 @@ RULES:
         opponent_deck = tool_input.get("opponent_deck", "")
 
         if not conversation.current_deck:
-            response = await self._get_general_meta_advice(opponent_deck)
+            fallback = await self._get_general_meta_advice(opponent_deck)
+            facts = fallback.split("**Tips against")[0]  # the canned tips are fallback only
+            if opponent_deck:
+                cards = await self._archetype_cards(opponent_deck, getattr(self, "_current_format", "standard"))
+                if cards:
+                    facts += f"\n\n{opponent_deck}: most-played main-deck cards in recent decklists " \
+                             "(average copies, cost, type, rules text):\n" + "\n".join(cards)
+            response = await self._answer_from_data(conversation, facts, fallback)
         else:
             response = await self._get_matchup_analysis(
                 conversation.current_deck, opponent_deck
@@ -1324,14 +1446,15 @@ RULES:
     ) -> ChatResponse:
         """Generate a complete deck in one shot (escape hatch)."""
         colors = tool_input.get("colors", [])
-        archetype = tool_input.get("archetype", "midrange")
+        archetype = tool_input.get("archetype")
         strategy = tool_input.get("strategy", "")
         specific_cards = tool_input.get("specific_cards", [])
         format = getattr(self, "_current_format", "standard")
         format_display = "cEDH" if format == "cedh" else format.capitalize()
 
-        # If no colors specified, try to pick from meta
-        if not colors:
+        # With neither colors nor a requested card, pick the top meta deck's colors; a
+        # requested card brings its own colors (the generator adds them)
+        if not colors and not specific_cards:
             from app.models.meta import MetaSnapshot
             result = await self.db.execute(
                 select(MetaSnapshot)
@@ -1345,14 +1468,10 @@ RULES:
                 if not strategy:
                     strategy = top.archetype
 
-        if not colors:
+        if not colors and not specific_cards:
             colors = ["R", "G"]
 
-        prompt = f"Build a {' '.join(colors) if colors else ''} {archetype} deck"
-        if strategy:
-            prompt += f" focused on {strategy}"
-        if specific_cards:
-            prompt += f" including {', '.join(specific_cards)}"
+        prompt = full_deck_prompt(colors, archetype, strategy, specific_cards)
 
         result = await self.deck_generator.generate(
             prompt=prompt,
@@ -1425,8 +1544,11 @@ RULES:
                 select(Conversation).where(Conversation.id == conversation_id)
             )
             conversation = result.scalar_one_or_none()
-            if conversation:
+            if conversation and conversation.user_id in (None, user_id):
+                if conversation.user_id is None and user_id:
+                    conversation.user_id = user_id  # signing in keeps an anonymous chat
                 return conversation
+            # someone else's conversation: start a new one rather than continue it
 
         conversation = Conversation(user_id=user_id, messages=[])
         self.db.add(conversation)
@@ -1503,6 +1625,59 @@ RULES:
             return ["Continue building", "Show more options", "Start over"]
 
         return ["Build me a deck", "What's the current meta?", "Help"]
+
+    async def _answer_from_data(self, conversation: Conversation, facts: str,
+                                fallback: Optional[str] = None) -> str:
+        """An LLM answer to the user's last message grounded in `facts`; `fallback`
+        (default `facts`) when the LLM is unavailable or fails."""
+        fallback = fallback or facts
+        message = next((m["content"] for m in reversed(conversation.messages or [])
+                        if m.get("role") == "user"), "")
+        if not message or not llm.is_configured():
+            return fallback
+        try:
+            answer = await asyncio.to_thread(
+                llm.complete, GROUNDED_ANSWER_SYSTEM, f"Message: {message}\n\nData:\n{facts}", 800,
+                settings.ANSWER_MODEL)
+        except Exception as e:
+            logger.warning(f"Grounded answer failed, using the data as-is: {e}")
+            return fallback
+        return answer.strip() or fallback
+
+    async def _archetype_cards(self, archetype: str, format: str) -> List[str]:
+        """The archetype's most-played main-deck cards in the recent window, with rules text."""
+        sql = text(f"""
+            WITH lists AS (
+              SELECT d.main_deck FROM decklists d JOIN events e ON e.id = d.event_id
+              WHERE {RECENT} AND lower(trim(d.archetype)) = lower(trim(:archetype))
+            ), totals AS (
+              SELECT c->>'card_name' AS name, SUM((c->>'quantity')::int)::float
+                     / (SELECT COUNT(*) FROM lists) AS avg_copies
+              FROM lists, jsonb_array_elements(lists.main_deck) c
+              GROUP BY 1
+            )
+            SELECT t.name, t.avg_copies, k.mana_cost, k.type_line, k.oracle_text
+            FROM totals t
+            LEFT JOIN LATERAL (
+              SELECT mana_cost, type_line, oracle_text FROM cards
+              WHERE lower(split_part(cards.name, ' // ', 1)) = lower(split_part(t.name, ' // ', 1))
+              LIMIT 1
+            ) k ON true
+            WHERE coalesce(k.type_line, '') NOT ILIKE 'Basic Land%'
+            ORDER BY t.avg_copies DESC, t.name
+            LIMIT :limit
+        """)
+        try:
+            rows = (await self.db.execute(
+                sql, {"format": format, "archetype": archetype, "limit": OPPONENT_CARDS})).all()
+        except Exception as e:
+            logger.warning(f"Archetype card lookup failed: {e}")
+            return []
+        return [
+            f"{r.avg_copies:.1f}x {r.name} ({r.mana_cost or ''} {r.type_line or ''}): "
+            + (r.oracle_text or "").replace("\n", " ")
+            for r in rows
+        ]
 
     async def _get_general_meta_advice(self, opponent_deck: str) -> str:
         """Get general meta advice when no deck context is available."""

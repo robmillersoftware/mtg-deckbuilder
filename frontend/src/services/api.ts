@@ -222,19 +222,21 @@ export const decksApi = {
 
 // Conversations API
 export const conversationsApi = {
-  list: (limit?: number, offset?: number) =>
-    api.get('/conversations', { params: { limit, offset } }),
+  // ids: this browser's conversations, used when signed out
+  list: (limit?: number, offset?: number, ids?: string[]) =>
+    api.get('/conversations', { params: { limit, offset, ids: ids?.join(',') || undefined } }),
 
   getById: (id: string) => api.get(`/conversations/${id}`),
 
   create: () => api.post('/conversations'),
 
-  sendMessage: (message: string, conversationId?: string, format?: string, currentDeck?: any) =>
+  sendMessage: (message: string, conversationId?: string, format?: string, currentDeck?: any, mode?: 'build' | 'guided') =>
     api.post('/conversations/chat', {
       message,
       conversation_id: conversationId,
       format: format || 'standard',
       current_deck: currentDeck || null,
+      mode: mode || null,
     }),
 
   explainCard: (cardName: string, conversationId?: string) =>

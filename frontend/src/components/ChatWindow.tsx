@@ -206,9 +206,7 @@ const cardLinePattern = /^(\d+)x?\s+(.+)$/;
 
 // Helper to parse card names from text and wrap them in tooltips
 function parseCardNames(text: string): React.ReactNode {
-  // Match card references like "[[Card Name]]" or deck list format "4 Card Name"
-  const bracketPattern = /\[\[([^\]]+)\]\]/g;
-
+  // Deck list format "4 Card Name", else [[Card Name]] references
   // Check if this is a deck list line
   const deckListMatch = text.match(cardLinePattern);
   if (deckListMatch) {
@@ -224,7 +222,12 @@ function parseCardNames(text: string): React.ReactNode {
     );
   }
 
-  // Check for [[Card Name]] syntax
+  return linkCardNames(text);
+}
+
+// Wrap [[Card Name]] references in tooltips
+function linkCardNames(text: string): React.ReactNode {
+  const bracketPattern = /\[\[([^\]]+)\]\]/g;
   const parts = text.split(bracketPattern);
   if (parts.length === 1) {
     return text;
@@ -250,7 +253,8 @@ function MessageBubble({ message }: MessageBubbleProps) {
   const markdownComponents: Components = useMemo(() => ({
     // Override paragraph rendering to detect card names
     p: ({ children }) => {
-      return <p>{children}</p>;
+      const kids = Array.isArray(children) ? children : [children];
+      return <p>{kids.map((child) => (typeof child === 'string' ? linkCardNames(child) : child))}</p>;
     },
     // Override list item to detect deck list entries
     li: ({ children }) => {
@@ -271,19 +275,10 @@ function MessageBubble({ message }: MessageBubbleProps) {
       }
       return <li>{children}</li>;
     },
-    // Handle strong/bold text that might be card names
+    // Bold is emphasis, not a card: card names come as [[Card Name]]
     strong: ({ children }) => {
-      if (typeof children === 'string') {
-        // Bold card names should have tooltips
-        return (
-          <strong>
-            <CardTooltip cardName={children}>
-              {children}
-            </CardTooltip>
-          </strong>
-        );
-      }
-      return <strong>{children}</strong>;
+      const kids = Array.isArray(children) ? children : [children];
+      return <strong>{kids.map((child) => (typeof child === 'string' ? linkCardNames(child) : child))}</strong>;
     },
   }), []);
 

@@ -1,85 +1,111 @@
 """Deck request parsing utilities."""
 
-import json
+import asyncio
 import logging
-from typing import List, Dict, Any
+import re
+from typing import Any, Dict, List, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import func, or_, select
+from typesafe_sdk import Choice, Noul
 
-from app.core.config import settings
+from app.services import jev
 
 logger = logging.getLogger(__name__)
 
 
-async def parse_deck_request(prompt: str, db: AsyncSession) -> Dict[str, Any]:
+ARCHETYPES = {
+    "aggro": "Wins fast with cheap creatures and direct damage",
+    "control": "Answers threats with removal, counterspells and card advantage, and wins late",
+    "midrange": "Efficient threats plus interaction; trades resources and wins with sturdy, value-generating cards",
+    "combo": "Assembles specific cards that win together",
+    "tempo": "Cheap threats backed by cheap disruption to stay ahead",
+}
+COLOR_NAMES = {"W": "white", "U": "blue", "B": "black", "R": "red", "G": "green"}
+WANT_THRESHOLD = 0.5
+GUILD_COLORS = {
+    # Guilds (2-color)
+    "azorius": ["W", "U"], "dimir": ["U", "B"], "rakdos": ["B", "R"], "gruul": ["R", "G"],
+    "selesnya": ["G", "W"], "orzhov": ["W", "B"], "izzet": ["U", "R"], "golgari": ["B", "G"],
+    "boros": ["R", "W"], "simic": ["G", "U"],
+    # Shards (3-color)
+    "esper": ["W", "U", "B"], "grixis": ["U", "B", "R"], "jund": ["B", "R", "G"],
+    "naya": ["R", "G", "W"], "bant": ["G", "W", "U"],
+    # Wedges (3-color)
+    "abzan": ["W", "B", "G"], "jeskai": ["U", "R", "W"], "sultai": ["B", "G", "U"],
+    "mardu": ["R", "W", "B"], "temur": ["G", "U", "R"],
+}
+
+
+def add_guild_colors(colors: List[str], message: str, nouls: Dict[str, Any]) -> List[str]:
+    """`colors` plus the colors of each guild/shard/wedge named in `message` whose
+    strongest color noul reaches WANT_THRESHOLD (so "how do I beat Boros?" adds none),
+    in WUBRG order. Jev's per-color judgments are the check on own-vs-opponent."""
+    words = set(re.findall(r"[a-z]+", message.lower()))
+    out = set(colors)
+    for guild, cols in GUILD_COLORS.items():
+        if guild in words and max(nouls[f"color:{c}"].noul for c in cols) >= WANT_THRESHOLD:
+            out.update(cols)
+    return [c for c in COLOR_NAMES if c in out]
+
+
+def _parse_questions(n_cards: int) -> Dict[str, Any]:
+    questions: Dict[str, Any] = {
+        "archetype": Choice(
+            instructions="Which archetype does `request` want for the user's own deck?",
+            criteria=ARCHETYPES,
+        ),
+        "colors_specified": Noul(
+            instructions="Did the user state colors for their own deck, not an opponent's?"),
+    }
+    for code, name in COLOR_NAMES.items():
+        questions[f"color:{code}"] = Noul(instructions={
+            "question": "Does the user want this color in their own deck (not an opponent's)?",
+            "color": name,
+        })
+    for i in range(n_cards):
+        questions[f"wants:{i}"] = Noul(
+            instructions=f"Does the user want `cards[{i}]` in their deck, rather than only mentioning it?")
+    return questions
+
+
+async def parse_deck_request(prompt: str, db: AsyncSession, client=None) -> Dict[str, Any]:
     """
-    Parse a natural language deck request to extract:
-    - Archetype (aggro, control, midrange, combo)
-    - Colors
-    - Strategy focus
-    - Specific card requests
-    - colors_specified: Whether the user explicitly wanted specific colors for their deck
+    Parse a natural-language deck request with one Jev request into
+    {archetype, colors, colors_specified, strategy, specific_cards}.
 
-    Uses Haiku for fast parsing (~0.5s vs 2-3s with Sonnet).
+    Card names are resolved from the database first (word n-grams of the prompt);
+    Jev decides which of them the user wants in their deck and which colors are
+    theirs rather than an opponent's. Falls back to keyword parsing when Jev is
+    not configured, fails, or answers incompletely.
     """
-    if not settings.ANTHROPIC_API_KEY:
-        return await fallback_parse(prompt, db)
-
-    try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-        response = client.messages.create(
-            model="claude-3-5-haiku-20241022",
-            max_tokens=512,
-            system="""Parse MTG deck request into JSON:
-{"archetype": "aggro|control|midrange|combo|tempo", "colors": ["W","U","B","R","G"], "colors_specified": true|false, "strategy": "brief description", "specific_cards": ["card names mentioned"]}
-
-Color codes: W=White, U=Blue, B=Black, R=Red, G=Green
-Guild names: Azorius=WU, Dimir=UB, Rakdos=BR, Gruul=RG, Selesnya=GW, Orzhov=WB, Izzet=UR, Golgari=BG, Boros=RW, Simic=GU
-
-IMPORTANT for specific_cards:
-- Extract ANY card names mentioned in the request (e.g., "Moonshadow", "Lightning Bolt", "Atraxa")
-- Include the card name exactly as mentioned
-- If the request says "using X" or "with X" or "around X", X is likely a card name
-- Examples:
-  - "Build a deck using Moonshadow" -> specific_cards: ["Moonshadow"]
-  - "Red deck with Lightning Bolt" -> specific_cards: ["Lightning Bolt"]
-  - "Atraxa commander deck" -> specific_cards: ["Atraxa"]
-
-IMPORTANT for colors_specified:
-- Set to TRUE only if the user explicitly wants their deck to be certain colors
-- Set to FALSE if colors are only mentioned as opponents/matchups (e.g., "beat mono-red", "good against blue decks")
-- Set to FALSE if no colors are mentioned
-- Examples:
-  - "black aggro deck" -> colors_specified: true (user wants black)
-  - "beat mono-red" -> colors_specified: false (red is the opponent, not their deck)
-  - "Dimir control" -> colors_specified: true (user wants UB)
-  - "aggro deck" -> colors_specified: false (no color preference stated)""",
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        if response.content:
-            content = response.content[0].text
-            if "{" in content:
-                json_start = content.index("{")
-                json_end = content.rindex("}") + 1
-                result = json.loads(content[json_start:json_end])
-                # Ensure colors_specified is present (default to False if LLM didn't include it)
-                if "colors_specified" not in result:
-                    result["colors_specified"] = False
-                return result
-
-    except Exception as e:
-        logger.warning(f"Haiku parse failed, using fallback: {e}")
-
-    return await fallback_parse(prompt, db)
+    async with jev.session(client) as client:
+        names = None
+        if client is not None:
+            names = await extract_card_names_from_prompt(prompt, db)
+            try:
+                async with asyncio.timeout(jev.FIT_DEADLINE):
+                    r = await jev.ask(client, {"request": prompt, "cards": names},
+                                      _parse_questions(len(names)))
+                colors = add_guild_colors(
+                    [c for c in COLOR_NAMES if r.nouls[f"color:{c}"].noul >= WANT_THRESHOLD], prompt, r.nouls)
+                if r.nouls["colors_specified"].noul < WANT_THRESHOLD:
+                    colors = []  # e.g. "beat mono-red": Jev leans toward non-red colors, but none were asked for
+                return {
+                    "archetype": r.choices["archetype"].choice,
+                    "colors": colors,
+                    "colors_specified": bool(colors),
+                    "strategy": prompt,
+                    "specific_cards": [n for i, n in enumerate(names)
+                                       if r.nouls[f"wants:{i}"].noul >= WANT_THRESHOLD],
+                }
+            except Exception as e:
+                logger.warning(f"Jev deck-request parse failed, using fallback: {e}")
+    return await fallback_parse(prompt, db, names)
 
 
-async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
-    """Simple keyword-based parsing as fallback."""
+async def fallback_parse(prompt: str, db: AsyncSession, names: List[str] = None) -> Dict[str, Any]:
+    """Simple keyword-based parsing as fallback. `names` skips the card lookup when already resolved."""
     prompt_lower = prompt.lower()
 
     # Detect colors
@@ -90,29 +116,7 @@ async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
         "black": "B", "swamp": "B",
         "red": "R", "mountain": "R",
         "green": "G", "forest": "G",
-        # Guild names (2-color)
-        "azorius": ["W", "U"],
-        "dimir": ["U", "B"],
-        "rakdos": ["B", "R"],
-        "gruul": ["R", "G"],
-        "selesnya": ["G", "W"],
-        "orzhov": ["W", "B"],
-        "izzet": ["U", "R"],
-        "golgari": ["B", "G"],
-        "boros": ["R", "W"],
-        "simic": ["G", "U"],
-        # Shard names (3-color)
-        "esper": ["W", "U", "B"],
-        "grixis": ["U", "B", "R"],
-        "jund": ["B", "R", "G"],
-        "naya": ["R", "G", "W"],
-        "bant": ["G", "W", "U"],
-        # Wedge names (3-color)
-        "abzan": ["W", "B", "G"],
-        "jeskai": ["U", "R", "W"],
-        "sultai": ["B", "G", "U"],
-        "mardu": ["R", "W", "B"],
-        "temur": ["G", "U", "R"],
+        **GUILD_COLORS,
         # Mono-color
         "mono-red": ["R"],
         "mono-white": ["W"],
@@ -167,7 +171,7 @@ async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
         archetype = "tempo"
 
     # Try to extract specific card names from the prompt
-    specific_cards = await extract_card_names_from_prompt(prompt, db)
+    specific_cards = names if names is not None else await extract_card_names_from_prompt(prompt, db)
 
     return {
         "archetype": archetype,
@@ -180,54 +184,81 @@ async def fallback_parse(prompt: str, db: AsyncSession) -> Dict[str, Any]:
     }
 
 
-async def extract_card_names_from_prompt(
-    prompt: str, db: AsyncSession, format: str = "standard"
-) -> List[str]:
-    """Extract card names mentioned in the prompt by checking against database."""
-    from app.models.card import Card
+MAX_PROMPT_WORDS = 40  # a pasted decklist must not fan out into hundreds of queries
+MAX_CARD_NAMES = 10
 
-    specific_cards = []
-    words = prompt.split()
-    potential_names = []
 
-    # Try to find multi-word card names
+def _candidate_phrases(prompt: str) -> List[str]:
+    """Lowercased 1-4 word phrases from the first MAX_PROMPT_WORDS words, in order, deduped."""
+    words = prompt.split()[:MAX_PROMPT_WORDS]
+    phrases: List[str] = []
     for i in range(len(words)):
-        # Single word
+        # Single words only when capitalized or a well-known planeswalker name
         if words[i][0:1].isupper() or words[i].lower() in [
             "tezzeret", "jace", "liliana", "chandra", "nissa",
             "garruk", "ajani", "nicol", "bolas", "atraxa"
         ]:
-            potential_names.append(words[i].strip(",.!?"))
-        # Two words
-        if i < len(words) - 1:
-            two_word = f"{words[i]} {words[i+1]}".strip(",.!?")
-            potential_names.append(two_word)
-        # Three words
-        if i < len(words) - 2:
-            three_word = f"{words[i]} {words[i+1]} {words[i+2]}".strip(",.!?")
-            potential_names.append(three_word)
-        # Four words (for cards like "Atraxa, Grand Unifier")
-        if i < len(words) - 3:
-            four_word = f"{words[i]} {words[i+1]} {words[i+2]} {words[i+3]}".strip(",.!?")
-            potential_names.append(four_word)
+            phrases.append(words[i].strip(",.!?"))
+        for n in (2, 3, 4):  # e.g. "Atraxa, Grand Unifier"
+            if i + n <= len(words):
+                phrases.append(" ".join(words[i:i + n]).strip(",.!?"))
+    seen: Dict[str, None] = {}
+    for ph in phrases:
+        if len(ph) >= 3:
+            seen.setdefault(ph.lower(), None)
+    return list(seen)
 
-    # Check each potential name against the database
+
+async def extract_card_names_from_prompt(
+    prompt: str, db: AsyncSession, format: str = "standard"
+) -> List[str]:
+    """Card names mentioned in the prompt, checked against the database in one query.
+
+    A phrase matches a card only as its whole name, the part before a comma
+    ("Atraxa" -> "Atraxa, Grand Unifier") or a double-faced card's front face.
+    Substring matches are not accepted: "Build" must not become "Builder's Talent".
+    """
+    from app.models.card import Card
     from app.services.card_service import get_format_legality_condition
 
-    for name in potential_names:
-        if len(name) < 3:
-            continue
-        query = select(Card.name).where(
-            func.lower(Card.name).like(f"%{name.lower()}%"),
-            get_format_legality_condition(format)
-        )
-        query = query.limit(1)
-        result = await db.execute(query)
-        card = result.scalar_one_or_none()
-        if card and card not in specific_cards:
-            specific_cards.append(card)
-            logger.info(f"Extracted card name from prompt: {card}")
+    phrases = _candidate_phrases(prompt)
+    if not phrases:
+        return []
 
+    lname = func.lower(Card.name)
+    head = func.split_part(lname, ", ", 1)
+    front = func.split_part(lname, " // ", 1)
+    query = (
+        select(Card.name, lname, head, front)
+        .where(or_(lname.in_(phrases), head.in_(phrases), front.in_(phrases)))
+        .where(get_format_legality_condition(format))
+        .distinct()
+    )
+    rows = (await db.execute(query)).all()
+
+    # phrase -> candidate names, exact whole-name matches first
+    by_phrase: Dict[str, List[Tuple[bool, str]]] = {}
+    for name, full, before_comma, front_face in rows:
+        for key in {full, before_comma, front_face}:
+            by_phrase.setdefault(key, []).append((key != full, name))
+
+    # A phrase inside a longer matched phrase is not its own mention:
+    # "Lightning Strike" matched, so "Lightning" must not add "Lightning, Army of One".
+    matched = [p for p in phrases if p in by_phrase]
+    standalone = [
+        p for p in matched
+        if not any(q != p and f" {p} " in f" {q} " for q in matched)
+    ]
+
+    specific_cards: List[str] = []
+    for phrase in standalone:
+        for _, name in sorted(by_phrase[phrase]):
+            if name not in specific_cards:
+                specific_cards.append(name)
+                logger.info(f"Extracted card name from prompt: {name}")
+                break
+        if len(specific_cards) >= MAX_CARD_NAMES:
+            break
     return specific_cards
 
 

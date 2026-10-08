@@ -207,6 +207,14 @@ class TestFormatGuidance:
 # Semantic search table routing tests
 # ---------------------------------------------------------------------------
 
+class _Savepoint:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 class TestSemanticSearchRouting:
     """Tests that semantic_search uses the correct materialized view."""
 
@@ -215,6 +223,7 @@ class TestSemanticSearchRouting:
         from app.services.card_service import CardService
         service = CardService.__new__(CardService)
         service.db = AsyncMock()
+        service.db.begin_nested = MagicMock(side_effect=lambda: _Savepoint())
         return service
 
     @pytest.mark.asyncio
@@ -261,6 +270,7 @@ class TestSemanticSearchRouting:
             side_effect=[Exception("relation cards_standard does not exist"), mock_result]
         )
         card_service.db.rollback = AsyncMock()
+        card_service.db.begin_nested.reset_mock()
 
         rows = await card_service._vector_search(
             [0.1] * 1536, format="standard", standard_only=True,
@@ -268,8 +278,9 @@ class TestSemanticSearchRouting:
         )
 
         assert rows == []
-        # Should have called rollback after first failure
-        card_service.db.rollback.assert_called_once()
+        # The failed view query ran in a savepoint; no full rollback
+        card_service.db.begin_nested.assert_called_once()
+        card_service.db.rollback.assert_not_called()
         # Second call should hit the cards table with legality filter
         fallback_sql = str(card_service.db.execute.call_args_list[1][0][0])
         assert "FROM cards" in fallback_sql
@@ -288,6 +299,5 @@ class TestSemanticSearchRouting:
         with patch("app.services.card_service.get_embedding_service", return_value=mock_embedding_service):
             await card_service.semantic_search(query="test", format="cedh")
 
-        call_args = card_service.db.execute.call_args
-        sql_text = str(call_args[0][0])
+        sql_text = str(card_service.db.execute.call_args_list[0][0][0])
         assert "cards_commander" in sql_text

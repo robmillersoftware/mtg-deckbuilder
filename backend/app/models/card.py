@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from sqlalchemy import (
     Column,
@@ -107,6 +107,59 @@ CARD_ROLES = [
     "land_creature",
     "land_basic",
 ]
+
+# What each system role means. Used as Jev question text for role tagging and role checks.
+ROLE_DEFINITIONS: Dict[str, str] = {
+    "removal_targeted": "Destroys, exiles, deals damage to, or otherwise removes a single opposing creature or planeswalker",
+    "removal_mass": "Board wipe: destroys, exiles, or kills multiple creatures at once",
+    "removal_artifact_enchantment": "Destroys or exiles artifacts or enchantments",
+    "card_draw": "Draws one or more cards (searching the library for a specific card or land is not card draw)",
+    "card_selection": "Scry, surveil, looks at top cards of the library, or otherwise filters draws",
+    "ramp": "Accelerates mana beyond one land per turn: a mana creature or rock, or putting extra lands onto the battlefield. A land tapping for mana is not ramp",
+    "counterspell": "Counters spells",
+    "discard": "Makes an opponent discard cards",
+    "threat_cheap": "An efficient creature or threat with mana value 2 or less that pressures the opponent in combat (mana and utility creatures do not count)",
+    "threat_midrange": "A value creature or planeswalker with mana value 3 or 4",
+    "threat_finisher": "A game-ending threat with mana value 5 or more",
+    "protection": "Gives hexproof, indestructible, or ward, or prevents damage to your permanents",
+    "burn": "Deals direct damage to players or any target",
+    "lifegain": "Gaining life is a main purpose of the card, not a side effect of another ability or of a land entering",
+    "recursion": "Returns cards from a graveyard to hand or battlefield",
+    "graveyard_hate": "Exiles cards from graveyards",
+    "tutor": "Searches the library for a card of the player's choice (not only a basic land) and puts it into hand or onto the battlefield",
+    "land_fixing_untapped": "A land producing two or more colors that can enter untapped",
+    "land_fixing_tapped": "A land producing two or more colors that always enters tapped",
+    "land_utility": "A land with a useful ability beyond making mana, such as destroying a land or drawing cards. Entering tapped, gaining 1 life on entry, or becoming a creature do not count",
+    "land_creature": "A land that can become a creature",
+    "land_basic": "A basic land (Plains, Island, Swamp, Mountain, Forest)",
+}
+
+# Map user-facing role names (chat tools, guided builder) to system role names in card_roles
+ROLE_MAP: Dict[str, List[str]] = {
+    "threats": ["threat_cheap", "threat_midrange", "threat_finisher"],
+    "creatures": ["threat_cheap", "threat_midrange", "threat_finisher"],
+    "removal": ["removal_targeted", "removal_mass", "removal_artifact_enchantment"],
+    "card advantage": ["card_draw", "card_selection"],
+    "card draw": ["card_draw", "card_selection"],
+    "counterspells": ["counterspell"],
+    "protection": ["protection"],
+    "ramp": ["ramp"],
+    "burn": ["burn"],
+    "recursion": ["recursion"],
+    "finishers": ["threat_finisher"],
+    "interaction": ["removal_targeted", "counterspell"],
+    "discard": ["discard"],
+    "lifegain": ["lifegain"],
+    "graveyard hate": ["graveyard_hate"],
+    "tutors": ["tutor"],
+    "sacrifice outlets": ["recursion"],
+    "board wipes": ["removal_mass"],
+    "spot removal": ["removal_targeted"],
+    "cheap threats": ["threat_cheap"],
+    "big threats": ["threat_finisher"],
+    "top end": ["threat_finisher"],
+    "early threats": ["threat_cheap"],
+}
 
 
 class CardRole(Base):

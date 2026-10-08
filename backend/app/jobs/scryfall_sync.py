@@ -91,6 +91,11 @@ def parse_bulk_cards(content: bytes) -> List[Dict[str, Any]]:
     return [json.loads(line) for line in content.splitlines() if line.strip()]
 
 
+def _face_join(card: Dict[str, Any], key: str, sep: str) -> Optional[str]:
+    """Top-level value, else the faces' non-empty values joined (DFC/split/adventure)."""
+    return card.get(key) or sep.join(f[key] for f in card.get("card_faces") or [] if f.get(key)) or card.get(key)
+
+
 def extract_card_data(card: Dict[str, Any], standard_sets: set) -> Optional[Dict[str, Any]]:
     """Extract relevant card data from Scryfall format."""
     # Skip tokens, emblems, etc.
@@ -122,10 +127,10 @@ def extract_card_data(card: Dict[str, Any], standard_sets: set) -> Optional[Dict
         "scryfall_id": scryfall_id,
         "oracle_id": card.get("oracle_id"),
         "name": card.get("name"),
-        "mana_cost": card.get("mana_cost"),
+        "mana_cost": _face_join(card, "mana_cost", " // "),
         "cmc": card.get("cmc"),
         "type_line": card.get("type_line"),
-        "oracle_text": card.get("oracle_text"),
+        "oracle_text": _face_join(card, "oracle_text", "\n//\n"),
         "power": card.get("power"),
         "toughness": card.get("toughness"),
         "colors": card.get("colors") or [],
